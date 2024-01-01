@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "zip2vd.core", "zip2vd.core\zip2vd.core.csproj", "{28B68249-A3EC-4ECA-8FAA-2AF25B7FDA93}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "zip2vd.cli", "zip2vd.cli\zip2vd.cli.csproj", "{9118B122-E306-4AF3-97F9-AF876117A011}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "zip2Vd.core.test", "zip2Vd.core.test\zip2Vd.core.test.csproj", "{E3AD50F5-1E0B-4986-B4A8-AB65E21F4614}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{28B68249-A3EC-4ECA-8FAA-2AF25B7FDA93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{28B68249-A3EC-4ECA-8FAA-2AF25B7FDA93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{28B68249-A3EC-4ECA-8FAA-2AF25B7FDA93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{28B68249-A3EC-4ECA-8FAA-2AF25B7FDA93}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9118B122-E306-4AF3-97F9-AF876117A011}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9118B122-E306-4AF3-97F9-AF876117A011}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9118B122-E306-4AF3-97F9-AF876117A011}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9118B122-E306-4AF3-97F9-AF876117A011}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E3AD50F5-1E0B-4986-B4A8-AB65E21F4614}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E3AD50F5-1E0B-4986-B4A8-AB65E21F4614}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E3AD50F5-1E0B-4986-B4A8-AB65E21F4614}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E3AD50F5-1E0B-4986-B4A8-AB65E21F4614}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
