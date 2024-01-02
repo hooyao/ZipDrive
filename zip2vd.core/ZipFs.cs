@@ -1,11 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Security.AccessControl;
 using System.Text;
-using System.Threading.Tasks;
 using DokanNet;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.IO;
 using zip2vd.core.Common;
 using FileAccess = DokanNet.FileAccess;
@@ -14,7 +12,7 @@ namespace zip2vd.core;
 
 public class ZipFs : IDokanOperations, IAsyncDisposable
 {
-    private readonly RecyclableMemoryStreamManager msManager = new RecyclableMemoryStreamManager();
+    private readonly RecyclableMemoryStreamManager rmsMgr = new RecyclableMemoryStreamManager();
     private readonly string _filePath;
     private readonly FileInfo _zipFileInfo;
     private readonly ZipArchive _archive;
@@ -22,15 +20,32 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     private readonly EntryNode<ZipEntryAttr> _root;
     private volatile bool _buildTree = false;
 
-    private readonly object _fileLock = new object();
+    private readonly object _zipFileLock = new object();
 
-    public ZipFs(string filePath)
+    private MemoryCache _smallFileCache;
+    private MemoryCache _largeFileCache;
+
+    private ILogger<ZipFs> _logger;
+
+    private const long SmallFileSizeCutOff = 100*1024L*1024L;
+
+    public ZipFs(string filePath, ILoggerFactory loggerFactory)
     {
         this._filePath = filePath;
         this._zipFileInfo = new FileInfo(filePath);
         // Current system non-unicode code page
         Encoding ansiEncoding = Encoding.GetEncoding(0);
         this._archive = ZipFile.Open(filePath, ZipArchiveMode.Read, ansiEncoding);
+
+        this._smallFileCache = new MemoryCache(new MemoryCacheOptions()
+        {
+            SizeLimit = 128L*1024L*1024L
+        });
+
+        this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
+        {
+            SizeLimit = 20L*1024L*1024L*1024L
+        });
 
         this._root = new EntryNode<ZipEntryAttr>(true, "/", null, new FileInformation()
         {
@@ -41,6 +56,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
             LastWriteTime = _zipFileInfo.LastWriteTime,
             Length = 0L
         });
+
+        this._logger = loggerFactory.CreateLogger<ZipFs>();
     }
 
     public NtStatus CreateFile(string fileName, FileAccess access, FileShare share, FileMode mode, FileOptions options,
@@ -59,6 +76,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     public NtStatus ReadFile(string fileName, byte[] buffer, out int bytesRead, long offset, IDokanFileInfo info)
     {
+        this._logger.LogDebug("Reading file: {FileName}, Offset: {Offset}, BufferSize: {BufferSize}",
+            fileName, offset, buffer.Length);
         string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
         try
         {
@@ -69,21 +88,63 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                 throw new FileNotFoundException();
             }
 
-            ZipArchiveEntry? entry = this._archive.GetEntry(attr.Value.FullPath);
-            if (entry == null)
-            {
-                throw new FileNotFoundException();
-            }
-            
+
             lock (node)
             {
-                using (Stream stream = entry.Open())
-                using (RecyclableMemoryStream ms = msManager.GetStream())
+                ZipArchiveEntry? entry = this._archive.GetEntry(attr.Value.FullPath);
+                if (entry == null)
                 {
-                    stream.CopyTo(ms);
-                    ms.Seek(offset, SeekOrigin.Begin);
-                    bytesRead = ms.Read(buffer, 0, buffer.Length);
+                    throw new FileNotFoundException();
+                }
+
+                long fileSize = entry.Length;
+                if (fileSize <= SmallFileSizeCutOff)
+                {
+                    byte[]? fileBytes = this._smallFileCache.GetOrCreate<byte[]>(fileName,
+                        cacheEntry =>
+                        {
+                            this._logger.LogDebug("Caching file: {FileName}", fileName);
+                            cacheEntry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(120);
+                            cacheEntry.SlidingExpiration = TimeSpan.FromMinutes(10);
+                            cacheEntry.Size = fileSize;
+                            using (Stream entryStream = entry.Open())
+                            using (BufferedStream bs = new BufferedStream(entryStream))
+                            using (MemoryStream ms = new MemoryStream())
+                            {
+                                bs.CopyTo(ms);
+                                return ms.ToArray();
+                            }
+                        });
+
+                    if (fileBytes == null)
+                    {
+                        throw new FileNotFoundException();
+                    }
+
+                    // Calculate the number of bytes that can be copied
+                    int bytesToCopy = Math.Min(buffer.Length, fileBytes.Length - (int)offset);
+
+                    // Copy the bytes
+                    fileBytes.AsSpan().Slice((int)offset, bytesToCopy).CopyTo(buffer);
+                    // using (RecyclableMemoryStream ms = rmsMgr.GetStream(fileBytes))
+                    // {
+                    //     ms.Seek(offset, SeekOrigin.Begin);
+                    //     bytesRead = ms.Read(buffer, 0, buffer.Length);
+                    //     return DokanResult.Success;
+                    // }
+                    bytesRead = bytesToCopy;
                     return DokanResult.Success;
+                }
+                else
+                {
+                    using (Stream stream = entry.Open())
+                    using (RecyclableMemoryStream ms = rmsMgr.GetStream())
+                    {
+                        stream.CopyTo(ms);
+                        ms.Seek(offset, SeekOrigin.Begin);
+                        bytesRead = ms.Read(buffer, 0, buffer.Length);
+                        return DokanResult.Success;
+                    }
                 }
             }
         }
@@ -123,7 +184,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     public NtStatus FindFiles(string fileName, out IList<FileInformation> files, IDokanFileInfo info)
     {
-        lock (this._fileLock)
+        lock (this._zipFileLock)
         {
             if (!this._buildTree)
             {
@@ -157,54 +218,54 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     public NtStatus FindFilesWithPattern(string fileName, string searchPattern, out IList<FileInformation> files, IDokanFileInfo info)
     {
-        files = new FileInformation[0];
+        files = Array.Empty<FileInformation>();
         return DokanResult.NotImplemented;
     }
 
     public NtStatus SetFileAttributes(string fileName, FileAttributes attributes, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus SetFileTime(string fileName, DateTime? creationTime, DateTime? lastAccessTime, DateTime? lastWriteTime,
         IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus DeleteFile(string fileName, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus DeleteDirectory(string fileName, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus MoveFile(string oldName, string newName, bool replace, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus SetEndOfFile(string fileName, long length, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus SetAllocationSize(string fileName, long length, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus LockFile(string fileName, long offset, long length, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus UnlockFile(string fileName, long offset, long length, IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus GetDiskFreeSpace(
@@ -226,20 +287,20 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         volumeLabel = Path.GetFileNameWithoutExtension(this._filePath);
         features = FileSystemFeatures.ReadOnlyVolume;
         fileSystemName = "ZipFS";
-        maximumComponentLength = 256;
+        maximumComponentLength = 65535;
         return DokanResult.Success;
     }
     public NtStatus GetFileSecurity(string fileName, out FileSystemSecurity security, AccessControlSections sections,
         IDokanFileInfo info)
     {
-        security = null;
-        return DokanResult.Error;
+        security = new FileSecurity();
+        return DokanResult.Success;
     }
 
     public NtStatus SetFileSecurity(string fileName, FileSystemSecurity security, AccessControlSections sections,
         IDokanFileInfo info)
     {
-        return DokanResult.Error;
+        return DokanResult.NotImplemented;
     }
 
     public NtStatus Mounted(string mountPoint, IDokanFileInfo info)
@@ -254,8 +315,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     public NtStatus FindStreams(string fileName, out IList<FileInformation> streams, IDokanFileInfo info)
     {
-        streams = null;
-        return DokanResult.Error;
+        streams = Array.Empty<FileInformation>();
+        return DokanResult.NotImplemented;
     }
     public async ValueTask DisposeAsync()
     {
@@ -287,7 +348,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                         {
                             FileInformation fileInfo = new FileInformation()
                             {
-                                Attributes = FileAttributes.Directory,
+                                Attributes = FileAttributes.Directory | FileAttributes.ReadOnly,
                                 CreationTime = entry.LastWriteTime.UtcDateTime,
                                 FileName = part,
                                 LastAccessTime = entry.LastWriteTime.UtcDateTime,
@@ -310,7 +371,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                             // last part
                             FileInformation fileInfo = new FileInformation()
                             {
-                                Attributes = entry.IsDirectory() ? FileAttributes.Directory : FileAttributes.Normal,
+                                Attributes = (entry.IsDirectory() ? FileAttributes.Directory : FileAttributes.Normal) |
+                                             FileAttributes.ReadOnly,
                                 CreationTime = entry.LastWriteTime.UtcDateTime,
                                 FileName = part,
                                 LastAccessTime = entry.LastWriteTime.UtcDateTime,

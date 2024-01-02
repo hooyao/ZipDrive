@@ -11,6 +11,8 @@ HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSerilog(config =>
 {
     config.MinimumLevel.Information()
+        //.MinimumLevel.Override("Dokan", Serilog.Events.LogEventLevel.Debug)
+        //.MinimumLevel.Override("zip2vd",Serilog.Events.LogEventLevel.Debug)
         .Enrich.FromLogContext()
         .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3} {SourceContext}] {Message:lj}{NewLine}{Exception}");
 });
