@@ -15,6 +15,7 @@ public class FileVdService : IVdService, IAsyncDisposable
     private readonly string _mountPath;
     private readonly DokanInstance _dokanInstance;
     private readonly Dokan _dokan;
+    private readonly ZipFs _zipFs;
 
     public FileVdService(IOptions<FileVdOptions> fileVdOptions, ILoggerFactory loggerFactory, ILogger<FileVdService> logger)
     {
@@ -29,9 +30,9 @@ public class FileVdService : IVdService, IAsyncDisposable
             {
                 options.Options =  DokanOptions.EnableNotificationAPI;
                 options.MountPoint = this._mountPath;
-            });
-        ZipFs zipFs = new ZipFs(fileVdOptions.Value.FilePath, loggerFactory);
-        this._dokanInstance = dokanBuilder.Build(zipFs);
+            }); 
+        this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, loggerFactory);
+        this._dokanInstance = dokanBuilder.Build(this._zipFs);
     }
 
     public void Mount()
@@ -43,7 +44,12 @@ public class FileVdService : IVdService, IAsyncDisposable
     {
         throw new NotImplementedException();
     }
-    
+
+    public void CompactCache()
+    {
+        this._zipFs.CompactCache();
+    }
+
     public async ValueTask DisposeAsync()
     {
         this._logger.LogInformation("DisposeAsync");
