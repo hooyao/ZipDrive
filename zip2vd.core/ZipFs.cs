@@ -3,10 +3,10 @@ using System.IO.Compression;
 using System.Security.AccessControl;
 using System.Text;
 using DokanNet;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using Microsoft.IO;
+using zip2vd.core.Cache;
 using zip2vd.core.Common;
 using FileAccess = DokanNet.FileAccess;
 
@@ -23,12 +23,12 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     private readonly object _zipFileLock = new object();
 
-    private MemoryCache _smallFileCache;
-    private MemoryCache _largeFileCache;
+    private LruMemoryCache<string, byte[]> _smallFileCache;
+    //private LruMemoryCache<> _largeFileCache;
 
     private ILogger<ZipFs> _logger;
 
-    private const long SmallFileSizeCutOff = 1000*1024L*1024L;
+    private const long SmallFileSizeCutOff = 512L*1024L*1024L;
 
     private ObjectPool<ZipArchive> _zipArchivePool;
 
@@ -41,15 +41,12 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         var p = new DefaultObjectPoolProvider() { MaximumRetained = 8 };
         this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
 
-        this._smallFileCache = new MemoryCache(new MemoryCacheOptions()
-        {
-            SizeLimit = 4L*1024L*1024L
-        });
+        this._smallFileCache = new LruMemoryCache<string, byte[]>(1024L*1024L*1024L, loggerFactory);
 
-        this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
-        {
-            SizeLimit = 20L*1024L*1024L*1024L
-        });
+        // this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
+        // {
+        //     SizeLimit = 20L*1024L*1024L*1024L
+        // });
 
         this._root = new EntryNode<ZipEntryAttr>(true, "/", null, new FileInformation()
         {
@@ -105,49 +102,38 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                 long fileSize = entry.Length;
                 if (fileSize <= SmallFileSizeCutOff)
                 {
-                    byte[]? fileBytes = this._smallFileCache.GetOrCreate<byte[]?>(fileName,
-                        cacheEntry =>
-                        {
-                            try
-                            {
-                                this._logger.LogInformation("Caching file: {FileName}", fileName);
-                                cacheEntry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(120);
-                                cacheEntry.SlidingExpiration = TimeSpan.FromMinutes(10);
-                                cacheEntry.Size = fileSize;
-                                using (Stream entryStream = entry.Open())
-                                using (BufferedStream bs = new BufferedStream(entryStream))
-                                using (MemoryStream ms = new MemoryStream())
-                                {
-                                    bs.CopyTo(ms);
-                                    return ms.ToArray();
-                                }
-                            }
-                            catch (Exception e)
-                            {
-                                this._logger.LogError(e, "Error caching file: {FileName}", fileName);
-                                cacheEntry.Dispose();
-                                return null;
-                            }
-                        });
-
-                    if (fileBytes == null)
+                    using (var cacheItem = this._smallFileCache.BorrowOrAdd(fileName,
+                               () =>
+                               {
+                                   this._logger.LogDebug("Caching file: {FileName}", fileName);
+                                   using (Stream entryStream = entry.Open())
+                                   using (BufferedStream bs = new BufferedStream(entryStream))
+                                   using (MemoryStream ms = new MemoryStream())
+                                   {
+                                       bs.CopyTo(ms);
+                                       return ms.ToArray();
+                                   }
+                               }, fileSize))
                     {
-                        throw new FileNotFoundException();
-                    }
-                    
-                    // Calculate the number of bytes that can be copied
-                    int bytesToCopy = Math.Min(buffer.Length, fileBytes.Length - (int)offset);
+                        if (cacheItem.CacheItemValue == null)
+                        {
+                            throw new FileNotFoundException();
+                        }
 
-                    // Copy the bytes
-                    fileBytes.AsSpan().Slice((int)offset, bytesToCopy).CopyTo(buffer);
-                    // using (RecyclableMemoryStream ms = rmsMgr.GetStream(fileBytes))
-                    // {
-                    //     ms.Seek(offset, SeekOrigin.Begin);
-                    //     bytesRead = ms.Read(buffer, 0, buffer.Length);
-                    //     return DokanResult.Success;
-                    // }
-                    bytesRead = bytesToCopy;
-                    return DokanResult.Success;
+                        // Calculate the number of bytes that can be copied
+                        int bytesToCopy = Math.Min(buffer.Length, cacheItem.CacheItemValue.Length - (int)offset);
+
+                        // Copy the bytes
+                        cacheItem.CacheItemValue.AsSpan().Slice((int)offset, bytesToCopy).CopyTo(buffer);
+                        // using (RecyclableMemoryStream ms = rmsMgr.GetStream(fileBytes))
+                        // {
+                        //     ms.Seek(offset, SeekOrigin.Begin);
+                        //     bytesRead = ms.Read(buffer, 0, buffer.Length);
+                        //     return DokanResult.Success;
+                        // }
+                        bytesRead = bytesToCopy;
+                        return DokanResult.Success;
+                    }
                 }
                 else
                 {
