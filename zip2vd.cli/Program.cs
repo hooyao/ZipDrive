@@ -24,6 +24,5 @@ builder.Services.Configure<FileVdOptions>(options =>
 });
 builder.Services.AddSingleton<IVdService, FileVdService>();
 builder.Services.AddHostedService<FsHostedService>();
-
 using IHost host = builder.Build();
 await host.RunAsync();

@@ -1,9 +1,11 @@
-﻿using System.IO.Compression;
+﻿using System.Buffers;
+using System.IO.Compression;
 using System.Security.AccessControl;
 using System.Text;
 using DokanNet;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ObjectPool;
 using Microsoft.IO;
 using zip2vd.core.Common;
 using FileAccess = DokanNet.FileAccess;
@@ -15,7 +17,6 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     private readonly RecyclableMemoryStreamManager rmsMgr = new RecyclableMemoryStreamManager();
     private readonly string _filePath;
     private readonly FileInfo _zipFileInfo;
-    private readonly ZipArchive _archive;
 
     private readonly EntryNode<ZipEntryAttr> _root;
     private volatile bool _buildTree = false;
@@ -27,7 +28,9 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     private ILogger<ZipFs> _logger;
 
-    private const long SmallFileSizeCutOff = 100*1024L*1024L;
+    private const long SmallFileSizeCutOff = 1000*1024L*1024L;
+
+    private ObjectPool<ZipArchive> _zipArchivePool;
 
     public ZipFs(string filePath, ILoggerFactory loggerFactory)
     {
@@ -35,11 +38,12 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         this._zipFileInfo = new FileInfo(filePath);
         // Current system non-unicode code page
         Encoding ansiEncoding = Encoding.GetEncoding(0);
-        this._archive = ZipFile.Open(filePath, ZipArchiveMode.Read, ansiEncoding);
+        var p = new DefaultObjectPoolProvider() { MaximumRetained = 8 };
+        this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
 
         this._smallFileCache = new MemoryCache(new MemoryCacheOptions()
         {
-            SizeLimit = 128L*1024L*1024L
+            SizeLimit = 4L*1024L*1024L
         });
 
         this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
@@ -89,9 +93,10 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
             }
 
 
-            lock (node)
+            ZipArchive archive = this._zipArchivePool.Get();
+            try
             {
-                ZipArchiveEntry? entry = this._archive.GetEntry(attr.Value.FullPath);
+                ZipArchiveEntry? entry = archive.GetEntry(attr.Value.FullPath);
                 if (entry == null)
                 {
                     throw new FileNotFoundException();
@@ -100,19 +105,28 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                 long fileSize = entry.Length;
                 if (fileSize <= SmallFileSizeCutOff)
                 {
-                    byte[]? fileBytes = this._smallFileCache.GetOrCreate<byte[]>(fileName,
+                    byte[]? fileBytes = this._smallFileCache.GetOrCreate<byte[]?>(fileName,
                         cacheEntry =>
                         {
-                            this._logger.LogDebug("Caching file: {FileName}", fileName);
-                            cacheEntry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(120);
-                            cacheEntry.SlidingExpiration = TimeSpan.FromMinutes(10);
-                            cacheEntry.Size = fileSize;
-                            using (Stream entryStream = entry.Open())
-                            using (BufferedStream bs = new BufferedStream(entryStream))
-                            using (MemoryStream ms = new MemoryStream())
+                            try
                             {
-                                bs.CopyTo(ms);
-                                return ms.ToArray();
+                                this._logger.LogInformation("Caching file: {FileName}", fileName);
+                                cacheEntry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(120);
+                                cacheEntry.SlidingExpiration = TimeSpan.FromMinutes(10);
+                                cacheEntry.Size = fileSize;
+                                using (Stream entryStream = entry.Open())
+                                using (BufferedStream bs = new BufferedStream(entryStream))
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    bs.CopyTo(ms);
+                                    return ms.ToArray();
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                this._logger.LogError(e, "Error caching file: {FileName}", fileName);
+                                cacheEntry.Dispose();
+                                return null;
                             }
                         });
 
@@ -120,7 +134,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                     {
                         throw new FileNotFoundException();
                     }
-
+                    
                     // Calculate the number of bytes that can be copied
                     int bytesToCopy = Math.Min(buffer.Length, fileBytes.Length - (int)offset);
 
@@ -147,11 +161,15 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                     }
                 }
             }
+            finally
+            {
+                this._zipArchivePool.Return(archive);
+            }
         }
         catch (FileNotFoundException)
         {
             bytesRead = 0;
-            return DokanResult.FileNotFound;
+            return DokanResult.InternalError;
         }
     }
 
@@ -186,10 +204,18 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     {
         lock (this._zipFileLock)
         {
-            if (!this._buildTree)
+            ZipArchive archive = this._zipArchivePool.Get();
+            try
             {
-                this.BuildTree(this._root, this._archive);
-                this._buildTree = true;
+                if (!this._buildTree)
+                {
+                    this.BuildTree(this._root, archive);
+                    this._buildTree = true;
+                }
+            }
+            finally
+            {
+                this._zipArchivePool.Return(archive);
             }
         }
 
@@ -320,13 +346,9 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        if (_archive is IAsyncDisposable archiveAsyncDisposable)
+        if (this._zipArchivePool is IAsyncDisposable archiveAsyncDisposable)
         {
             await archiveAsyncDisposable.DisposeAsync();
-        }
-        else
-        {
-            _archive.Dispose();
         }
     }
 
