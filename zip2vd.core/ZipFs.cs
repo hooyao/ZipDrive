@@ -28,7 +28,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     private ILogger<ZipFs> _logger;
 
-    private const long SmallFileSizeCutOff = 1000*1024L*1024L;
+    private const long SmallFileSizeCutOff = 512L*1024L*1024L;
 
     private ObjectPool<ZipArchive> _zipArchivePool;
 
@@ -105,7 +105,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                     using (var cacheItem = this._smallFileCache.BorrowOrAdd(fileName,
                                () =>
                                {
-                                   this._logger.LogInformation("Caching file: {FileName}", fileName);
+                                   this._logger.LogDebug("Caching file: {FileName}", fileName);
                                    using (Stream entryStream = entry.Open())
                                    using (BufferedStream bs = new BufferedStream(entryStream))
                                    using (MemoryStream ms = new MemoryStream())

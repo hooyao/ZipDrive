@@ -38,7 +38,7 @@ public class LruMemoryCache<TKey, TValue> : IDisposable
             Thread.CurrentThread.ManagedThreadId, key);
         lock (this._cacheLock)
         {
-            this._logger.LogTrace($"Thread {Thread.CurrentThread.ManagedThreadId}: Acquired cache lock T1 for key {key}");
+            this._logger.LogTrace("Thread {CurrentThreadManagedThreadId}: Acquired cache lock T1 for key {Key}", Thread.CurrentThread.ManagedThreadId, key);
             Semaphore keyLock = _keyLocks.GetOrAdd(key, new Semaphore(1, 1));
 
             keyLock.WaitOne();
@@ -46,6 +46,7 @@ public class LruMemoryCache<TKey, TValue> : IDisposable
             {
                 _lruList.Remove(node);
                 _lruList.AddLast(node);
+                this._logger.LogDebug("Cache hit for key {Key}", key);
                 return node.Value;
             }
 
@@ -68,13 +69,14 @@ public class LruMemoryCache<TKey, TValue> : IDisposable
                     {
                         disposable.Dispose();
                     }
-
-                    this._keyLocks.TryRemove(removedKey, out _);
                     this._currentSize -= removedNode.Value.Size;
                     this._logger.LogTrace(
                         "Thread {CurrentThreadManagedThreadId}: Releasing acquired semaphore for key {Key} for removing",
                         Thread.CurrentThread.ManagedThreadId, removedNode.Value.Key);
                     keyLockToRemove.Release();
+                    this._keyLocks.TryRemove(removedKey, out _);
+                    this._logger.LogDebug("Evict key {Key} from cache, Size: {Size}, Current size: {CurrentSize}, LRU List size: {LruListSize}, Key locks size: {KeyLocksSize}", 
+                        removedNode.Value.Key, removedNode.Value.Size, this._currentSize, this._lruList.Count, this._keyLocks.Count);
                     this._logger.LogTrace(
                         "Thread {CurrentThreadManagedThreadId}: Released acquired semaphore for key {Key} for removing",
                         Thread.CurrentThread.ManagedThreadId, removedNode.Value.Key);
@@ -89,11 +91,9 @@ public class LruMemoryCache<TKey, TValue> : IDisposable
             this._lruList.AddLast(newNode);
             this._cache.AddOrUpdate(key, newNode, (_, _) => newNode);
             this._currentSize += size;
-            return cacheItem;
             this._logger.LogTrace("Releasing cache lock T1 for key {Key}", key);
+            return cacheItem;
         }
-
-        this._logger.LogTrace("Released cache lock T1 for key {Key}", key);
     }
 
     ~LruMemoryCache()
