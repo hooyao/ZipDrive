@@ -45,11 +45,6 @@ public class FileVdService : IVdService, IAsyncDisposable
         throw new NotImplementedException();
     }
 
-    public void CompactCache()
-    {
-        this._zipFs.CompactCache();
-    }
-
     public async ValueTask DisposeAsync()
     {
         this._logger.LogInformation("DisposeAsync");

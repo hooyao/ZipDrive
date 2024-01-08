@@ -25,7 +25,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     private readonly object _zipFileLock = new object();
 
     private LruMemoryCache<string, byte[]> _smallFileCache;
-    //private LruMemoryCache<> _largeFileCache;
+    private LruMemoryCache<string, LargeFileCacheEntry> _largeFileCache;
 
     private ILogger<ZipFs> _logger;
 
@@ -46,7 +46,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
 
         this._smallFileCache = new LruMemoryCache<string, byte[]>(1024L*1024L*1024L, loggerFactory);
-
+        this._largeFileCache = new LruMemoryCache<string, LargeFileCacheEntry>(4L*1024L*1024L*1024L, loggerFactory);
         // this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
         // {
         //     SizeLimit = 20L*1024L*1024L*1024L
@@ -65,38 +65,32 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         this._logger = loggerFactory.CreateLogger<ZipFs>();
     }
 
-    public void CompactCache()
-    {
-        this._smallFileCache.Compact(0.0);
-        this._largeFileCache.Compact(0.0);
-    }
-    
-    private void LargeFileCacheEntryEvictionCallback(object key, object? value, EvictionReason reason, object? state)
-    {
-        this._logger.LogInformation("Evicting large file");
-        if (value is LargeFileCacheEntry lfc && key is string fileName)
-        {
-            this._logger.LogInformation("Evicting file {FileName} from cache", fileName);
-            string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
-            try
-            {
-                var node = this.LocateNode(parts);
-                lock (node)
-                {
-                    lfc.MemoryMappedViewAccessor.Dispose();
-                    lfc.MemoryMappedFile.Dispose();
-                    if (Path.Exists(lfc.TempFilePath))
-                    {
-                        File.Delete(lfc.TempFilePath);
-                    }
-                }
-            }
-            catch (FileNotFoundException)
-            {
-                this._logger.LogCritical("Evicted file {FileName} is not found in the file system, it should not happen", fileName);
-            }
-        }
-    }
+    // private void LargeFileCacheEntryEvictionCallback(object key, object? value, object? state)
+    // {
+    //     this._logger.LogInformation("Evicting large file");
+    //     if (value is LargeFileCacheEntry lfc && key is string fileName)
+    //     {
+    //         this._logger.LogInformation("Evicting file {FileName} from cache", fileName);
+    //         string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+    //         try
+    //         {
+    //             var node = this.LocateNode(parts);
+    //             lock (node)
+    //             {
+    //                 lfc.MemoryMappedViewAccessor.Dispose();
+    //                 lfc.MemoryMappedFile.Dispose();
+    //                 if (Path.Exists(lfc.TempFilePath))
+    //                 {
+    //                     File.Delete(lfc.TempFilePath);
+    //                 }
+    //             }
+    //         }
+    //         catch (FileNotFoundException)
+    //         {
+    //             this._logger.LogCritical("Evicted file {FileName} is not found in the file system, it should not happen", fileName);
+    //         }
+    //     }
+    // }
 
     public NtStatus CreateFile(string fileName, FileAccess access, FileShare share, FileMode mode, FileOptions options,
         FileAttributes attributes, IDokanFileInfo info)
@@ -184,46 +178,45 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                     // }
 
                     // Open the source file stream
-                    LargeFileCacheEntry? cachedMmf = this._smallFileCache.GetOrCreate<LargeFileCacheEntry>(fileName,
-                        cacheEntry =>
-                        {
-                            this._logger.LogDebug("Caching large file: {FileName}", fileName);
-                            cacheEntry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(10);
-                            cacheEntry.SlidingExpiration = TimeSpan.FromSeconds(20);
-                            cacheEntry.Size = fileSize;
-                            cacheEntry.RegisterPostEvictionCallback(LargeFileCacheEntryEvictionCallback);
+                    using (var cachedMmf = this._largeFileCache.BorrowOrAdd(fileName,
+                               () =>
+                               {
+                                   this._logger.LogDebug("Caching large file: {FileName}", fileName);
 
-                            string tempFileName = $"{Guid.NewGuid().ToString()}.zip2vd";
-                            using (Stream entryStream = entry.Open())
-                            {
-                                // Create a memory-mapped file
-                                using (MemoryMappedFile mmf =
-                                       MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
-                                           FileMode.OpenOrCreate,
-                                           null,
-                                           entry.Length))
-                                {
-                                    // Create a view stream for the memory-mapped file
-                                    using (MemoryMappedViewStream viewStream = mmf.CreateViewStream())
-                                    {
-                                        // Copy the source stream to the view stream
-                                        entryStream.CopyTo(viewStream);
-                                    }
-                                }
-                            }
+                                   string tempFileName = $"{Guid.NewGuid().ToString()}.zip2vd";
+                                   using (Stream entryStream = entry.Open())
+                                   {
+                                       // Create a memory-mapped file
+                                       using (MemoryMappedFile mmf =
+                                              MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
+                                                  FileMode.OpenOrCreate,
+                                                  null,
+                                                  entry.Length))
+                                       {
+                                           // Create a view stream for the memory-mapped file
+                                           using (MemoryMappedViewStream viewStream = mmf.CreateViewStream())
+                                           {
+                                               // Copy the source stream to the view stream
+                                               entryStream.CopyTo(viewStream);
+                                           }
+                                       }
+                                   }
 
-                            var mmf2 = MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
-                                FileMode.OpenOrCreate,
-                                null,
-                                entry.Length);
+                                   var mmf2 = MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
+                                       FileMode.OpenOrCreate,
+                                       null,
+                                       entry.Length);
 
-                            var accessor = mmf2.CreateViewAccessor(0, entry.Length);
-                            return new LargeFileCacheEntry(
-                                Path.Combine(this._largeFileTempPath, tempFileName),
-                                mmf2,
-                                accessor);
-                        }
-                    );
+                                   var accessor = mmf2.CreateViewAccessor(0, entry.Length);
+                                   return new LargeFileCacheEntry(
+                                       Path.Combine(this._largeFileTempPath, tempFileName),
+                                       mmf2,
+                                       accessor);
+                               }, fileSize
+                           ))
+                    {
+                    }
+
 
                     if (cachedMmf == null)
                     {
