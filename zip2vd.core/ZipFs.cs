@@ -7,12 +7,14 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Common;
+using zip2vd.core.Configuration;
 using FileAccess = DokanNet.FileAccess;
 
 namespace zip2vd.core;
 
 public class ZipFs : IDokanOperations, IDisposable
 {
+    private readonly ArchiveFileSystemOptions _fsOptions;
     private readonly string _filePath;
     private readonly FileInfo _zipFileInfo;
 
@@ -27,25 +29,46 @@ public class ZipFs : IDokanOperations, IDisposable
     private ILogger<ZipFs> _logger;
     private ILogger<LargeFileCacheEntry> _largeFileCacheEntryLogger;
 
-    private readonly string _largeFileTempPath;
-
-    private const long SmallFileSizeCutOff = 256L*1024L*1024L;
-
     private ObjectPool<ZipArchive> _zipArchivePool;
 
-    public ZipFs(string filePath, ILoggerFactory loggerFactory)
+    //Configuration Variables
+    private readonly string _largeFileCacheDir;
+    private readonly long _smallFileSizeCutOff;
+    private readonly int _maxReadConcurrency;
+    private readonly long _smallFileCacheSize;
+    private readonly long _largeFileCacheSize;
+
+    public ZipFs(string filePath, ArchiveFileSystemOptions fsOptions, ILoggerFactory loggerFactory)
     {
+        this._logger = loggerFactory.CreateLogger<ZipFs>();
+        this._largeFileCacheEntryLogger = loggerFactory.CreateLogger<LargeFileCacheEntry>();
+        this._fsOptions = fsOptions;
         this._filePath = filePath;
+        this._smallFileSizeCutOff = fsOptions.SmallFileSizeCutoffInMb*1024L*1024L;
+        this._maxReadConcurrency = fsOptions.MaxReadConcurrency;
+        this._smallFileCacheSize = fsOptions.SmallFileCacheSizeInMb*1024L*1024L;
+        this._largeFileCacheSize = fsOptions.LargeFileCacheSizeInMb*1024L*1024L;
+        this._largeFileCacheDir =
+            string.IsNullOrEmpty(fsOptions.LargeFileCacheDir) ? Path.GetTempPath() : fsOptions.LargeFileCacheDir;
+        this._logger.LogInformation("ZipFS configurations: SmallFileSizeCutOff: {SmallFileSizeCutOff}MB, " +
+                                     "MaxReadConcurrency: {MaxReadConcurrency}, SmallFileCacheSize: {SmallFileCacheSize}MB, " +
+                                     "LargeFileCacheSize: {LargeFileCacheSize}MB, LargeFileCacheDir: {LargeFileCacheDir}",
+            fsOptions.SmallFileSizeCutoffInMb, fsOptions.MaxReadConcurrency, fsOptions.SmallFileCacheSizeInMb,
+            fsOptions.LargeFileCacheSizeInMb, this._largeFileCacheDir);
+        if (!Path.Exists(this._largeFileCacheDir))
+        {
+            Directory.CreateDirectory(this._largeFileCacheDir);
+        }
+
         this._zipFileInfo = new FileInfo(filePath);
-        this._largeFileTempPath = Path.GetTempPath(); //TODO should support configurable temp path
         // Current system non-unicode code page
         Encoding ansiEncoding = Encoding.GetEncoding(0);
-        DefaultObjectPoolProvider p = new DefaultObjectPoolProvider() { MaximumRetained = 4 };
+        DefaultObjectPoolProvider p = new DefaultObjectPoolProvider() { MaximumRetained = this._maxReadConcurrency };
         this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
 
-        this._smallFileCache = new LruMemoryCache<string, byte[]>(1024L * 1024L * 1024L, loggerFactory);
+        this._smallFileCache = new LruMemoryCache<string, byte[]>(this._smallFileCacheSize, loggerFactory);
         this._largeFileCache =
-            new LruMemoryCache<string, LargeFileCacheEntry>(8L * 1024L * 1024L * 1024L, loggerFactory);
+            new LruMemoryCache<string, LargeFileCacheEntry>(this._largeFileCacheSize, loggerFactory);
 
         this._root = new EntryNode<ZipEntryAttr>(true, "/", null, new FileInformation()
         {
@@ -56,9 +79,6 @@ public class ZipFs : IDokanOperations, IDisposable
             LastWriteTime = _zipFileInfo.LastWriteTime,
             Length = 0L
         });
-
-        this._logger = loggerFactory.CreateLogger<ZipFs>();
-        this._largeFileCacheEntryLogger = loggerFactory.CreateLogger<LargeFileCacheEntry>();
     }
 
     public NtStatus CreateFile(string fileName, FileAccess access, FileShare share, FileMode mode, FileOptions options,
@@ -77,7 +97,7 @@ public class ZipFs : IDokanOperations, IDisposable
 
     public NtStatus ReadFile(string fileName, byte[] buffer, out int bytesRead, long offset, IDokanFileInfo info)
     {
-        this._logger.LogDebug("Reading file: {FileName}, Offset: {Offset}, BufferSize: {BufferSize}",
+        this._logger.LogTrace("Reading file: {FileName}, Offset: {Offset}, BufferSize: {BufferSize}",
             fileName, offset, buffer.Length);
         string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar },
             StringSplitOptions.RemoveEmptyEntries);
@@ -101,13 +121,13 @@ public class ZipFs : IDokanOperations, IDisposable
                 }
 
                 long fileSize = entry.Length;
-                if (fileSize <= SmallFileSizeCutOff)
+                if (fileSize <= _smallFileSizeCutOff)
                 {
                     using (LruMemoryCache<string, byte[]>.CacheItem cacheItem = this._smallFileCache.BorrowOrAdd(
                                fileName,
                                () =>
                                {
-                                   this._logger.LogDebug("Caching file: {FileName}", fileName);
+                                   this._logger.LogDebug("Caching {LargeOrSmall} file: {FileName}", "small", fileName);
                                    using (Stream entryStream = entry.Open())
                                    using (BufferedStream bs = new BufferedStream(entryStream))
                                    using (MemoryStream ms = new MemoryStream())
@@ -152,15 +172,14 @@ public class ZipFs : IDokanOperations, IDisposable
                     using (LruMemoryCache<string, LargeFileCacheEntry>.CacheItem largeFileCacheItem =
                            this._largeFileCache.BorrowOrAdd(fileName, () =>
                                {
-                                   this._logger.LogDebug("Caching large file: {FileName}", fileName);
-
+                                   this._logger.LogDebug("Start Caching {LargeOrSmall} file: {FileName}", "LARGE", fileName);
                                    string tempFileName = $"{Guid.NewGuid().ToString()}.zip2vd";
                                    using (Stream entryStream = entry.Open())
                                    {
                                        // Create a memory-mapped file
                                        using (MemoryMappedFile mmf =
                                               MemoryMappedFile.CreateFromFile(
-                                                  Path.Combine(this._largeFileTempPath, tempFileName),
+                                                  Path.Combine(this._largeFileCacheDir, tempFileName),
                                                   FileMode.OpenOrCreate,
                                                   null,
                                                   entry.Length))
@@ -175,14 +194,15 @@ public class ZipFs : IDokanOperations, IDisposable
                                    }
 
                                    MemoryMappedFile mmf2 = MemoryMappedFile.CreateFromFile(
-                                       Path.Combine(this._largeFileTempPath, tempFileName),
+                                       Path.Combine(this._largeFileCacheDir, tempFileName),
                                        FileMode.OpenOrCreate,
                                        null,
                                        entry.Length);
 
                                    MemoryMappedViewAccessor accessor = mmf2.CreateViewAccessor(0, entry.Length);
+                                   this._logger.LogDebug("End Caching {LargeOrSmall} file: {FileName}", "LARGE", fileName);
                                    return new LargeFileCacheEntry(
-                                       Path.Combine(this._largeFileTempPath, tempFileName),
+                                       Path.Combine(this._largeFileCacheDir, tempFileName),
                                        mmf2,
                                        accessor,
                                        this._largeFileCacheEntryLogger);

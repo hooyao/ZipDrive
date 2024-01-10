@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using zip2vd.core.Common;
+using zip2vd.core.Configuration;
 
 namespace zip2vd.core;
 
@@ -13,7 +14,11 @@ public class FileVdService : IVdService, IAsyncDisposable
     private readonly Dokan _dokan;
     private readonly ZipFs _zipFs;
 
-    public FileVdService(IOptions<FileVdOptions> fileVdOptions, ILoggerFactory loggerFactory, ILogger<FileVdService> logger)
+    public FileVdService(
+        IOptions<FileVdOptions> fileVdOptions,
+        IOptions<ArchiveFileSystemOptions> archiveFileSystemOptions,
+        ILoggerFactory loggerFactory,
+        ILogger<FileVdService> logger)
     {
         _logger = logger;
         _mountPath = fileVdOptions.Value.MountPath;
@@ -24,10 +29,10 @@ public class FileVdService : IVdService, IAsyncDisposable
             .ConfigureLogger(() => dokanLogger)
             .ConfigureOptions(options =>
             {
-                options.Options =  DokanOptions.EnableNotificationAPI;
+                options.Options = DokanOptions.EnableNotificationAPI;
                 options.MountPoint = this._mountPath;
-            }); 
-        this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, loggerFactory);
+            });
+        this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, archiveFileSystemOptions.Value, loggerFactory);
         this._dokanInstance = dokanBuilder.Build(this._zipFs);
     }
 
@@ -46,7 +51,7 @@ public class FileVdService : IVdService, IAsyncDisposable
         this._logger.LogInformation("DisposeAsync");
         this._dokan.RemoveMountPoint(this._mountPath);
         await this._dokanInstance.WaitForFileSystemClosedAsync(360*1000);
-        
+
         this._dokanInstance.Dispose();
         this._dokan.Dispose();
         this._zipFs.Dispose();
