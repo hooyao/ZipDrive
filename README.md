@@ -17,5 +17,3 @@ e.g. zip2vd.cli.exe --FilePath D:\test.zip --MountPath R:\
 ## Build
 This project is built with .NET 8 and the dependencies are managed by Nuget. You should be able to build it with simple
 `dotnet build` command.
-
-The current feature branch is [feature-cli-zip](https://github.com/hooyao/zip2vd/tree/feature-cli-zip)
