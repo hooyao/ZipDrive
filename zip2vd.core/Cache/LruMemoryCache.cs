@@ -46,7 +46,7 @@ public class LruMemoryCache<TKey, TValue> : IDisposable
             {
                 _lruList.Remove(node);
                 _lruList.AddLast(node);
-                this._logger.LogDebug("Cache hit for key {Key}", key);
+                this._logger.LogTrace("Cache hit for key {Key}", key);
                 return node.Value;
             }
 

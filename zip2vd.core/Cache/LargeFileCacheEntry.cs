@@ -27,6 +27,7 @@ public class LargeFileCacheEntry : IDisposable
 
     public void Dispose()
     {
+        this._logger.LogDebug("Disposing large file cache entry: {FilePath}", TempFilePath);
         MemoryMappedViewAccessor.Dispose();
         MemoryMappedFile.Dispose();
         try
