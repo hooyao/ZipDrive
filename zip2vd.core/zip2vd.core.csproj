@@ -8,6 +8,8 @@
 
     <ItemGroup>
       <PackageReference Include="DokanNet" Version="2.1.0" />
+      <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="8.0.0" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
       <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
       <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.0" />
       <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
