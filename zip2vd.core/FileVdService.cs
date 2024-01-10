@@ -1,11 +1,7 @@
-﻿using System;
-using System.Threading.Tasks;
-using DokanNet;
-using DokanNet.Logging;
+﻿using DokanNet;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using zip2vd.core.Common;
-using ILogger = DokanNet.Logging.ILogger;
 
 namespace zip2vd.core;
 
@@ -53,5 +49,6 @@ public class FileVdService : IVdService, IAsyncDisposable
         
         this._dokanInstance.Dispose();
         this._dokan.Dispose();
+        this._zipFs.Dispose();
     }
 }

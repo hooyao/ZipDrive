@@ -1,21 +1,18 @@
-using System.Buffers;
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.IO.MemoryMappedFiles;
 using System.Security.AccessControl;
 using System.Text;
 using DokanNet;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
-using Microsoft.IO;
 using zip2vd.core.Cache;
 using zip2vd.core.Common;
 using FileAccess = DokanNet.FileAccess;
 
 namespace zip2vd.core;
 
-public class ZipFs : IDokanOperations, IAsyncDisposable
+public class ZipFs : IDokanOperations, IDisposable
 {
-    private readonly RecyclableMemoryStreamManager rmsMgr = new RecyclableMemoryStreamManager();
     private readonly string _filePath;
     private readonly FileInfo _zipFileInfo;
 
@@ -28,10 +25,11 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     private LruMemoryCache<string, LargeFileCacheEntry> _largeFileCache;
 
     private ILogger<ZipFs> _logger;
+    private ILogger<LargeFileCacheEntry> _largeFileCacheEntryLogger;
 
     private readonly string _largeFileTempPath;
 
-    private const long SmallFileSizeCutOff = 512L*1024L*1024L;
+    private const long SmallFileSizeCutOff = 256L*1024L*1024L;
 
     private ObjectPool<ZipArchive> _zipArchivePool;
 
@@ -42,15 +40,12 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         this._largeFileTempPath = Path.GetTempPath(); //TODO should support configurable temp path
         // Current system non-unicode code page
         Encoding ansiEncoding = Encoding.GetEncoding(0);
-        var p = new DefaultObjectPoolProvider() { MaximumRetained = 8 };
+        DefaultObjectPoolProvider p = new DefaultObjectPoolProvider() { MaximumRetained = 4 };
         this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
 
-        this._smallFileCache = new LruMemoryCache<string, byte[]>(1024L*1024L*1024L, loggerFactory);
-        this._largeFileCache = new LruMemoryCache<string, LargeFileCacheEntry>(4L*1024L*1024L*1024L, loggerFactory);
-        // this._largeFileCache = new MemoryCache(new MemoryCacheOptions()
-        // {
-        //     SizeLimit = 20L*1024L*1024L*1024L
-        // });
+        this._smallFileCache = new LruMemoryCache<string, byte[]>(1024L * 1024L * 1024L, loggerFactory);
+        this._largeFileCache =
+            new LruMemoryCache<string, LargeFileCacheEntry>(8L * 1024L * 1024L * 1024L, loggerFactory);
 
         this._root = new EntryNode<ZipEntryAttr>(true, "/", null, new FileInformation()
         {
@@ -63,34 +58,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         });
 
         this._logger = loggerFactory.CreateLogger<ZipFs>();
+        this._largeFileCacheEntryLogger = loggerFactory.CreateLogger<LargeFileCacheEntry>();
     }
-
-    // private void LargeFileCacheEntryEvictionCallback(object key, object? value, object? state)
-    // {
-    //     this._logger.LogInformation("Evicting large file");
-    //     if (value is LargeFileCacheEntry lfc && key is string fileName)
-    //     {
-    //         this._logger.LogInformation("Evicting file {FileName} from cache", fileName);
-    //         string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
-    //         try
-    //         {
-    //             var node = this.LocateNode(parts);
-    //             lock (node)
-    //             {
-    //                 lfc.MemoryMappedViewAccessor.Dispose();
-    //                 lfc.MemoryMappedFile.Dispose();
-    //                 if (Path.Exists(lfc.TempFilePath))
-    //                 {
-    //                     File.Delete(lfc.TempFilePath);
-    //                 }
-    //             }
-    //         }
-    //         catch (FileNotFoundException)
-    //         {
-    //             this._logger.LogCritical("Evicted file {FileName} is not found in the file system, it should not happen", fileName);
-    //         }
-    //     }
-    // }
 
     public NtStatus CreateFile(string fileName, FileAccess access, FileShare share, FileMode mode, FileOptions options,
         FileAttributes attributes, IDokanFileInfo info)
@@ -110,7 +79,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
     {
         this._logger.LogDebug("Reading file: {FileName}, Offset: {Offset}, BufferSize: {BufferSize}",
             fileName, offset, buffer.Length);
-        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
         try
         {
             var node = this.LocateNode(parts);
@@ -133,7 +103,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                 long fileSize = entry.Length;
                 if (fileSize <= SmallFileSizeCutOff)
                 {
-                    using (var cacheItem = this._smallFileCache.BorrowOrAdd(fileName,
+                    using (LruMemoryCache<string, byte[]>.CacheItem cacheItem = this._smallFileCache.BorrowOrAdd(
+                               fileName,
                                () =>
                                {
                                    this._logger.LogDebug("Caching file: {FileName}", fileName);
@@ -178,8 +149,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                     // }
 
                     // Open the source file stream
-                    using (var cachedMmf = this._largeFileCache.BorrowOrAdd(fileName,
-                               () =>
+                    using (LruMemoryCache<string, LargeFileCacheEntry>.CacheItem largeFileCacheItem =
+                           this._largeFileCache.BorrowOrAdd(fileName, () =>
                                {
                                    this._logger.LogDebug("Caching large file: {FileName}", fileName);
 
@@ -188,7 +159,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                                    {
                                        // Create a memory-mapped file
                                        using (MemoryMappedFile mmf =
-                                              MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
+                                              MemoryMappedFile.CreateFromFile(
+                                                  Path.Combine(this._largeFileTempPath, tempFileName),
                                                   FileMode.OpenOrCreate,
                                                   null,
                                                   entry.Length))
@@ -202,38 +174,40 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                                        }
                                    }
 
-                                   var mmf2 = MemoryMappedFile.CreateFromFile(Path.Combine(this._largeFileTempPath, tempFileName),
+                                   MemoryMappedFile mmf2 = MemoryMappedFile.CreateFromFile(
+                                       Path.Combine(this._largeFileTempPath, tempFileName),
                                        FileMode.OpenOrCreate,
                                        null,
                                        entry.Length);
 
-                                   var accessor = mmf2.CreateViewAccessor(0, entry.Length);
+                                   MemoryMappedViewAccessor accessor = mmf2.CreateViewAccessor(0, entry.Length);
                                    return new LargeFileCacheEntry(
                                        Path.Combine(this._largeFileTempPath, tempFileName),
                                        mmf2,
-                                       accessor);
+                                       accessor,
+                                       this._largeFileCacheEntryLogger);
                                }, fileSize
                            ))
                     {
-                    }
+                        if (largeFileCacheItem == null)
+                        {
+                            throw new FileNotFoundException();
+                        }
 
+                        if (offset >= fileSize)
+                        {
+                            bytesRead = 0;
+                        }
+                        else
+                        {
+                            // Read from the memory-mapped file to the buffer
+                            bytesRead = largeFileCacheItem.CacheItemValue.MemoryMappedViewAccessor.ReadArray<byte>(
+                                offset, buffer, 0,
+                                buffer.Length);
+                        }
 
-                    if (cachedMmf == null)
-                    {
-                        throw new FileNotFoundException();
+                        return DokanResult.Success;
                     }
-
-                    if (offset >= fileSize)
-                    {
-                        bytesRead = 0;
-                    }
-                    else
-                    {
-                        // Read from the memory-mapped file to the buffer
-                        bytesRead = cachedMmf.MemoryMappedViewAccessor.ReadArray<byte>(offset, buffer, 0, buffer.Length);
-                    }
-
-                    return DokanResult.Success;
                 }
             }
             finally
@@ -261,7 +235,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
     public NtStatus GetFileInformation(string fileName, out FileInformation fileInfo, IDokanFileInfo info)
     {
-        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
         try
         {
             EntryNode<ZipEntryAttr> node = this.LocateNode(parts);
@@ -294,7 +269,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
             }
         }
 
-        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = fileName.Split(new char[] { Path.DirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
 
         try
         {
@@ -317,7 +293,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         }
     }
 
-    public NtStatus FindFilesWithPattern(string fileName, string searchPattern, out IList<FileInformation> files, IDokanFileInfo info)
+    public NtStatus FindFilesWithPattern(string fileName, string searchPattern, out IList<FileInformation> files,
+        IDokanFileInfo info)
     {
         files = Array.Empty<FileInformation>();
         return DokanResult.NotImplemented;
@@ -328,7 +305,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         return DokanResult.NotImplemented;
     }
 
-    public NtStatus SetFileTime(string fileName, DateTime? creationTime, DateTime? lastAccessTime, DateTime? lastWriteTime,
+    public NtStatus SetFileTime(string fileName, DateTime? creationTime, DateTime? lastAccessTime,
+        DateTime? lastWriteTime,
         IDokanFileInfo info)
     {
         return DokanResult.NotImplemented;
@@ -391,6 +369,7 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         maximumComponentLength = 65535;
         return DokanResult.Success;
     }
+
     public NtStatus GetFileSecurity(string fileName, out FileSystemSecurity security, AccessControlSections sections,
         IDokanFileInfo info)
     {
@@ -419,13 +398,6 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
         streams = Array.Empty<FileInformation>();
         return DokanResult.NotImplemented;
     }
-    public async ValueTask DisposeAsync()
-    {
-        if (this._zipArchivePool is IAsyncDisposable archiveAsyncDisposable)
-        {
-            await archiveAsyncDisposable.DisposeAsync();
-        }
-    }
 
     private EntryNode<ZipEntryAttr> BuildTree(EntryNode<ZipEntryAttr> root, ZipArchive zipFile)
     {
@@ -452,7 +424,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                                 LastWriteTime = entry.LastWriteTime.UtcDateTime,
                                 Length = 0L
                             };
-                            EntryNode<ZipEntryAttr> childNode = new EntryNode<ZipEntryAttr>(true, part, currentNode, fileInfo);
+                            EntryNode<ZipEntryAttr> childNode =
+                                new EntryNode<ZipEntryAttr>(true, part, currentNode, fileInfo);
                             currentNode.AddChild(childNode);
                             currentNode = childNode;
                         }
@@ -478,7 +451,8 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
                             };
                             ZipEntryAttr zipEntryAttr = new ZipEntryAttr(entry.FullName);
                             EntryNode<ZipEntryAttr> childNode =
-                                new EntryNode<ZipEntryAttr>(entry.IsDirectory(), part, currentNode, fileInfo, zipEntryAttr);
+                                new EntryNode<ZipEntryAttr>(entry.IsDirectory(), part, currentNode, fileInfo,
+                                    zipEntryAttr);
                             currentNode.AddChild(childNode);
                             currentNode = childNode;
                         }
@@ -520,5 +494,11 @@ public class ZipFs : IDokanOperations, IAsyncDisposable
 
             return currentNode;
         }
+    }
+
+    public void Dispose()
+    {
+        _smallFileCache.Dispose();
+        _largeFileCache.Dispose();
     }
 }

@@ -19,7 +19,7 @@ builder.Services.AddSerilog(config =>
 
 builder.Services.Configure<FileVdOptions>(options =>
 {
-    options.FilePath = "D:\\test2.zip";
+    options.FilePath = "D:\\test1.zip";
     options.MountPath = "R:\\";
 });
 builder.Services.AddSingleton<IVdService, FileVdService>();
