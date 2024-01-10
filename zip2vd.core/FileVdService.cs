@@ -1,11 +1,7 @@
-﻿using System;
-using System.Threading.Tasks;
-using DokanNet;
-using DokanNet.Logging;
+﻿using DokanNet;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using zip2vd.core.Common;
-using ILogger = DokanNet.Logging.ILogger;
 
 namespace zip2vd.core;
 
@@ -15,6 +11,7 @@ public class FileVdService : IVdService, IAsyncDisposable
     private readonly string _mountPath;
     private readonly DokanInstance _dokanInstance;
     private readonly Dokan _dokan;
+    private readonly ZipFs _zipFs;
 
     public FileVdService(IOptions<FileVdOptions> fileVdOptions, ILoggerFactory loggerFactory, ILogger<FileVdService> logger)
     {
@@ -29,9 +26,9 @@ public class FileVdService : IVdService, IAsyncDisposable
             {
                 options.Options =  DokanOptions.EnableNotificationAPI;
                 options.MountPoint = this._mountPath;
-            });
-        ZipFs zipFs = new ZipFs(fileVdOptions.Value.FilePath, loggerFactory);
-        this._dokanInstance = dokanBuilder.Build(zipFs);
+            }); 
+        this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, loggerFactory);
+        this._dokanInstance = dokanBuilder.Build(this._zipFs);
     }
 
     public void Mount()
@@ -43,7 +40,7 @@ public class FileVdService : IVdService, IAsyncDisposable
     {
         throw new NotImplementedException();
     }
-    
+
     public async ValueTask DisposeAsync()
     {
         this._logger.LogInformation("DisposeAsync");
@@ -52,5 +49,6 @@ public class FileVdService : IVdService, IAsyncDisposable
         
         this._dokanInstance.Dispose();
         this._dokan.Dispose();
+        this._zipFs.Dispose();
     }
 }

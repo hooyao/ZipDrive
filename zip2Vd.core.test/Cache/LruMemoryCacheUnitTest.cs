@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 using zip2vd.core.Cache;
 
-namespace zip2vd.utils.test;
+namespace zip2Vd.core.test.Cache;
 
 public class LruMemoryCacheUnitTest
 {
