@@ -1,6 +1,6 @@
 ﻿using DokanNet;
 
-namespace zip2vd.core.Common;
+namespace zip2vd.core.Proxy;
 
 public class EntryNode<TAttr>
 {
@@ -21,7 +21,7 @@ public class EntryNode<TAttr>
 
     private readonly Dictionary<string, EntryNode<TAttr>> _childNodes = new Dictionary<string, EntryNode<TAttr>>(10);
 
-    public IReadOnlyDictionary<string, EntryNode<TAttr>> ChildNodes => _childNodes.AsReadOnly();
+    public IReadOnlyDictionary<string, EntryNode<TAttr>> ChildNodes => this._childNodes.AsReadOnly();
 
     public EntryNode<TAttr>? Parent { get; private set; }
 

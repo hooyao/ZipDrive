@@ -8,9 +8,10 @@ using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Common;
 using zip2vd.core.Configuration;
+using zip2vd.core.Proxy;
 using FileAccess = DokanNet.FileAccess;
 
-namespace zip2vd.core;
+namespace zip2vd.core.FileSystem;
 
 public class ZipFs : IDokanOperations, IDisposable
 {
@@ -73,10 +74,10 @@ public class ZipFs : IDokanOperations, IDisposable
         this._root = new EntryNode<ZipEntryAttr>(true, "/", null, new FileInformation()
         {
             Attributes = FileAttributes.Directory,
-            CreationTime = _zipFileInfo.LastWriteTime,
+            CreationTime = this._zipFileInfo.LastWriteTime,
             FileName = "/",
-            LastAccessTime = _zipFileInfo.LastWriteTime,
-            LastWriteTime = _zipFileInfo.LastWriteTime,
+            LastAccessTime = this._zipFileInfo.LastWriteTime,
+            LastWriteTime = this._zipFileInfo.LastWriteTime,
             Length = 0L
         });
     }
@@ -121,7 +122,7 @@ public class ZipFs : IDokanOperations, IDisposable
                 }
 
                 long fileSize = entry.Length;
-                if (fileSize <= _smallFileSizeCutOff)
+                if (fileSize <= this._smallFileSizeCutOff)
                 {
                     using (LruMemoryCache<string, byte[]>.CacheItem cacheItem = this._smallFileCache.BorrowOrAdd(
                                fileName,
@@ -518,7 +519,7 @@ public class ZipFs : IDokanOperations, IDisposable
 
     public void Dispose()
     {
-        _smallFileCache.Dispose();
-        _largeFileCache.Dispose();
+        this._smallFileCache.Dispose();
+        this._largeFileCache.Dispose();
     }
 }

@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using zip2vd.core.Common;
 using zip2vd.core.Configuration;
+using zip2vd.core.FileSystem;
+using zip2vd.core.Proxy;
 
 namespace zip2vd.core;
 
@@ -13,6 +15,7 @@ public class FileVdService : IVdService, IAsyncDisposable
     private readonly DokanInstance _dokanInstance;
     private readonly Dokan _dokan;
     private readonly ZipFs _zipFs;
+    private readonly DirectoryFs _directoryFs;
 
     public FileVdService(
         IOptions<FileVdOptions> fileVdOptions,
@@ -32,8 +35,11 @@ public class FileVdService : IVdService, IAsyncDisposable
                 options.Options = DokanOptions.EnableNotificationAPI;
                 options.MountPoint = this._mountPath;
             });
-        this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, archiveFileSystemOptions.Value, loggerFactory);
-        this._dokanInstance = dokanBuilder.Build(this._zipFs);
+        //this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, archiveFileSystemOptions.Value, loggerFactory);
+
+        HostDirectoryProxy hostDirectoryProxy = new HostDirectoryProxy(loggerFactory.CreateLogger<HostDirectoryProxy>());
+        this._directoryFs = new DirectoryFs(fileVdOptions.Value.FolderPath, hostDirectoryProxy, loggerFactory);
+        this._dokanInstance = dokanBuilder.Build(this._directoryFs);
     }
 
     public void Mount()

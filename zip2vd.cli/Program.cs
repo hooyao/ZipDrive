@@ -6,8 +6,6 @@ using Serilog;
 using zip2vd.cli;
 using zip2vd.core;
 using zip2vd.core.Configuration;
-using Serilog.Sinks.SystemConsole;
-using Serilog.Sinks.File;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var builder = Host.CreateDefaultBuilder(args);

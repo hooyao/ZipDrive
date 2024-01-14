@@ -1,4 +1,4 @@
-﻿namespace zip2vd.core.Common;
+﻿namespace zip2vd.core.Proxy;
 
 public struct ZipEntryAttr
 {
