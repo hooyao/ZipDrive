@@ -1,8 +1,9 @@
 ﻿using DokanNet;
 using Microsoft.Extensions.Logging;
 using zip2vd.core.FileSystem;
+using zip2vd.core.Proxy.NodeAttributes;
 
-namespace zip2vd.core.Proxy;
+namespace zip2vd.core.Proxy.FsNode;
 
 public class DesktopIniNode : AbstractFsTreeNode<DesktopIniNodeAttributes>
 {
@@ -34,4 +35,9 @@ public class DesktopIniNode : AbstractFsTreeNode<DesktopIniNodeAttributes>
 
     public override IFsTreeNode? Parent { get; set; }
     public override IReadOnlyDictionary<string, IFsTreeNode> ChildNodes => throw new NotSupportedException("Can't get child nodes from a desktop.ini file");
+
+    public override void AddChildren(IReadOnlyList<IFsTreeNode> children)
+    {
+        throw new NotImplementedException();
+    }
 }

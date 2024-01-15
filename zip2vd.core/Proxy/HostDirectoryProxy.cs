@@ -1,6 +1,7 @@
 ﻿using DokanNet;
 using Microsoft.Extensions.Logging;
 using zip2vd.core.FileSystem;
+using zip2vd.core.Proxy.NodeAttributes;
 
 namespace zip2vd.core.Proxy;
 

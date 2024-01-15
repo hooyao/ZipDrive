@@ -1,6 +1,6 @@
 ﻿using DokanNet;
 
-namespace zip2vd.core.Proxy;
+namespace zip2vd.core.Proxy.FsNode;
 
 public interface IFsTreeNode
 {
@@ -17,4 +17,6 @@ public interface IFsTreeNode
     public IFsTreeNode? Parent { get; set; }
 
     public IReadOnlyDictionary<string, IFsTreeNode> ChildNodes { get; }
+
+    public void AddChildren(IReadOnlyList<IFsTreeNode> children);
 }

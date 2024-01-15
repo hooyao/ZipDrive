@@ -1,4 +1,5 @@
 ﻿using DokanNet;
+using zip2vd.core.Proxy.NodeAttributes;
 
 namespace zip2vd.core.Proxy;
 

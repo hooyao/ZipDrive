@@ -1,7 +1,8 @@
 ﻿using DokanNet;
 using Microsoft.Extensions.Logging;
+using zip2vd.core.Proxy.NodeAttributes;
 
-namespace zip2vd.core.Proxy;
+namespace zip2vd.core.Proxy.FsNode;
 
 public abstract class AbstractFsTreeNode<TAttr> : IFsTreeNode where TAttr : AbstractNodeAttributes
 {
@@ -13,7 +14,7 @@ public abstract class AbstractFsTreeNode<TAttr> : IFsTreeNode where TAttr : Abst
         NodeType = nodeType;
         Attributes = attributes;
     }
-    public TAttr? Attributes { get; }
+    public TAttr Attributes { get; }
     public string Name { get; }
     public FsTreeNodeType NodeType { get; }
     
@@ -23,4 +24,6 @@ public abstract class AbstractFsTreeNode<TAttr> : IFsTreeNode where TAttr : Abst
     public abstract FileInformation FileInformation { get; }
     public abstract IFsTreeNode? Parent { get; set; }
     public abstract IReadOnlyDictionary<string, IFsTreeNode> ChildNodes { get; }
+
+    public abstract void AddChildren(IReadOnlyList<IFsTreeNode> children);
 }

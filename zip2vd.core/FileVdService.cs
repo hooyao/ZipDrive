@@ -1,6 +1,7 @@
 ﻿using DokanNet;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using zip2vd.core.Cache;
 using zip2vd.core.Common;
 using zip2vd.core.Configuration;
 using zip2vd.core.FileSystem;
@@ -20,6 +21,7 @@ public class FileVdService : IVdService, IAsyncDisposable
     public FileVdService(
         IOptions<FileVdOptions> fileVdOptions,
         IOptions<ArchiveFileSystemOptions> archiveFileSystemOptions,
+        FsCacheService cacheService,
         ILoggerFactory loggerFactory,
         ILogger<FileVdService> logger)
     {
@@ -38,7 +40,7 @@ public class FileVdService : IVdService, IAsyncDisposable
         //this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, archiveFileSystemOptions.Value, loggerFactory);
 
         HostDirectoryProxy hostDirectoryProxy = new HostDirectoryProxy(loggerFactory.CreateLogger<HostDirectoryProxy>());
-        this._directoryFs = new DirectoryFs(fileVdOptions.Value.FolderPath, hostDirectoryProxy, loggerFactory);
+        this._directoryFs = new DirectoryFs(fileVdOptions.Value.FolderPath, hostDirectoryProxy, cacheService, loggerFactory);
         this._dokanInstance = dokanBuilder.Build(this._directoryFs);
     }
 

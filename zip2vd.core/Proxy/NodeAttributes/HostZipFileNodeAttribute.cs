@@ -1,4 +1,4 @@
-﻿namespace zip2vd.core.Proxy;
+﻿namespace zip2vd.core.Proxy.NodeAttributes;
 
 public class HostZipFileNodeAttribute : AbstractNodeAttributes
 {

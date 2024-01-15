@@ -1,12 +1,15 @@
 ﻿using System.Collections.Concurrent;
+using System.IO.Compression;
 using DokanNet;
 using Microsoft.Extensions.Logging;
-using zip2vd.core.FileSystem;
+using zip2vd.core.Cache;
+using zip2vd.core.Proxy.NodeAttributes;
 
-namespace zip2vd.core.Proxy;
+namespace zip2vd.core.Proxy.FsNode;
 
 public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
 {
+    private readonly FsCacheService _cacheService;
     private readonly ILogger<HostDirectoryNode> _logger;
     private readonly Lazy<FileInformation> _lazyFileInfo;
 
@@ -20,9 +23,11 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
         string name,
         IFsTreeNode? parent,
         HostDirectoryNodeAttributes attributes,
+        FsCacheService cacheService,
         ILoggerFactory loggerFactory) :
         base(name, FsTreeNodeType.HostDirectory, attributes, loggerFactory)
     {
+        this._cacheService = cacheService;
         this._logger = loggerFactory.CreateLogger<HostDirectoryNode>();
         this._lazyFileInfo = new Lazy<FileInformation>(() =>
         {
@@ -60,7 +65,7 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
         this._isChildNodesReady = true;
     }
 
-    public void AddChildren(IReadOnlyList<IFsTreeNode> children)
+    public override void AddChildren(IReadOnlyList<IFsTreeNode> children)
     {
         lock (this._nodeLock)
         {
@@ -102,6 +107,7 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
                                             directoryName,
                                             this,
                                             new HostDirectoryNodeAttributes(fsi.FullName),
+                                            this._cacheService,
                                             this.LoggerFactory);
                                         children.Add(node);
                                         stack.Push(node);
@@ -111,7 +117,11 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
                                         string fileName = Path.GetFileNameWithoutExtension(fsi.FullName);
                                         HostZipFileNode node = new HostZipFileNode(
                                             fileName,
-                                            new HostZipFileNodeAttribute(),
+                                            new HostZipFileNodeAttribute()
+                                            {
+                                                AbsolutePath = fsi.FullName
+                                            },
+                                            this._cacheService,
                                             this.LoggerFactory);
                                         children.Add(node);
                                     }

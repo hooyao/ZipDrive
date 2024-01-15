@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using zip2vd.cli;
 using zip2vd.core;
+using zip2vd.core.Cache;
 using zip2vd.core.Configuration;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -27,6 +28,7 @@ builder.ConfigureServices((hostContext, services) =>
     services.AddOptions<FileVdOptions>().Bind(hostContext.Configuration);
     services.AddOptions<ArchiveFileSystemOptions>().Bind(hostContext.Configuration.GetSection("zip"));
     services.AddSingleton<IVdService, FileVdService>();
+    services.AddSingleton<FsCacheService>();
     services.AddHostedService<FsHostedService>();
 });
 
