@@ -40,7 +40,7 @@ public class FileVdService : IVdService, IAsyncDisposable
         //this._zipFs = new ZipFs(fileVdOptions.Value.FilePath, archiveFileSystemOptions.Value, loggerFactory);
 
         HostDirectoryProxy hostDirectoryProxy = new HostDirectoryProxy(loggerFactory.CreateLogger<HostDirectoryProxy>());
-        this._directoryFs = new DirectoryFs(fileVdOptions.Value.FolderPath, hostDirectoryProxy, cacheService, loggerFactory);
+        this._directoryFs = new DirectoryFs(fileVdOptions.Value.FolderPath, cacheService, loggerFactory);
         this._dokanInstance = dokanBuilder.Build(this._directoryFs);
     }
 

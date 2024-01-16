@@ -12,6 +12,8 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
     private readonly FsCacheService _cacheService;
     private readonly ILogger<HostZipFileNode> _logger;
 
+    private readonly object _nodeLock = new object();
+
     public HostZipFileNode(
         string name,
         HostZipFileNodeAttribute attributes,
@@ -46,23 +48,26 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
     {
         get
         {
-            Dictionary<string, IFsTreeNode> children = new Dictionary<string, IFsTreeNode>(10);
-            DesktopIniNode desktopIniNode = new DesktopIniNode("desktop.ini", this, new DesktopIniNodeAttributes(), this.LoggerFactory);
-            children.Add("desktop.ini", desktopIniNode);
-            Encoding ansiEncoding = Encoding.GetEncoding(0);
-            using (ZipArchive zipArchive = ZipFile.Open(this.Attributes.AbsolutePath, ZipArchiveMode.Read, ansiEncoding))
+            lock (this._nodeLock)
             {
-                int entriesCount = zipArchive.Entries.Count;
-                using (var cacheItem = this._cacheService.TreeCache.BorrowOrAdd(this.Attributes.AbsolutePath, () => { return this.BuildTree(zipArchive); }, entriesCount))
+                if (this._cacheService.TreeCache.TryGet(this.Attributes.AbsolutePath, out IReadOnlyList<IFsTreeNode>? childNodeList))
                 {
-                    foreach (IFsTreeNode child in cacheItem.CacheItemValue)
-                    {
-                        child.Parent = this;
-                        children.Add(child.Name, child);
-                    }
+                    return childNodeList.ToDictionary(pair => pair.Name, pair => pair);
+                }
+                //Dictionary<string, IFsTreeNode> children = new Dictionary<string, IFsTreeNode>(10);
+
+                Encoding ansiEncoding = Encoding.GetEncoding(0);
+                IReadOnlyList<IFsTreeNode> children;
+                using (ZipArchive zipArchive = ZipFile.Open(this.Attributes.AbsolutePath, ZipArchiveMode.Read, ansiEncoding))
+                {
+                    children = this.BuildTree(zipArchive);
+                    //DesktopIniNode desktopIniNode = new DesktopIniNode("desktop.ini", this, new DesktopIniNodeAttributes(), this.LoggerFactory);
+                    this._cacheService.TreeCache.AddOrUpdate(this.Attributes.AbsolutePath, children);
+                    var dict = children.ToDictionary(pair => pair.Name, pair => pair);
+                    // dict.Add("desktop.ini", desktopIniNode);
+                    return dict;
                 }
             }
-            return children.AsReadOnly();
         }
     }
 
@@ -74,6 +79,7 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
 
     private IReadOnlyList<IFsTreeNode> BuildTree(ZipArchive zipFile)
     {
+        this._logger.LogInformation("Building tree for archive {AbsolutePath}", this.Attributes.AbsolutePath);
         ZipFileDirectoryNode dummyRoot = new ZipFileDirectoryNode("/", new ZipFileDirectoryNodeAttributes(), this.LoggerFactory);
         foreach (ZipArchiveEntry entry in zipFile.Entries)
         {
@@ -114,19 +120,26 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
                         if (!currentNode.ChildNodes.ContainsKey(part))
                         {
                             // last part
-                            FileInformation fileInfo = new FileInformation()
+                            if (part == "index.md")
                             {
-                                Attributes = (entry.IsDirectory() ? FileAttributes.Directory : FileAttributes.Normal) |
-                                             FileAttributes.ReadOnly,
-                                CreationTime = entry.LastWriteTime.UtcDateTime,
-                                FileName = part,
-                                LastAccessTime = entry.LastWriteTime.UtcDateTime,
-                                LastWriteTime = entry.LastWriteTime.UtcDateTime,
-                                Length = entry.Length
-                            };
-                            IFsTreeNode childNode = entry.Length == 0
+                                this._logger.LogInformation("Pause here");
+                            }
+                            IFsTreeNode childNode = entry.IsDirectory()
                                 ? new ZipFileDirectoryNode(part, new ZipFileDirectoryNodeAttributes(), this.LoggerFactory)
-                                : new ZipFileItemNode(part, new ZipFileItemNodeAttributes(), this.LoggerFactory);
+                                : new ZipFileItemNode(part, new ZipFileItemNodeAttributes()
+                                {
+                                    ItemFullPath = entry.FullName,
+                                    ZipFileAbsolutePath = this.Attributes.AbsolutePath,
+                                    FileInformation = new FileInformation()
+                                    {
+                                        Attributes = FileAttributes.Normal | FileAttributes.ReadOnly,
+                                        CreationTime = entry.LastWriteTime.UtcDateTime,
+                                        FileName = part,
+                                        LastAccessTime = entry.LastWriteTime.UtcDateTime,
+                                        LastWriteTime = entry.LastWriteTime.UtcDateTime,
+                                        Length = entry.Length
+                                    }
+                                }, this._cacheService, this.LoggerFactory);
                             childNode.Parent = currentNode;
                             currentNode.AddChildren(new[] { childNode });
                             currentNode = childNode;

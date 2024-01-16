@@ -12,13 +12,12 @@ namespace zip2vd.core.FileSystem;
 public class DirectoryFs : IDokanOperations, IDisposable
 {
     private readonly string _directoryPath;
-    private readonly HostDirectoryProxy _hostDirectoryProxy;
     private readonly FsCacheService _cacheService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DirectoryFs> _logger;
 
     private readonly IFsTreeNode _root;
-    public DirectoryFs(string directoryPath, HostDirectoryProxy hostDirectoryProxy, FsCacheService cacheService, ILoggerFactory loggerFactory)
+    public DirectoryFs(string directoryPath, FsCacheService cacheService, ILoggerFactory loggerFactory)
     {
         this._logger = loggerFactory.CreateLogger<DirectoryFs>();
 
@@ -29,7 +28,6 @@ public class DirectoryFs : IDokanOperations, IDisposable
         }
 
         this._directoryPath = directoryPath;
-        this._hostDirectoryProxy = hostDirectoryProxy;
         this._cacheService = cacheService;
         this._loggerFactory = loggerFactory;
 
@@ -222,7 +220,6 @@ public class DirectoryFs : IDokanOperations, IDisposable
 
     public void Dispose()
     {
-        throw new NotImplementedException();
     }
 
     private IFsTreeNode LocateNode(string[] parts)
