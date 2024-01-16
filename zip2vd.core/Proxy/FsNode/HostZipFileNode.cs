@@ -2,6 +2,7 @@
 using System.Text;
 using DokanNet;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Proxy.NodeAttributes;
 
@@ -10,6 +11,7 @@ namespace zip2vd.core.Proxy.FsNode;
 public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
 {
     private readonly FsCacheService _cacheService;
+    private readonly DefaultObjectPoolProvider _objectPoolProvider;
     private readonly ILogger<HostZipFileNode> _logger;
 
     private readonly object _nodeLock = new object();
@@ -18,10 +20,12 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
         string name,
         HostZipFileNodeAttribute attributes,
         FsCacheService cacheService,
+        DefaultObjectPoolProvider objectPoolProvider,
         ILoggerFactory loggerFactory)
         : base(name, FsTreeNodeType.HostZipFile, attributes, loggerFactory)
     {
         this._cacheService = cacheService;
+        this._objectPoolProvider = objectPoolProvider;
         this._logger = loggerFactory.CreateLogger<HostZipFileNode>();
     }
     public override bool IsDirectory => true;
@@ -58,14 +62,32 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
 
                 Encoding ansiEncoding = Encoding.GetEncoding(0);
                 IReadOnlyList<IFsTreeNode> children;
-                using (ZipArchive zipArchive = ZipFile.Open(this.Attributes.AbsolutePath, ZipArchiveMode.Read, ansiEncoding))
+                VerboseZipArchive archive;
+                using (LruMemoryCache<string, ObjectPool<VerboseZipArchive>>.CacheItem archivePoolItem = this._cacheService.ArchivePoolCache.BorrowOrAdd(
+                           this.Attributes.AbsolutePath, () =>
+                           {
+                               ObjectPool<VerboseZipArchive> zipArchivePool =
+                                   this._objectPoolProvider.Create<VerboseZipArchive>(new ZipArchivePooledObjectPolicy(this.Attributes.AbsolutePath,
+                                       ansiEncoding,
+                                       base.LoggerFactory));
+                               return zipArchivePool;
+                           }, 1))
                 {
-                    children = this.BuildTree(zipArchive);
-                    //DesktopIniNode desktopIniNode = new DesktopIniNode("desktop.ini", this, new DesktopIniNodeAttributes(), this.LoggerFactory);
-                    this._cacheService.TreeCache.AddOrUpdate(this.Attributes.AbsolutePath, children);
-                    var dict = children.ToDictionary(pair => pair.Name, pair => pair);
-                    // dict.Add("desktop.ini", desktopIniNode);
-                    return dict;
+                    ObjectPool<VerboseZipArchive> pool = archivePoolItem.CacheItemValue;
+                    archive = pool.Get();
+                    try
+                    {
+                        children = this.BuildTree(archive);
+                        //DesktopIniNode desktopIniNode = new DesktopIniNode("desktop.ini", this, new DesktopIniNodeAttributes(), this.LoggerFactory);
+                        this._cacheService.TreeCache.AddOrUpdate(this.Attributes.AbsolutePath, children);
+                        var dict = children.ToDictionary(pair => pair.Name, pair => pair);
+                        // dict.Add("desktop.ini", desktopIniNode);
+                        return dict;
+                    }
+                    finally
+                    {
+                        pool.Return(archive);
+                    }
                 }
             }
         }
@@ -79,7 +101,7 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
 
     private IReadOnlyList<IFsTreeNode> BuildTree(ZipArchive zipFile)
     {
-        this._logger.LogInformation("Building tree for archive {AbsolutePath}", this.Attributes.AbsolutePath);
+        //this._logger.LogInformation("Building tree for archive {AbsolutePath}", this.Attributes.AbsolutePath);
         ZipFileDirectoryNode dummyRoot = new ZipFileDirectoryNode("/", new ZipFileDirectoryNodeAttributes(), this.LoggerFactory);
         foreach (ZipArchiveEntry entry in zipFile.Entries)
         {
@@ -139,7 +161,7 @@ public class HostZipFileNode : AbstractFsTreeNode<HostZipFileNodeAttribute>
                                         LastWriteTime = entry.LastWriteTime.UtcDateTime,
                                         Length = entry.Length
                                     }
-                                }, this._cacheService, this.LoggerFactory);
+                                }, this._cacheService, this._objectPoolProvider, this.LoggerFactory);
                             childNode.Parent = currentNode;
                             currentNode.AddChildren(new[] { childNode });
                             currentNode = childNode;

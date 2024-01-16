@@ -1,6 +1,7 @@
 ﻿using System.Security.AccessControl;
 using DokanNet;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Proxy;
 using zip2vd.core.Proxy.FsNode;
@@ -17,6 +18,8 @@ public class DirectoryFs : IDokanOperations, IDisposable
     private readonly ILogger<DirectoryFs> _logger;
 
     private readonly IFsTreeNode _root;
+
+    private readonly DefaultObjectPoolProvider _defaultObjectPoolProvider;
     public DirectoryFs(string directoryPath, FsCacheService cacheService, ILoggerFactory loggerFactory)
     {
         this._logger = loggerFactory.CreateLogger<DirectoryFs>();
@@ -31,7 +34,9 @@ public class DirectoryFs : IDokanOperations, IDisposable
         this._cacheService = cacheService;
         this._loggerFactory = loggerFactory;
 
-        this._root = new HostDirectoryNode("/", null, new HostDirectoryNodeAttributes(directoryPath), this._cacheService, this._loggerFactory);
+        this._defaultObjectPoolProvider = new DefaultObjectPoolProvider() { MaximumRetained = 5 };
+
+        this._root = new HostDirectoryNode("/", null, new HostDirectoryNodeAttributes(directoryPath), this._cacheService, this._defaultObjectPoolProvider, this._loggerFactory);
     }
 
     public NtStatus CreateFile(string fileName, FileAccess access, FileShare share, FileMode mode, FileOptions options, FileAttributes attributes, IDokanFileInfo info)

@@ -62,6 +62,6 @@ public class FileVdService : IVdService, IAsyncDisposable
 
         this._dokanInstance.Dispose();
         this._dokan.Dispose();
-        this._zipFs.Dispose();
+        this._directoryFs.Dispose();
     }
 }

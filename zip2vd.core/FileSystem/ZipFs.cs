@@ -30,7 +30,7 @@ public class ZipFs : IDokanOperations, IDisposable
     private ILogger<ZipFs> _logger;
     private ILogger<LargeFileCacheEntry> _largeFileCacheEntryLogger;
 
-    private ObjectPool<ZipArchive> _zipArchivePool;
+    private ObjectPool<VerboseZipArchive> _zipArchivePool;
 
     //Configuration Variables
     private readonly string _largeFileCacheDir;
@@ -65,7 +65,7 @@ public class ZipFs : IDokanOperations, IDisposable
         // Current system non-unicode code page
         Encoding ansiEncoding = Encoding.GetEncoding(0);
         DefaultObjectPoolProvider p = new DefaultObjectPoolProvider() { MaximumRetained = this._maxReadConcurrency };
-        this._zipArchivePool = p.Create<ZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding));
+        this._zipArchivePool = p.Create<VerboseZipArchive>(new ZipArchivePooledObjectPolicy(this._filePath, ansiEncoding, loggerFactory));
 
         this._smallFileCache = new LruMemoryCache<string, byte[]>(this._smallFileCacheSize, loggerFactory);
         this._largeFileCache =
@@ -112,7 +112,7 @@ public class ZipFs : IDokanOperations, IDisposable
             }
 
 
-            ZipArchive archive = this._zipArchivePool.Get();
+            VerboseZipArchive archive = this._zipArchivePool.Get();
             try
             {
                 ZipArchiveEntry? entry = archive.GetEntry(attr.Value.FullPath);
@@ -275,7 +275,7 @@ public class ZipFs : IDokanOperations, IDisposable
     {
         lock (this._zipFileLock)
         {
-            ZipArchive archive = this._zipArchivePool.Get();
+            VerboseZipArchive archive = this._zipArchivePool.Get();
             try
             {
                 if (!this._buildTree)

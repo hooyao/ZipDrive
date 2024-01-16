@@ -5,6 +5,7 @@ using System.IO.MemoryMappedFiles;
 using System.Text;
 using DokanNet;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Proxy.NodeAttributes;
 
@@ -13,41 +14,40 @@ namespace zip2vd.core.Proxy.FsNode;
 public class ZipFileItemNode : AbstractFsTreeNode<ZipFileItemNodeAttributes>
 {
     private readonly FsCacheService _cacheService;
+    private readonly DefaultObjectPoolProvider _objectPoolProvider;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ZipFileItemNode> _logger;
     private readonly Lazy<FileInformation> _lazyFileInfo;
 
     private volatile bool _isChildNodesReady = false;
 
-    private object _nodeLock = new object();
+    private readonly object _nodeLock = new object();
     private readonly long _smallFileSizeCutOff = 50L*1024L*1024L;
 
     private readonly string _largeFileCacheDir = Path.GetTempPath();
+
     public ZipFileItemNode(
         string name,
         ZipFileItemNodeAttributes? attributes,
         FsCacheService cacheService,
+        DefaultObjectPoolProvider objectPoolProvider,
         ILoggerFactory loggerFactory) :
         base(name, FsTreeNodeType.ZipFileItem, attributes, loggerFactory)
     {
         this._cacheService = cacheService;
+        this._objectPoolProvider = objectPoolProvider;
         this._logger = loggerFactory.CreateLogger<ZipFileItemNode>();
     }
     public override bool IsDirectory => false;
 
     public override int ReadFile(byte[] buffer, long offset)
     {
+        long fileSize = (int)this.Attributes.FileInformation.Length;
         int bytesRead = 0;
 
         Encoding ansiEncoding = Encoding.GetEncoding(0);
-        using (ZipArchive zipArchive = ZipFile.Open(this.Attributes.ZipFileAbsolutePath, ZipArchiveMode.Read, ansiEncoding))
+        lock (this._nodeLock)
         {
-            ZipArchiveEntry? entry = zipArchive.GetEntry(this.Attributes.ItemFullPath);
-            if (entry == null)
-            {
-                throw new FileNotFoundException();
-            }
-
-            long fileSize = entry.Length;
             if (fileSize <= this._smallFileSizeCutOff)
             {
                 string fileKey = $"{this.Attributes.ZipFileAbsolutePath}:{this.Attributes.ItemFullPath}";
@@ -55,13 +55,41 @@ public class ZipFileItemNode : AbstractFsTreeNode<ZipFileItemNodeAttributes>
                            fileKey,
                            () =>
                            {
-                               this._logger.LogDebug("Caching {LargeOrSmall} file: {FileName}", "small", fileKey);
-                               using (Stream entryStream = entry.Open())
-                               using (BufferedStream bs = new BufferedStream(entryStream))
-                               using (MemoryStream ms = new MemoryStream())
+                               VerboseZipArchive archive;
+
+                               using (LruMemoryCache<string, ObjectPool<VerboseZipArchive>>.CacheItem archivePoolItem = this._cacheService.ArchivePoolCache.BorrowOrAdd(
+                                          this.Attributes.ZipFileAbsolutePath, () =>
+                                          {
+                                              ObjectPool<VerboseZipArchive> zipArchivePool =
+                                                  this._objectPoolProvider.Create<VerboseZipArchive>(new ZipArchivePooledObjectPolicy(this.Attributes.ZipFileAbsolutePath,
+                                                      ansiEncoding,
+                                                      base.LoggerFactory));
+                                              return zipArchivePool;
+                                          }, 1))
                                {
-                                   bs.CopyTo(ms);
-                                   return ms.ToArray();
+                                   var pool = archivePoolItem.CacheItemValue;
+                                   archive = pool.Get();
+                                   try
+                                   {
+                                       ZipArchiveEntry? entry = archive.GetEntry(this.Attributes.ItemFullPath);
+
+                                       if (entry == null)
+                                       {
+                                           throw new FileNotFoundException();
+                                       }
+                                       this._logger.LogDebug("Caching {LargeOrSmall} file: {FileName}", "small", fileKey);
+                                       using (Stream entryStream = entry.Open())
+                                       using (BufferedStream bs = new BufferedStream(entryStream))
+                                       using (MemoryStream ms = new MemoryStream())
+                                       {
+                                           bs.CopyTo(ms);
+                                           return ms.ToArray();
+                                       }
+                                   }
+                                   finally
+                                   {
+                                       pool.Return(archive);
+                                   }
                                }
                            }, fileSize))
                 {
@@ -101,40 +129,67 @@ public class ZipFileItemNode : AbstractFsTreeNode<ZipFileItemNodeAttributes>
                 using (LruMemoryCache<string, LargeFileCacheEntry>.CacheItem largeFileCacheItem =
                        this._cacheService.LargeFileCache.BorrowOrAdd(fileKey, () =>
                            {
-                               this._logger.LogDebug("Start Caching {LargeOrSmall} file: {FileName}", "LARGE", fileKey);
-                               string tempFileName = $"{Guid.NewGuid().ToString()}.zip2vd";
-                               using (Stream entryStream = entry.Open())
+                               VerboseZipArchive archive;
+
+                               using (LruMemoryCache<string, ObjectPool<VerboseZipArchive>>.CacheItem archivePoolItem = this._cacheService.ArchivePoolCache.BorrowOrAdd(
+                                          this.Attributes.ZipFileAbsolutePath, () =>
+                                          {
+                                              ObjectPool<VerboseZipArchive> zipArchivePool =
+                                                  this._objectPoolProvider.Create<VerboseZipArchive>(new ZipArchivePooledObjectPolicy(this.Attributes.ZipFileAbsolutePath,
+                                                      ansiEncoding,
+                                                      base.LoggerFactory));
+                                              return zipArchivePool;
+                                          }, 1))
                                {
-                                   // Create a memory-mapped file
-                                   using (MemoryMappedFile mmf =
-                                          MemoryMappedFile.CreateFromFile(
-                                              Path.Combine(this._largeFileCacheDir, tempFileName),
-                                              FileMode.OpenOrCreate,
-                                              null,
-                                              entry.Length))
+                                   var pool = archivePoolItem.CacheItemValue;
+                                   archive = pool.Get();
+                                   try
                                    {
-                                       // Create a view stream for the memory-mapped file
-                                       using (MemoryMappedViewStream viewStream = mmf.CreateViewStream())
+                                       ZipArchiveEntry? entry = archive.GetEntry(this.Attributes.ItemFullPath);
+                                       if (entry == null)
                                        {
-                                           // Copy the source stream to the view stream
-                                           entryStream.CopyTo(viewStream);
+                                           throw new FileNotFoundException();
                                        }
+                                       this._logger.LogDebug("Start Caching {LargeOrSmall} file: {FileName}", "LARGE", fileKey);
+                                       string tempFileName = $"{Guid.NewGuid().ToString()}.zip2vd";
+                                       using (Stream entryStream = entry.Open())
+                                       {
+                                           // Create a memory-mapped file
+                                           using (MemoryMappedFile mmf =
+                                                  MemoryMappedFile.CreateFromFile(
+                                                      Path.Combine(this._largeFileCacheDir, tempFileName),
+                                                      FileMode.OpenOrCreate,
+                                                      null,
+                                                      entry.Length))
+                                           {
+                                               // Create a view stream for the memory-mapped file
+                                               using (MemoryMappedViewStream viewStream = mmf.CreateViewStream())
+                                               {
+                                                   // Copy the source stream to the view stream
+                                                   entryStream.CopyTo(viewStream);
+                                               }
+                                           }
+                                       }
+
+                                       MemoryMappedFile mmf2 = MemoryMappedFile.CreateFromFile(
+                                           Path.Combine(this._largeFileCacheDir, tempFileName),
+                                           FileMode.OpenOrCreate,
+                                           null,
+                                           entry.Length);
+
+                                       MemoryMappedViewAccessor accessor = mmf2.CreateViewAccessor(0, entry.Length);
+                                       this._logger.LogDebug("End Caching {LargeOrSmall} file: {FileName}", "LARGE", fileKey);
+                                       return new LargeFileCacheEntry(
+                                           Path.Combine(this._largeFileCacheDir, tempFileName),
+                                           mmf2,
+                                           accessor,
+                                           this.LoggerFactory.CreateLogger<LargeFileCacheEntry>());
+                                   }
+                                   finally
+                                   {
+                                       pool.Return(archive);
                                    }
                                }
-
-                               MemoryMappedFile mmf2 = MemoryMappedFile.CreateFromFile(
-                                   Path.Combine(this._largeFileCacheDir, tempFileName),
-                                   FileMode.OpenOrCreate,
-                                   null,
-                                   entry.Length);
-
-                               MemoryMappedViewAccessor accessor = mmf2.CreateViewAccessor(0, entry.Length);
-                               this._logger.LogDebug("End Caching {LargeOrSmall} file: {FileName}", "LARGE", fileKey);
-                               return new LargeFileCacheEntry(
-                                   Path.Combine(this._largeFileCacheDir, tempFileName),
-                                   mmf2,
-                                   accessor,
-                                   this.LoggerFactory.CreateLogger<LargeFileCacheEntry>());
                            }, fileSize
                        ))
                 {

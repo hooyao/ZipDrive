@@ -2,6 +2,7 @@
 using System.IO.Compression;
 using DokanNet;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ObjectPool;
 using zip2vd.core.Cache;
 using zip2vd.core.Proxy.NodeAttributes;
 
@@ -10,6 +11,7 @@ namespace zip2vd.core.Proxy.FsNode;
 public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
 {
     private readonly FsCacheService _cacheService;
+    private readonly DefaultObjectPoolProvider _objectPoolProvider;
     private readonly ILogger<HostDirectoryNode> _logger;
     private readonly Lazy<FileInformation> _lazyFileInfo;
 
@@ -24,10 +26,12 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
         IFsTreeNode? parent,
         HostDirectoryNodeAttributes attributes,
         FsCacheService cacheService,
+        DefaultObjectPoolProvider objectPoolProvider,
         ILoggerFactory loggerFactory) :
         base(name, FsTreeNodeType.HostDirectory, attributes, loggerFactory)
     {
         this._cacheService = cacheService;
+        this._objectPoolProvider = objectPoolProvider;
         this._logger = loggerFactory.CreateLogger<HostDirectoryNode>();
         this._lazyFileInfo = new Lazy<FileInformation>(() =>
         {
@@ -108,6 +112,7 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
                                             this,
                                             new HostDirectoryNodeAttributes(fsi.FullName),
                                             this._cacheService,
+                                            this._objectPoolProvider,
                                             this.LoggerFactory);
                                         children.Add(node);
                                         stack.Push(node);
@@ -122,6 +127,7 @@ public class HostDirectoryNode : AbstractFsTreeNode<HostDirectoryNodeAttributes>
                                                 AbsolutePath = fsi.FullName
                                             },
                                             this._cacheService,
+                                            this._objectPoolProvider,
                                             this.LoggerFactory);
                                         children.Add(node);
                                     }
