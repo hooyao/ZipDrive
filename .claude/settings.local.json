@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet new:*)",
+      "Bash(dotnet sln:*)",
+      "Bash(dotnet build:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(dotnet add:*)",
+      "Bash(sed:*)",
+      "Bash(dotnet:*)",
+      "Bash(for:*)",
+      "Bash(do sed:*)",
+      "Bash(done:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
