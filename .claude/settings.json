@@ -1,0 +1,9 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:23333/api/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "Powered by Agent Maestro",
+    "ANTHROPIC_MODEL": "claude-sonnet-4.5",
+    "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4.5",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}
