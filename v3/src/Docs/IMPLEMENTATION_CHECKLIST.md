@@ -1,11 +1,13 @@
-# Caching Layer - Implementation Checklist
+# ZipDrive V3 - Implementation Checklist
 
 **Design Status:** ✅ Complete
-**Implementation Status:** ✅ Core Complete (Phase 1-4)
+**Implementation Status:** ✅ Core Complete (Caching + ZIP Reader)
 
 ---
 
-## Architecture Overview
+## Part 1: Caching Layer
+
+### Architecture Overview
 
 The caching layer uses a **generic cache with pluggable storage strategies**:
 
@@ -315,16 +317,128 @@ using (var handle = await cache.BorrowAsync(key, ttl, factory))
 
 ---
 
-## Summary
+## Part 2: Streaming ZIP Reader
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 1 | ✅ Complete | Core interfaces & models |
-| Phase 2 | ✅ Complete | GenericCache with borrow/return |
-| Phase 3 | ✅ Complete | Storage strategies (Memory, Disk, Object) |
-| Phase 4 | ✅ Complete | LRU eviction policy |
-| Phase 5 | ✅ Complete | Integration tests (13 passing) |
-| Phase 6 | ⏳ Pending | Dual-tier coordinator |
-| Phase 7 | ⏳ Pending | Observability (metrics) |
+### Architecture Overview
 
-**Core caching layer is complete and tested!**
+The streaming ZIP reader provides memory-efficient parsing of ZIP archives:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         IZipReader                               │
+│  • ReadEocdAsync() → ZipEocd                                    │
+│  • StreamCentralDirectoryAsync() → IAsyncEnumerable<CDEntry>    │
+│  • OpenEntryStreamAsync() → Stream (decompressed)               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   IArchiveStructureCache                         │
+│  • GetOrBuildAsync() → ArchiveStructure                         │
+│  • Uses GenericCache<ArchiveStructure> + ObjectStorageStrategy  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Phase 1: ZIP Format Structures ✅ COMPLETE
+
+- [x] `ZipConstants.cs` - Signatures, header sizes, compression methods
+- [x] `ZipEocd.cs` - End of Central Directory record
+- [x] `ZipCentralDirectoryEntry.cs` - Central Directory file header
+- [x] `ZipLocalHeader.cs` - Local file header
+
+### Phase 2: Domain Models ✅ COMPLETE
+
+- [x] `ZipEntryInfo.cs` - Minimal extraction metadata (~40 bytes struct)
+- [x] `ArchiveStructure.cs` - Cached archive metadata container
+- [x] `DirectoryNode.cs` - Tree structure for directory listing
+
+### Phase 3: Exception Hierarchy ✅ COMPLETE
+
+- [x] `ZipException` - Base exception
+- [x] `CorruptZipException` - Archive corruption
+- [x] `InvalidSignatureException` - Bad magic number
+- [x] `EocdNotFoundException` - EOCD not found
+- [x] `TruncatedArchiveException` - Premature EOF
+- [x] `UnsupportedCompressionException` - Unknown compression method
+- [x] `EncryptedEntryException` - Encrypted entry
+- [x] `Zip64NotSupportedException` - ZIP64 not supported (reserved)
+
+### Phase 4: IZipReader Implementation ✅ COMPLETE
+
+- [x] `IZipReader.cs` - Interface definition
+- [x] `ZipReader.cs` - Full implementation
+  - [x] `ReadEocdAsync()` - Locate and parse EOCD with ZIP64 support
+  - [x] `StreamCentralDirectoryAsync()` - `IAsyncEnumerable` streaming enumeration
+  - [x] `ReadLocalHeaderAsync()` - Parse local header for extraction
+  - [x] `OpenEntryStreamAsync()` - Open decompression stream (Store/Deflate)
+- [x] `SubStream.cs` - Bounded read-only stream wrapper
+
+### Phase 5: Cache Integration ✅ COMPLETE
+
+- [x] `IArchiveStructureCache.cs` - Cache interface
+- [x] `ArchiveStructureCache.cs` - Implementation using GenericCache
+  - [x] Streaming CD parsing via `IZipReader.StreamCentralDirectoryAsync()`
+  - [x] Incremental dictionary and tree building
+  - [x] Memory estimation (~114 bytes per entry)
+  - [x] Thundering herd prevention via GenericCache's `Lazy<Task>`
+
+### Phase 6: Testing ✅ COMPLETE
+
+- [x] Test project: `ZipDriveV3.Infrastructure.Archives.Zip.Tests`
+- [x] EOCD Tests (4 tests)
+  - [x] `ReadEocdAsync_ValidZip_ReturnsCorrectEntryCount`
+  - [x] `ReadEocdAsync_EmptyZip_ReturnsZeroEntries`
+  - [x] `ReadEocdAsync_InvalidFile_ThrowsEocdNotFoundException`
+  - [x] `ReadEocdAsync_TooSmallFile_ThrowsCorruptZipException`
+- [x] Central Directory Streaming Tests (5 tests)
+  - [x] `StreamCentralDirectoryAsync_ValidZip_YieldsAllEntries`
+  - [x] `StreamCentralDirectoryAsync_EmptyZip_YieldsNoEntries`
+  - [x] `StreamCentralDirectoryAsync_LargeZip_StreamsEfficiently`
+  - [x] `StreamCentralDirectoryAsync_Cancellation_StopsEnumeration`
+  - [x] `StreamCentralDirectoryAsync_DirectoryEntry_HasIsDirectoryTrue`
+- [x] Local Header & Extraction Tests (3 tests)
+  - [x] `ReadLocalHeaderAsync_ValidEntry_ReturnsCorrectHeaderSize`
+  - [x] `OpenEntryStreamAsync_StoreCompression_ExtractsCorrectly`
+  - [x] `OpenEntryStreamAsync_DeflateCompression_ExtractsCorrectly`
+- [x] SubStream Tests (3 tests)
+  - [x] `SubStream_BoundedRead_DoesNotReadBeyondBounds`
+  - [x] `SubStream_Seek_StaysWithinBounds`
+  - [x] `SubStream_SeekBeyondBounds_Throws`
+
+**Phase 6 Checkpoint:** ✅ All 15 ZIP reader tests passing
+
+---
+
+## Overall Summary
+
+| Component | Phase | Status | Tests |
+|-----------|-------|--------|-------|
+| **Caching Layer** | | | |
+| Core interfaces & models | 1 | ✅ Complete | - |
+| GenericCache | 2 | ✅ Complete | - |
+| Storage strategies | 3 | ✅ Complete | - |
+| LRU eviction policy | 4 | ✅ Complete | - |
+| Caching integration tests | 5 | ✅ Complete | 42 |
+| Dual-tier coordinator | 6 | ⏳ Pending | - |
+| Observability | 7 | ⏳ Pending | - |
+| **ZIP Reader** | | | |
+| ZIP format structures | 1 | ✅ Complete | - |
+| Domain models | 2 | ✅ Complete | 11 |
+| Exception hierarchy | 3 | ✅ Complete | - |
+| IZipReader implementation | 4 | ✅ Complete | - |
+| Cache integration | 5 | ✅ Complete | - |
+| ZIP reader tests | 6 | ✅ Complete | 15 |
+
+**Total Tests: 68 (all passing)**
+
+---
+
+## Next Steps
+
+1. ⏳ Implement `ZipArchiveProvider` (IArchiveProvider implementation)
+2. ⏳ Implement DokanNet file system adapter
+3. ⏳ Create dual-tier cache coordinator
+4. ⏳ Add performance benchmarks
+5. ⏳ Add observability/metrics

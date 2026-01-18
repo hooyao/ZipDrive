@@ -108,7 +108,7 @@ public sealed class GenericCache<T> : ICache<T>
         // ═══════════════════════════════════════════════════════════════════
         // LAYER 1: Lock-free cache lookup (FAST PATH)
         // ═══════════════════════════════════════════════════════════════════
-        if (_cache.TryGetValue(cacheKey, out var existingEntry) && !IsExpired(existingEntry))
+        if (_cache.TryGetValue(cacheKey, out CacheEntry? existingEntry) && !IsExpired(existingEntry))
         {
             // Increment RefCount BEFORE returning handle (protects from eviction)
             existingEntry.IncrementRefCount();
@@ -118,7 +118,7 @@ public sealed class GenericCache<T> : ICache<T>
 
             _logger?.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
 
-            var value = _storageStrategy.Retrieve(existingEntry.Stored);
+            T value = _storageStrategy.Retrieve(existingEntry.Stored);
             return new CacheHandle<T>(existingEntry, value, Return);
         }
 
@@ -128,19 +128,19 @@ public sealed class GenericCache<T> : ICache<T>
         Interlocked.Increment(ref _misses);
         _logger?.LogDebug("Cache MISS: {Key}", cacheKey);
 
-        var lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
+        Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
             new Lazy<Task<CacheEntry>>(
                 () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
                 LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
 
         try
         {
-            var entry = await lazy.Value.ConfigureAwait(false);
+            CacheEntry entry = await lazy.Value.ConfigureAwait(false);
 
             // Increment RefCount for each borrower (thundering herd: all get handles)
             entry.IncrementRefCount();
 
-            var value = _storageStrategy.Retrieve(entry.Stored);
+            T value = _storageStrategy.Retrieve(entry.Stored);
             return new CacheHandle<T>(entry, value, Return);
         }
         finally
@@ -172,7 +172,7 @@ public sealed class GenericCache<T> : ICache<T>
         _logger?.LogDebug("Materializing: {Key}", cacheKey);
 
         // Call factory to get data AND size
-        var result = await factory(cancellationToken).ConfigureAwait(false);
+        CacheFactoryResult<T> result = await factory(cancellationToken).ConfigureAwait(false);
 
         // ═══════════════════════════════════════════════════════════════════
         // LAYER 3: Eviction (only if capacity exceeded)
@@ -181,9 +181,9 @@ public sealed class GenericCache<T> : ICache<T>
         await EvictIfNeededAsync(result.SizeBytes).ConfigureAwait(false);
 
         // Store using strategy - returns opaque StoredEntry
-        var stored = await _storageStrategy.StoreAsync(result, cancellationToken).ConfigureAwait(false);
+        StoredEntry stored = await _storageStrategy.StoreAsync(result, cancellationToken).ConfigureAwait(false);
 
-        var entry = new CacheEntry(
+        CacheEntry entry = new CacheEntry(
             cacheKey,
             stored,
             _timeProvider.GetUtcNow(),
@@ -263,19 +263,19 @@ public sealed class GenericCache<T> : ICache<T>
             // ═══════════════════════════════════════════════════════════════
 
             // Phase 1: Evict expired entries first (only if not borrowed)
-            var now = _timeProvider.GetUtcNow();
-            var expiredKeys = _cache
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+            List<string> expiredKeys = _cache
                 .Where(kvp => now > kvp.Value.ExpiresAt)
                 .Where(kvp => kvp.Value.RefCount == 0) // Only evict if not borrowed
                 .Select(kvp => kvp.Key)
                 .ToList();
 
-            var expiredCount = 0;
-            var expiredBytes = 0L;
+            int expiredCount = 0;
+            long expiredBytes = 0L;
 
-            foreach (var key in expiredKeys)
+            foreach (string key in expiredKeys)
             {
-                if (TryEvictEntry(key, out var evictedBytes))
+                if (TryEvictEntry(key, out long evictedBytes))
                 {
                     expiredCount++;
                     expiredBytes += evictedBytes;
@@ -294,7 +294,7 @@ public sealed class GenericCache<T> : ICache<T>
             if (_currentSizeBytes + neededBytes > _capacityBytes)
             {
                 // Only consider entries with RefCount = 0 for eviction
-                var evictableEntries = _cache.Values
+                List<ICacheEntry> evictableEntries = _cache.Values
                     .Where(e => e.RefCount == 0)
                     .Cast<ICacheEntry>()
                     .ToList();
@@ -307,18 +307,18 @@ public sealed class GenericCache<T> : ICache<T>
                     return Task.CompletedTask;
                 }
 
-                var victims = _evictionPolicy.SelectVictims(
+                IEnumerable<ICacheEntry> victims = _evictionPolicy.SelectVictims(
                     evictableEntries,
                     neededBytes,
                     _currentSizeBytes,
                     _capacityBytes);
 
-                var policyEvictedCount = 0;
-                var policyEvictedBytes = 0L;
+                int policyEvictedCount = 0;
+                long policyEvictedBytes = 0L;
 
-                foreach (var victim in victims)
+                foreach (ICacheEntry victim in victims)
                 {
-                    if (TryEvictEntry(victim.CacheKey, out var evictedBytes))
+                    if (TryEvictEntry(victim.CacheKey, out long evictedBytes))
                     {
                         policyEvictedCount++;
                         policyEvictedBytes += evictedBytes;
@@ -345,7 +345,7 @@ public sealed class GenericCache<T> : ICache<T>
     {
         evictedBytes = 0;
 
-        if (!_cache.TryGetValue(key, out var entry))
+        if (!_cache.TryGetValue(key, out CacheEntry? entry))
         {
             return false;
         }
@@ -357,7 +357,7 @@ public sealed class GenericCache<T> : ICache<T>
             return false;
         }
 
-        if (_cache.TryRemove(key, out var removed))
+        if (_cache.TryRemove(key, out CacheEntry? removed))
         {
             evictedBytes = removed.Stored.SizeBytes;
             Interlocked.Add(ref _currentSizeBytes, -evictedBytes);
@@ -389,9 +389,9 @@ public sealed class GenericCache<T> : ICache<T>
     /// <returns>The number of items processed.</returns>
     public int ProcessPendingCleanup(int maxItems = 100)
     {
-        var processed = 0;
+        int processed = 0;
 
-        while (processed < maxItems && _pendingCleanup.TryDequeue(out var stored))
+        while (processed < maxItems && _pendingCleanup.TryDequeue(out StoredEntry? stored))
         {
             try
             {
@@ -415,19 +415,19 @@ public sealed class GenericCache<T> : ICache<T>
     /// <inheritdoc />
     public void EvictExpired()
     {
-        var now = _timeProvider.GetUtcNow();
-        var expiredKeys = _cache
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        List<string> expiredKeys = _cache
             .Where(kvp => now > kvp.Value.ExpiresAt)
             .Where(kvp => kvp.Value.RefCount == 0) // Only evict if not borrowed
             .Select(kvp => kvp.Key)
             .ToList();
 
-        var evictedCount = 0;
-        var evictedBytes = 0L;
+        int evictedCount = 0;
+        long evictedBytes = 0L;
 
-        foreach (var key in expiredKeys)
+        foreach (string key in expiredKeys)
         {
-            if (TryEvictEntry(key, out var bytes))
+            if (TryEvictEntry(key, out long bytes))
             {
                 evictedCount++;
                 evictedBytes += bytes;
@@ -450,13 +450,13 @@ public sealed class GenericCache<T> : ICache<T>
     /// </summary>
     public void Clear()
     {
-        var keys = _cache.Keys.ToList();
-        var clearedCount = 0;
-        var clearedBytes = 0L;
+        List<string> keys = _cache.Keys.ToList();
+        int clearedCount = 0;
+        long clearedBytes = 0L;
 
-        foreach (var key in keys)
+        foreach (string key in keys)
         {
-            if (_cache.TryRemove(key, out var removed))
+            if (_cache.TryRemove(key, out CacheEntry? removed))
             {
                 clearedBytes += removed.Stored.SizeBytes;
                 clearedCount++;
@@ -476,7 +476,7 @@ public sealed class GenericCache<T> : ICache<T>
         Interlocked.Exchange(ref _currentSizeBytes, 0);
 
         // Also process any pending cleanup
-        while (_pendingCleanup.TryDequeue(out var stored))
+        while (_pendingCleanup.TryDequeue(out StoredEntry? stored))
         {
             try
             {
@@ -502,15 +502,15 @@ public sealed class GenericCache<T> : ICache<T>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task ClearAsync(CancellationToken cancellationToken = default)
     {
-        var keys = _cache.Keys.ToList();
-        var clearedCount = 0;
-        var clearedBytes = 0L;
+        List<string> keys = _cache.Keys.ToList();
+        int clearedCount = 0;
+        long clearedBytes = 0L;
 
-        foreach (var key in keys)
+        foreach (string key in keys)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (_cache.TryRemove(key, out var removed))
+            if (_cache.TryRemove(key, out CacheEntry? removed))
             {
                 clearedBytes += removed.Stored.SizeBytes;
                 clearedCount++;
@@ -536,8 +536,8 @@ public sealed class GenericCache<T> : ICache<T>
         Interlocked.Exchange(ref _currentSizeBytes, 0);
 
         // Also process any pending cleanup
-        var pendingCount = 0;
-        while (_pendingCleanup.TryDequeue(out var stored))
+        int pendingCount = 0;
+        while (_pendingCleanup.TryDequeue(out StoredEntry? stored))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -580,9 +580,9 @@ public sealed class GenericCache<T> : ICache<T>
     {
         get
         {
-            var totalHits = Interlocked.Read(ref _hits);
-            var totalMisses = Interlocked.Read(ref _misses);
-            var total = totalHits + totalMisses;
+            long totalHits = Interlocked.Read(ref _hits);
+            long totalMisses = Interlocked.Read(ref _misses);
+            long total = totalHits + totalMisses;
 
             return total == 0 ? 0.0 : (double)totalHits / total;
         }

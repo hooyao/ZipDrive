@@ -2160,7 +2160,7 @@ private static async Task AddTestFile(DiskTierCache cache, string key, int size)
 
 **Options:**
 
-**Option A: Per-Key Semaphore (V1 approach)**
+**Option A: Per-Key Semaphore**
 ```csharp
 private readonly ConcurrentDictionary<string, SemaphoreSlim> _materializationLocks = new();
 
@@ -2393,29 +2393,14 @@ var structureCache = new GenericCache<ArchiveStructure, ArchiveStructure>(
 
 ---
 
-## Appendix A: V1 vs V3 Caching Comparison
+## Appendix A: Why NOT Built-in MemoryCache?
 
-| Aspect | V1 (Custom LRU) | V3 (Simple Custom Cache) |
-|--------|-----------------|--------------------------|
-| **Complexity** | 180 lines, complex | ~60 lines, simple |
-| **Locking** | Per-key semaphore + global lock | Single eviction lock only |
-| **TTL** | Manual tracking | Manual (CreatedAt + Ttl check) |
-| **Capacity** | Manual size tracking | Manual (Interlocked counters) |
-| **Eviction** | Hardcoded LRU | Pluggable IEvictionPolicy |
-| **Deadlock Risk** | Yes (nested locks) | No (simple lock structure) |
-| **Observability** | None | Metrics + Logs |
-| **Testability** | Hard (time dependencies) | Easy (TimeProvider) |
-| **Memory Tier** | Custom byte[] + LinkedList | ConcurrentDictionary + timestamps |
-| **Disk Tier** | Memory-mapped files (good!) | Same (proven to work) |
-| **Architecture** | Different for each tier | Unified IEvictionPolicy for both |
-
-**Why NOT Built-in MemoryCache?**
 - ❌ No pluggable eviction policy
 - ❌ Unpredictable compaction when full
 - ❌ Can't control which entries get evicted
 - ❌ Priority-based eviction, not LRU
 
-**Lesson:** V1 had the right idea (dual-tier, MMF) but over-engineered with per-key semaphores. V3 uses a simpler approach with unified eviction policy across both tiers.
+Our approach uses a simple custom cache with unified `IEvictionPolicy` interface for both memory and disk tiers.
 
 ---
 

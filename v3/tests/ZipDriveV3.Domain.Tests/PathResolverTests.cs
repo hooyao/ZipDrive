@@ -15,7 +15,7 @@ public class PathResolverTests
     public void Resolve_RootPaths_ReturnsRootDirectory(string? path)
     {
         // Act
-        var result = _resolver.Resolve(path!);
+        PathResolutionResult result = _resolver.Resolve(path!);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.RootDirectory);
@@ -30,7 +30,7 @@ public class PathResolverTests
         const string path = "\\archive.zip";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.ArchiveRoot);
@@ -45,7 +45,7 @@ public class PathResolverTests
         const string path = "\\archive.zip\\";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.ArchiveRoot);
@@ -60,7 +60,7 @@ public class PathResolverTests
         const string path = "\\archive.zip\\file.txt";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.Success);
@@ -75,7 +75,7 @@ public class PathResolverTests
         const string path = "\\archive.zip\\folder\\subfolder\\file.txt";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.Success);
@@ -90,7 +90,7 @@ public class PathResolverTests
         const string path = "\\data.zip\\level1\\level2\\level3\\level4\\file.dat";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.Success);
@@ -105,7 +105,7 @@ public class PathResolverTests
         const string path = "\\my archive.zip\\folder\\file.txt";
 
         // Act
-        var result = _resolver.Resolve(path);
+        PathResolutionResult result = _resolver.Resolve(path);
 
         // Assert
         result.Status.Should().Be(PathResolutionStatus.Success);
@@ -117,7 +117,7 @@ public class PathResolverTests
     public void Resolve_MultiplePaths_EachProcessedIndependently()
     {
         // Arrange
-        var paths = new[]
+        (string, PathResolutionStatus, string?, string)[] paths = new[]
         {
             ("\\", PathResolutionStatus.RootDirectory, (string?)null, ""),
             ("\\archive1.zip", PathResolutionStatus.ArchiveRoot, "archive1.zip", ""),
@@ -125,10 +125,10 @@ public class PathResolverTests
             ("\\archive3.zip\\dir\\file.dat", PathResolutionStatus.Success, "archive3.zip", "dir/file.dat")
         };
 
-        foreach (var (path, expectedStatus, expectedKey, expectedInternal) in paths)
+        foreach ((string path, PathResolutionStatus expectedStatus, string? expectedKey, string expectedInternal) in paths)
         {
             // Act
-            var result = _resolver.Resolve(path);
+            PathResolutionResult result = _resolver.Resolve(path);
 
             // Assert
             result.Status.Should().Be(expectedStatus, $"for path: {path}");

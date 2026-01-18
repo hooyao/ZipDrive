@@ -15,4 +15,9 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\ZipDriveV3.Domain\ZipDriveV3.Domain.csproj" />
+    <ProjectReference Include="..\ZipDriveV3.Infrastructure.Archives.Zip\ZipDriveV3.Infrastructure.Archives.Zip.csproj" />
+  </ItemGroup>
+
 </Project>

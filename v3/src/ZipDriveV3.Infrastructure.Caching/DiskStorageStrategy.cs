@@ -37,12 +37,12 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(result.Value);
 
-        var tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.zip2vd.cache");
+        string tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.zip2vd.cache");
 
         _logger?.LogDebug("Creating temp file: {Path} ({Size} bytes)", tempPath, result.SizeBytes);
 
         // Write to temp file
-        await using (var fileStream = new FileStream(
+        await using (FileStream fileStream = new FileStream(
             tempPath,
             FileMode.Create,
             FileAccess.Write,
@@ -55,14 +55,14 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
         }
 
         // Create memory-mapped file for random access
-        var mmf = MemoryMappedFile.CreateFromFile(
+        MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(
             tempPath,
             FileMode.Open,
             mapName: null,
             result.SizeBytes,
             MemoryMappedFileAccess.Read);
 
-        var entry = new DiskCacheEntry(tempPath, mmf, result.SizeBytes);
+        DiskCacheEntry entry = new DiskCacheEntry(tempPath, mmf, result.SizeBytes);
         return new StoredEntry(entry, result.SizeBytes);
     }
 
@@ -71,7 +71,7 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
     {
         ArgumentNullException.ThrowIfNull(stored);
 
-        var entry = (DiskCacheEntry)stored.Data;
+        DiskCacheEntry entry = (DiskCacheEntry)stored.Data;
         return entry.MemoryMappedFile.CreateViewStream(0, entry.Size, MemoryMappedFileAccess.Read);
     }
 
@@ -80,7 +80,7 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
     {
         ArgumentNullException.ThrowIfNull(stored);
 
-        var entry = (DiskCacheEntry)stored.Data;
+        DiskCacheEntry entry = (DiskCacheEntry)stored.Data;
 
         try
         {

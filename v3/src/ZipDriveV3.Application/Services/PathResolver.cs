@@ -18,7 +18,7 @@ public sealed class PathResolver : IPathResolver
         }
 
         // Split path by backslash
-        var parts = virtualPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = virtualPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
 
         if (parts.Length == 0)
         {
@@ -26,7 +26,7 @@ public sealed class PathResolver : IPathResolver
         }
 
         // First part is the archive key
-        var archiveKey = parts[0];
+        string archiveKey = parts[0];
 
         if (parts.Length == 1)
         {
@@ -35,7 +35,7 @@ public sealed class PathResolver : IPathResolver
         }
 
         // Rest is the internal path (convert backslashes to forward slashes)
-        var internalPath = string.Join('/', parts.Skip(1));
+        string internalPath = string.Join('/', parts.Skip(1));
 
         return new PathResolutionResult(archiveKey, internalPath, PathResolutionStatus.Success);
     }

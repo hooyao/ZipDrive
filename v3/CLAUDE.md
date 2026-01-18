@@ -4,11 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer implemented and tested**.
+**ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Key Difference from V1**: V3 uses clean architecture with strict separation of concerns, async/await throughout, and modern .NET patterns. The caching layer is the core component that solves the fundamental mismatch between ZIP's sequential access and Windows file system's random access requirements.
+**Current Status**: Core caching layer (42 tests) and streaming ZIP reader (15 tests) complete. DokanNet integration pending.
 
-**Current Status**: Core caching layer complete with 13 passing integration tests. DokanNet integration pending.
+## Development Workflow Requirements
+
+**IMPORTANT**: All code changes must follow this workflow:
+
+1. **Build** - Any code change must compile successfully (`dotnet build`)
+2. **Write Tests** - New code requires unit or integration tests to cover the new functionality
+3. **Run Tests** - Execute tests for affected components (`dotnet test`)
+4. **Pass** - All tests must pass before claiming a task is complete
+
+```
+Code Change → Build → Write Tests → Run Tests → Pass → Done
+```
+
+**A task is NOT complete until all related tests pass.**
 
 ## Technology Stack
 
@@ -225,9 +238,41 @@ Single seek, linear read. Local Header overhead is ~100 bytes (negligible).
 
 **Documentation**: [`ZIP_STRUCTURE_CACHE_DESIGN.md`](src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md)
 
-#### **Archives (`src/ZipDriveV3.Infrastructure.Archives.Zip`)**
+#### **Archives (`src/ZipDriveV3.Infrastructure.Archives.Zip`) - STREAMING ZIP READER**
 
-Handles ZIP format parsing, entry enumeration, and stream extraction.
+The streaming ZIP reader provides memory-efficient parsing of ZIP archives using `IAsyncEnumerable`.
+
+**Key Components**:
+- `IZipReader`: Low-level ZIP reader interface
+- `ZipReader`: Full implementation with streaming Central Directory enumeration
+- `SubStream`: Bounded read-only stream wrapper for compressed data regions
+
+**ZIP Format Structures** (`Formats/`):
+- `ZipConstants`: Signatures, header sizes, compression methods
+- `ZipEocd`: End of Central Directory record (supports ZIP64)
+- `ZipCentralDirectoryEntry`: Central Directory file header
+- `ZipLocalHeader`: Local file header
+
+**Key Features**:
+- **Streaming CD parsing**: `IAsyncEnumerable<ZipCentralDirectoryEntry>` yields entries one-by-one
+- **ZIP64 support**: Handles large files (>4GB) and large archives (>65535 entries)
+- **Compression**: Store (0) and Deflate (8) methods supported
+- **Memory efficient**: ~114 bytes per entry (struct + filename + dictionary overhead)
+- **Single-seek extraction**: Read Local Header + compressed data in one linear read
+
+**Extraction Flow**:
+```
+1. IZipReader.ReadEocdAsync() → ZipEocd (locate Central Directory)
+2. IZipReader.StreamCentralDirectoryAsync(eocd) → yields ZipCentralDirectoryEntry one-by-one
+3. Build ArchiveStructure with Dictionary<string, ZipEntryInfo> + DirectoryNode tree
+4. IZipReader.OpenEntryStreamAsync(entryInfo) → Stream (decompressed)
+```
+
+**Exception Hierarchy** (`Domain/Exceptions/`):
+- `ZipException` → `CorruptZipException` → `InvalidSignatureException`, `EocdNotFoundException`, `TruncatedArchiveException`
+- `UnsupportedCompressionException`, `EncryptedEntryException`
+
+**Documentation**: [`STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
 
 #### **FileSystem (`src/ZipDriveV3.Infrastructure.FileSystem`)**
 
@@ -336,7 +381,7 @@ When working with the caching layer:
 - `LazyThreadSafetyMode.ExecutionAndPublication` ensures thread-safety
 - All waiting threads share the same materialization task
 - Clean exception handling (failed materialization doesn't cache error)
-- Simpler than per-key semaphores (V1's approach had deadlock risks)
+- Simpler than per-key semaphores (avoids deadlock risks)
 
 ### Why async cleanup?
 - Deleting large temp files blocks the caller (high latency)
@@ -351,15 +396,37 @@ When working with the caching layer:
 
 Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) for granular steps.
 
+### Caching Layer
+
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 (Interfaces) | ✅ Complete | `ICache<T>`, `ICacheHandle<T>`, `IStorageStrategy<T>`, `IEvictionPolicy` |
 | Phase 2 (GenericCache) | ✅ Complete | Borrow/return pattern, reference counting, four-layer concurrency |
 | Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `DiskStorageStrategy`, `ObjectStorageStrategy<T>` |
 | Phase 4 (Eviction) | ✅ Complete | `LruEvictionPolicy` |
-| Phase 5 (Tests) | ✅ Complete | 13 integration tests passing |
+| Phase 5 (Tests) | ✅ Complete | 42 integration tests passing |
 | Phase 6 (Coordinator) | ⏳ Pending | Dual-tier routing based on file size |
 | Phase 7 (Observability) | ⏳ Pending | Metrics, health checks |
+
+### Streaming ZIP Reader
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 (Structures) | ✅ Complete | `ZipEocd`, `ZipCentralDirectoryEntry`, `ZipLocalHeader`, `ZipConstants` |
+| Phase 2 (Models) | ✅ Complete | `ZipEntryInfo`, `ArchiveStructure`, `DirectoryNode` |
+| Phase 3 (Exceptions) | ✅ Complete | `ZipException` hierarchy |
+| Phase 4 (IZipReader) | ✅ Complete | Streaming CD enumeration, file extraction |
+| Phase 5 (Cache) | ✅ Complete | `ArchiveStructureCache` integration |
+| Phase 6 (Tests) | ✅ Complete | 15 unit tests passing |
+
+### Remaining Work
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| ZipArchiveProvider | ⏳ Pending | `IArchiveProvider` implementation |
+| DokanNet Adapter | ⏳ Pending | File system mounting |
+| CLI | ⏳ Pending | Command-line interface |
+| Multi-archive | ⏳ Pending | `IArchivePrefixTree` for multiple ZIPs |
 
 ## Known Limitations / Future Work
 
@@ -370,7 +437,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - [ ] Health checks and metrics endpoints
 - [ ] Password-protected ZIP support (ZipCrypto, AES)
 - [ ] Write support (currently read-only)
-- [ ] ZIP64 support (files > 4GB, archives > 65535 entries)
+- [x] ZIP64 support (files > 4GB, archives > 65535 entries) - **Implemented**
 - [ ] LZMA compression support
 
 ## Code Style Conventions
@@ -384,9 +451,9 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 
 ## Related Documentation
 
-- **Parent Project Context**: See `../.claude/CLAUDE.md` for V1 architecture analysis
 - **File Content Caching**: [`src/Docs/CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md)
 - **ZIP Structure Cache**: [`src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md`](src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md)
+- **Streaming ZIP Reader**: [`src/Docs/STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
 - **Concurrency Details**: [`src/Docs/CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md)
 - **Implementation Checklist**: [`src/Docs/IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md)
 
@@ -405,8 +472,8 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ## Success Criteria
 
 V3 is considered complete when:
-- [x] Caching layer fully implemented with 80%+ test coverage
-- [ ] ZIP provider implemented and tested
+- [x] Caching layer fully implemented with 80%+ test coverage (42 tests)
+- [x] ZIP reader implemented and tested (15 tests)
 - [ ] DokanNet adapter functional (mount/unmount works)
 - [ ] CLI accepts arguments and mounts drives
 - [ ] All performance targets met

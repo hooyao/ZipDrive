@@ -16,8 +16,8 @@ public class LruEvictionPolicy : IEvictionPolicy
         long currentBytes,
         long capacityBytes)
     {
-        var spaceNeeded = requiredBytes - (capacityBytes - currentBytes);
-        var freedSpace = 0L;
+        long spaceNeeded = requiredBytes - (capacityBytes - currentBytes);
+        long freedSpace = 0L;
 
         return entries
             .OrderBy(e => e.LastAccessedAt) // Oldest first

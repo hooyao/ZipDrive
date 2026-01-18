@@ -14,9 +14,9 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(result.Value);
 
-        await using var ms = new MemoryStream((int)result.SizeBytes);
+        MemoryStream ms = new MemoryStream((int)result.SizeBytes);
         await result.Value.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
-        var bytes = ms.ToArray();
+        byte[] bytes = ms.ToArray();
 
         return new StoredEntry(bytes, result.SizeBytes);
     }
@@ -26,7 +26,7 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
     {
         ArgumentNullException.ThrowIfNull(stored);
 
-        var bytes = (byte[])stored.Data;
+        byte[] bytes = (byte[])stored.Data;
         return new MemoryStream(bytes, writable: false);
     }
 

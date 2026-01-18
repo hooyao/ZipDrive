@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj" />
+    <Project Path="tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj" />
     <Project Path="tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj" />
   </Folder>
 </Solution>

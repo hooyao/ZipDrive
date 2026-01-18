@@ -1,8 +1,8 @@
 # ZIP Structure Cache Design Document
 
-**Version:** 1.0
-**Last Updated:** 2026-01-17
-**Status:** Design Phase
+**Version:** 1.1
+**Last Updated:** 2026-01-18
+**Status:** ✅ Implemented
 
 ---
 
@@ -12,9 +12,16 @@ This document describes the **ZIP Structure Cache** - a memory-efficient caching
 
 **Key Goals:**
 1. **Fast path resolution**: Archive prefix tree for O(log n) path lookups
-2. **Minimal memory footprint**: Store only Central Directory data
+2. **Minimal memory footprint**: Store only Central Directory data (~114 bytes per entry)
 3. **Single-seek extraction**: Linear read from local header through compressed data
 4. **Multi-archive support**: Multiple ZIPs mounted simultaneously
+
+**Implementation Status:**
+- ✅ `IArchiveStructureCache` interface defined
+- ✅ `ArchiveStructureCache` implementation complete
+- ✅ Integration with `GenericCache<ArchiveStructure>` via `ObjectStorageStrategy`
+- ✅ Streaming Central Directory parsing via `IZipReader.StreamCentralDirectoryAsync()`
+- ⏳ `IArchivePrefixTree` (pending - for multi-archive support)
 
 ---
 

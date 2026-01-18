@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -142,31 +143,32 @@ public class GenericCacheIntegrationTests : IDisposable
         GenericCache<Stream> cache = CreateMemoryCache(capacityBytes: 1024 * 1024);
         byte[] testData = CreateTestData(10 * 1024); // 10KB with known pattern
 
-        using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-            "seekable-key",
-            TimeSpan.FromMinutes(30),
-            ct => Task.FromResult(new CacheFactoryResult<Stream>
-            {
-                Value = new MemoryStream(testData),
-                SizeBytes = testData.Length
-            }),
-            CancellationToken.None);
-
         // Act & Assert - seek to middle and read
-        handle.Value.Seek(5000, SeekOrigin.Begin);
-        byte[] buffer = new byte[100];
-        await handle.Value.ReadExactlyAsync(buffer);
-        buffer.Should().BeEquivalentTo(testData.AsSpan(5000, 100).ToArray());
+        using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                   "seekable-key",
+                   TimeSpan.FromMinutes(30),
+                   ct => Task.FromResult(new CacheFactoryResult<Stream>
+                   {
+                       Value = new MemoryStream(testData),
+                       SizeBytes = testData.Length
+                   }),
+                   CancellationToken.None))
+        {
+            handle.Value.Seek(5000, SeekOrigin.Begin);
+            byte[] buffer = new byte[100];
+            await handle.Value.ReadExactlyAsync(buffer);
+            buffer.Should().BeEquivalentTo(testData.AsSpan(5000, 100).ToArray());
 
-        // Seek to beginning and read
-        handle.Value.Seek(0, SeekOrigin.Begin);
-        await handle.Value.ReadExactlyAsync(buffer);
-        buffer.Should().BeEquivalentTo(testData.AsSpan(0, 100).ToArray());
+            // Seek to beginning and read
+            handle.Value.Seek(0, SeekOrigin.Begin);
+            await handle.Value.ReadExactlyAsync(buffer);
+            buffer.Should().BeEquivalentTo(testData.AsSpan(0, 100).ToArray());
 
-        // Seek to end-100 and read
-        handle.Value.Seek(-100, SeekOrigin.End);
-        await handle.Value.ReadExactlyAsync(buffer);
-        buffer.Should().BeEquivalentTo(testData.AsSpan(testData.Length - 100, 100).ToArray());
+            // Seek to end-100 and read
+            handle.Value.Seek(-100, SeekOrigin.End);
+            await handle.Value.ReadExactlyAsync(buffer);
+            buffer.Should().BeEquivalentTo(testData.AsSpan(testData.Length - 100, 100).ToArray());
+        }
     }
 
     /// <summary>
@@ -306,15 +308,17 @@ public class GenericCacheIntegrationTests : IDisposable
         for (int i = 1; i <= 3; i++)
         {
             byte[] data = CreateTestData(1024);
-            using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                $"key{i}",
-                TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }),
-                CancellationToken.None);
+            using (await cache.BorrowAsync(
+                       $"key{i}",
+                       TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }),
+                       CancellationToken.None))
+            {
+            }
         }
 
         cache.EntryCount.Should().Be(3);
@@ -417,26 +421,27 @@ public class GenericCacheIntegrationTests : IDisposable
 
         try
         {
-            using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                "large-seekable",
-                TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(testData),
-                    SizeBytes = testData.Length
-                }),
-                CancellationToken.None);
-
             // Act & Assert - random access at various positions
-            long[] positions = new long[] { 0, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, testData.Length - 1024 };
-            byte[] buffer = new byte[1024];
-
-            foreach (long pos in positions)
+            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                       "large-seekable",
+                       TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(testData),
+                           SizeBytes = testData.Length
+                       }),
+                       CancellationToken.None))
             {
-                handle.Value.Seek(pos, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(buffer);
-                buffer.Should().BeEquivalentTo(testData.AsSpan((int)pos, 1024).ToArray(),
-                    $"Data at position {pos} should match");
+                long[] positions = new long[] { 0, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, testData.Length - 1024 };
+                byte[] buffer = new byte[1024];
+
+                foreach (long pos in positions)
+                {
+                    handle.Value.Seek(pos, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(buffer);
+                    buffer.Should().BeEquivalentTo(testData.AsSpan((int)pos, 1024).ToArray(),
+                        $"Data at position {pos} should match");
+                }
             }
         }
         finally
@@ -606,10 +611,12 @@ public class GenericCacheIntegrationTests : IDisposable
         List<Task<byte[]>> tasks = Enumerable.Range(0, 10)
             .Select(async _ =>
             {
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync("concurrent-key", TimeSpan.FromMinutes(30), SlowFactory, CancellationToken.None);
-                byte[] buffer = new byte[testData.Length];
-                await handle.Value.ReadExactlyAsync(buffer);
-                return buffer;
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync("concurrent-key", TimeSpan.FromMinutes(30), SlowFactory, CancellationToken.None))
+                {
+                    byte[] buffer = new byte[testData.Length];
+                    await handle.Value.ReadExactlyAsync(buffer);
+                    return buffer;
+                }
             })
             .ToList();
 
@@ -775,19 +782,20 @@ public class GenericCacheIntegrationTests : IDisposable
         Task[] tasks = Enumerable.Range(0, 100)
             .Select(async _ =>
             {
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                    "heavy-same-key",
-                    TimeSpan.FromMinutes(30),
-                    SlowFactory,
-                    CancellationToken.None);
-
-                byte[] buffer = new byte[testData.Length];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(buffer);
-
-                if (buffer.SequenceEqual(testData))
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                           "heavy-same-key",
+                           TimeSpan.FromMinutes(30),
+                           SlowFactory,
+                           CancellationToken.None))
                 {
-                    Interlocked.Increment(ref successCount);
+                    byte[] buffer = new byte[testData.Length];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(buffer);
+
+                    if (buffer.SequenceEqual(testData))
+                    {
+                        Interlocked.Increment(ref successCount);
+                    }
                 }
             })
             .ToArray();
@@ -833,18 +841,20 @@ public class GenericCacheIntegrationTests : IDisposable
             .Select(async i =>
             {
                 string key = $"diff-key-{i}";
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                    key,
-                    TimeSpan.FromMinutes(30),
-                    ct => Factory(key, ct),
-                    CancellationToken.None);
 
-                byte[] expected = CreateTestDataForKey(key, 32 * 1024);
-                byte[] actual = new byte[expected.Length];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(actual);
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                           key,
+                           TimeSpan.FromMinutes(30),
+                           ct => Factory(key, ct),
+                           CancellationToken.None))
+                {
+                    byte[] expected = CreateTestDataForKey(key, 32 * 1024);
+                    byte[] actual = new byte[expected.Length];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(actual);
 
-                dataVerified[key] = actual.SequenceEqual(expected);
+                    dataVerified[key] = actual.SequenceEqual(expected);
+                }
             })
             .ToArray();
 
@@ -881,21 +891,22 @@ public class GenericCacheIntegrationTests : IDisposable
                 string key = $"mixed-key-{i % keySpace}";
                 byte[] expectedData = CreateTestDataForKey(key, 8 * 1024); // 8KB
 
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                    key,
-                    TimeSpan.FromMinutes(30),
-                    ct => Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(expectedData),
-                        SizeBytes = expectedData.Length
-                    }),
-                    CancellationToken.None);
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                           key,
+                           TimeSpan.FromMinutes(30),
+                           ct => Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(expectedData),
+                               SizeBytes = expectedData.Length
+                           }),
+                           CancellationToken.None))
+                {
+                    byte[] buffer = new byte[expectedData.Length];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(buffer);
 
-                byte[] buffer = new byte[expectedData.Length];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(buffer);
-
-                verificationResults.Add(buffer.SequenceEqual(expectedData));
+                    verificationResults.Add(buffer.SequenceEqual(expectedData));
+                }
             })
             .ToArray();
 
@@ -933,22 +944,23 @@ public class GenericCacheIntegrationTests : IDisposable
                     string key = $"evict-load-key-{i}";
                     byte[] data = CreateTestDataForKey(key, 32 * 1024); // 32KB each
 
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        key,
-                        TimeSpan.FromMinutes(30),
-                        ct => Task.FromResult(new CacheFactoryResult<Stream>
-                        {
-                            Value = new MemoryStream(data),
-                            SizeBytes = data.Length
-                        }),
-                        CancellationToken.None);
-
                     // Read while borrowed - should never fail
-                    byte[] buffer = new byte[data.Length];
-                    handle.Value.Seek(0, SeekOrigin.Begin);
-                    await handle.Value.ReadExactlyAsync(buffer);
+                    using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                               key,
+                               TimeSpan.FromMinutes(30),
+                               ct => Task.FromResult(new CacheFactoryResult<Stream>
+                               {
+                                   Value = new MemoryStream(data),
+                                   SizeBytes = data.Length
+                               }),
+                               CancellationToken.None))
+                    {
+                        byte[] buffer = new byte[data.Length];
+                        handle.Value.Seek(0, SeekOrigin.Begin);
+                        await handle.Value.ReadExactlyAsync(buffer);
 
-                    verificationResults.Add(buffer.SequenceEqual(data));
+                        verificationResults.Add(buffer.SequenceEqual(data));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -983,7 +995,7 @@ public class GenericCacheIntegrationTests : IDisposable
         const int cyclesPerBorrower = 20;
 
         // Pre-populate
-        using (var h = await cache.BorrowAsync("refcount-key", TimeSpan.FromMinutes(30),
+        using (ICacheHandle<Stream> h = await cache.BorrowAsync("refcount-key", TimeSpan.FromMinutes(30),
             ct => Task.FromResult(new CacheFactoryResult<Stream>
             {
                 Value = new MemoryStream(testData),
@@ -1000,21 +1012,22 @@ public class GenericCacheIntegrationTests : IDisposable
             {
                 for (int cycle = 0; cycle < cyclesPerBorrower; cycle++)
                 {
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        "refcount-key",
-                        TimeSpan.FromMinutes(30),
-                        ct => throw new InvalidOperationException("Should not materialize"),
-                        CancellationToken.None);
-
-                    int currentBorrowed = cache.BorrowedEntryCount;
-                    lock (peakLock)
+                    using (await cache.BorrowAsync(
+                               "refcount-key",
+                               TimeSpan.FromMinutes(30),
+                               ct => throw new InvalidOperationException("Should not materialize"),
+                               CancellationToken.None))
                     {
-                        if (currentBorrowed > peakBorrowed)
-                            peakBorrowed = currentBorrowed;
-                    }
+                        int currentBorrowed = cache.BorrowedEntryCount;
+                        lock (peakLock)
+                        {
+                            if (currentBorrowed > peakBorrowed)
+                                peakBorrowed = currentBorrowed;
+                        }
 
-                    // Simulate some work
-                    await Task.Yield();
+                        // Simulate some work
+                        await Task.Yield();
+                    }
                 }
             })
             .ToArray();
@@ -1063,19 +1076,20 @@ public class GenericCacheIntegrationTests : IDisposable
             Task[] tasks = Enumerable.Range(0, 100)
                 .Select(async _ =>
                 {
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        "disk-heavy-same",
-                        TimeSpan.FromMinutes(30),
-                        SlowFactory,
-                        CancellationToken.None);
-
-                    byte[] buffer = new byte[testData.Length];
-                    handle.Value.Seek(0, SeekOrigin.Begin);
-                    await handle.Value.ReadExactlyAsync(buffer);
-
-                    if (buffer.SequenceEqual(testData))
+                    using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                               "disk-heavy-same",
+                               TimeSpan.FromMinutes(30),
+                               SlowFactory,
+                               CancellationToken.None))
                     {
-                        Interlocked.Increment(ref successCount);
+                        byte[] buffer = new byte[testData.Length];
+                        handle.Value.Seek(0, SeekOrigin.Begin);
+                        await handle.Value.ReadExactlyAsync(buffer);
+
+                        if (buffer.SequenceEqual(testData))
+                        {
+                            Interlocked.Increment(ref successCount);
+                        }
                     }
                 })
                 .ToArray();
@@ -1124,28 +1138,29 @@ public class GenericCacheIntegrationTests : IDisposable
 
                     factoryCalls.AddOrUpdate(key, 1, (_, c) => c + 1);
 
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        key,
-                        TimeSpan.FromMinutes(30),
-                        ct => Task.FromResult(new CacheFactoryResult<Stream>
-                        {
-                            Value = new MemoryStream(data),
-                            SizeBytes = data.Length
-                        }),
-                        CancellationToken.None);
-
                     // Verify random access at multiple positions
-                    byte[] buffer = new byte[4096];
-                    long[] positions = { 0, fileSize / 4, fileSize / 2, fileSize - 4096 };
-
-                    foreach (long pos in positions)
+                    using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                               key,
+                               TimeSpan.FromMinutes(30),
+                               ct => Task.FromResult(new CacheFactoryResult<Stream>
+                               {
+                                   Value = new MemoryStream(data),
+                                   SizeBytes = data.Length
+                               }),
+                               CancellationToken.None))
                     {
-                        handle.Value.Seek(pos, SeekOrigin.Begin);
-                        await handle.Value.ReadExactlyAsync(buffer);
+                        byte[] buffer = new byte[4096];
+                        long[] positions = { 0, fileSize / 4, fileSize / 2, fileSize - 4096 };
 
-                        byte[] expected = data.AsSpan((int)pos, 4096).ToArray();
-                        buffer.Should().BeEquivalentTo(expected,
-                            $"Data at position {pos} for {key} should match");
+                        foreach (long pos in positions)
+                        {
+                            handle.Value.Seek(pos, SeekOrigin.Begin);
+                            await handle.Value.ReadExactlyAsync(buffer);
+
+                            byte[] expected = data.AsSpan((int)pos, 4096).ToArray();
+                            buffer.Should().BeEquivalentTo(expected,
+                                $"Data at position {pos} for {key} should match");
+                        }
                     }
                 })
                 .ToArray();
@@ -1195,12 +1210,14 @@ public class GenericCacheIntegrationTests : IDisposable
                 byte[] data = CreateTestDataForKey(key, fileSize);
                 fileData[key] = data;
 
-                using var h = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                    ct => Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(data),
-                        SizeBytes = data.Length
-                    }), CancellationToken.None);
+                using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                           ct => Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(data),
+                               SizeBytes = data.Length
+                           }), CancellationToken.None))
+                {
+                }
             }
 
             // Act - many concurrent random access reads
@@ -1215,21 +1232,22 @@ public class GenericCacheIntegrationTests : IDisposable
                     string key = $"disk-random-{i % fileCount}";
                     byte[] expected = fileData[key];
 
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        key,
-                        TimeSpan.FromMinutes(30),
-                        ct => throw new InvalidOperationException("Should be cached"),
-                        CancellationToken.None);
-
                     // Random access reads
-                    foreach (int offset in randomOffsets.Take(10))
+                    using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                               key,
+                               TimeSpan.FromMinutes(30),
+                               ct => throw new InvalidOperationException("Should be cached"),
+                               CancellationToken.None))
                     {
-                        byte[] buffer = new byte[4096];
-                        handle.Value.Seek(offset, SeekOrigin.Begin);
-                        await handle.Value.ReadExactlyAsync(buffer);
+                        foreach (int offset in randomOffsets.Take(10))
+                        {
+                            byte[] buffer = new byte[4096];
+                            handle.Value.Seek(offset, SeekOrigin.Begin);
+                            await handle.Value.ReadExactlyAsync(buffer);
 
-                        bool match = buffer.SequenceEqual(expected.AsSpan(offset, 4096).ToArray());
-                        verificationResults.Add(match);
+                            bool match = buffer.SequenceEqual(expected.AsSpan(offset, 4096).ToArray());
+                            verificationResults.Add(match);
+                        }
                     }
                 })
                 .ToArray();
@@ -1274,25 +1292,26 @@ public class GenericCacheIntegrationTests : IDisposable
                         string key = $"disk-evict-{i}";
                         byte[] data = CreateTestDataForKey(key, fileSize);
 
-                        using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                            key,
-                            TimeSpan.FromMinutes(30),
-                            ct => Task.FromResult(new CacheFactoryResult<Stream>
-                            {
-                                Value = new MemoryStream(data),
-                                SizeBytes = data.Length
-                            }),
-                            CancellationToken.None);
-
                         // Hold the handle and do multiple reads
-                        for (int read = 0; read < 5; read++)
+                        using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                                   key,
+                                   TimeSpan.FromMinutes(30),
+                                   ct => Task.FromResult(new CacheFactoryResult<Stream>
+                                   {
+                                       Value = new MemoryStream(data),
+                                       SizeBytes = data.Length
+                                   }),
+                                   CancellationToken.None))
                         {
-                            byte[] buffer = new byte[fileSize];
-                            handle.Value.Seek(0, SeekOrigin.Begin);
-                            await handle.Value.ReadExactlyAsync(buffer);
-                            verificationResults.Add(buffer.SequenceEqual(data));
+                            for (int read = 0; read < 5; read++)
+                            {
+                                byte[] buffer = new byte[fileSize];
+                                handle.Value.Seek(0, SeekOrigin.Begin);
+                                await handle.Value.ReadExactlyAsync(buffer);
+                                verificationResults.Add(buffer.SequenceEqual(data));
 
-                            await Task.Delay(10); // Hold handle for a bit
+                                await Task.Delay(10); // Hold handle for a bit
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -1336,7 +1355,7 @@ public class GenericCacheIntegrationTests : IDisposable
         try
         {
             // Pre-populate
-            using (var h = await cache.BorrowAsync("stream-dispose-key", TimeSpan.FromMinutes(30),
+            using (ICacheHandle<Stream> h = await cache.BorrowAsync("stream-dispose-key", TimeSpan.FromMinutes(30),
                 ct => Task.FromResult(new CacheFactoryResult<Stream>
                 {
                     Value = new MemoryStream(testData),
@@ -1347,16 +1366,17 @@ public class GenericCacheIntegrationTests : IDisposable
             // Act - many borrow/return cycles
             for (int i = 0; i < iterations; i++)
             {
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                    "stream-dispose-key",
-                    TimeSpan.FromMinutes(30),
-                    ct => throw new InvalidOperationException("Should be cached"),
-                    CancellationToken.None);
-
                 // Read some data
-                byte[] buffer = new byte[4096];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(buffer);
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                           "stream-dispose-key",
+                           TimeSpan.FromMinutes(30),
+                           ct => throw new InvalidOperationException("Should be cached"),
+                           CancellationToken.None))
+                {
+                    byte[] buffer = new byte[4096];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(buffer);
+                }
 
                 // Handle disposed at end of using block - stream should be disposed too
             }
@@ -1414,7 +1434,7 @@ public class GenericCacheIntegrationTests : IDisposable
             string keyA = "thrash-key-A";
             byte[] dataA = CreateTestDataForKey(keyA, entrySize);
 
-            using (var handleA = await cache.BorrowAsync(keyA, TimeSpan.FromMinutes(30),
+            using (ICacheHandle<Stream> handleA = await cache.BorrowAsync(keyA, TimeSpan.FromMinutes(30),
                 ct =>
                 {
                     Interlocked.Increment(ref factoryCallCount);
@@ -1435,7 +1455,7 @@ public class GenericCacheIntegrationTests : IDisposable
             string keyB = "thrash-key-B";
             byte[] dataB = CreateTestDataForKey(keyB, entrySize);
 
-            using (var handleB = await cache.BorrowAsync(keyB, TimeSpan.FromMinutes(30),
+            using (ICacheHandle<Stream> handleB = await cache.BorrowAsync(keyB, TimeSpan.FromMinutes(30),
                 ct =>
                 {
                     Interlocked.Increment(ref factoryCallCount);
@@ -1489,24 +1509,26 @@ public class GenericCacheIntegrationTests : IDisposable
             string key = $"seq-key-{keyIndex}";
             byte[] data = CreateTestDataForKey(key, entrySize);
 
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct =>
-                {
-                    lock (factoryCalls)
-                    {
-                        factoryCalls[key] = factoryCalls.GetValueOrDefault(key, 0) + 1;
-                    }
-                    return Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(data),
-                        SizeBytes = data.Length
-                    });
-                }, CancellationToken.None);
+            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct =>
+                       {
+                           lock (factoryCalls)
+                           {
+                               factoryCalls[key] = factoryCalls.GetValueOrDefault(key, 0) + 1;
+                           }
 
-            byte[] buffer = new byte[entrySize];
-            handle.Value.Seek(0, SeekOrigin.Begin);
-            await handle.Value.ReadExactlyAsync(buffer);
-            verificationResults.Add(buffer.SequenceEqual(data));
+                           return Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(data),
+                               SizeBytes = data.Length
+                           });
+                       }, CancellationToken.None))
+            {
+                byte[] buffer = new byte[entrySize];
+                handle.Value.Seek(0, SeekOrigin.Begin);
+                await handle.Value.ReadExactlyAsync(buffer);
+                verificationResults.Add(buffer.SequenceEqual(data));
+            }
         }
 
         // Act - multiple rounds of sequential access
@@ -1566,21 +1588,22 @@ public class GenericCacheIntegrationTests : IDisposable
             string key = $"random-key-{keyIndex}";
             byte[] expectedData = keyData[key];
 
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct =>
-                {
-                    Interlocked.Increment(ref factoryCallCount);
-                    return Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(expectedData),
-                        SizeBytes = expectedData.Length
-                    });
-                }, CancellationToken.None);
-
-            byte[] buffer = new byte[entrySize];
-            handle.Value.Seek(0, SeekOrigin.Begin);
-            await handle.Value.ReadExactlyAsync(buffer);
-            verificationResults.Add(buffer.SequenceEqual(expectedData));
+            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct =>
+                       {
+                           Interlocked.Increment(ref factoryCallCount);
+                           return Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(expectedData),
+                               SizeBytes = expectedData.Length
+                           });
+                       }, CancellationToken.None))
+            {
+                byte[] buffer = new byte[entrySize];
+                handle.Value.Seek(0, SeekOrigin.Begin);
+                await handle.Value.ReadExactlyAsync(buffer);
+                verificationResults.Add(buffer.SequenceEqual(expectedData));
+            }
         }
 
         // Assert
@@ -1636,21 +1659,22 @@ public class GenericCacheIntegrationTests : IDisposable
                         string key = $"concurrent-thrash-{keyIndex}";
                         byte[] expectedData = keyData[key];
 
-                        using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                            ct =>
-                            {
-                                Interlocked.Increment(ref factoryCallCount);
-                                return Task.FromResult(new CacheFactoryResult<Stream>
-                                {
-                                    Value = new MemoryStream(expectedData),
-                                    SizeBytes = expectedData.Length
-                                });
-                            }, CancellationToken.None);
-
-                        byte[] buffer = new byte[entrySize];
-                        handle.Value.Seek(0, SeekOrigin.Begin);
-                        await handle.Value.ReadExactlyAsync(buffer);
-                        verificationResults.Add(buffer.SequenceEqual(expectedData));
+                        using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                                   ct =>
+                                   {
+                                       Interlocked.Increment(ref factoryCallCount);
+                                       return Task.FromResult(new CacheFactoryResult<Stream>
+                                       {
+                                           Value = new MemoryStream(expectedData),
+                                           SizeBytes = expectedData.Length
+                                       });
+                                   }, CancellationToken.None))
+                        {
+                            byte[] buffer = new byte[entrySize];
+                            handle.Value.Seek(0, SeekOrigin.Begin);
+                            await handle.Value.ReadExactlyAsync(buffer);
+                            verificationResults.Add(buffer.SequenceEqual(expectedData));
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -1696,7 +1720,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 string keyA = "disk-thrash-A";
                 byte[] dataA = CreateTestDataForKey(keyA, entrySize);
 
-                using (var handleA = await cache.BorrowAsync(keyA, TimeSpan.FromMinutes(30),
+                using (ICacheHandle<Stream> handleA = await cache.BorrowAsync(keyA, TimeSpan.FromMinutes(30),
                     ct =>
                     {
                         Interlocked.Increment(ref factoryCallCount);
@@ -1720,7 +1744,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 string keyB = "disk-thrash-B";
                 byte[] dataB = CreateTestDataForKey(keyB, entrySize);
 
-                using (var handleB = await cache.BorrowAsync(keyB, TimeSpan.FromMinutes(30),
+                using (ICacheHandle<Stream> handleB = await cache.BorrowAsync(keyB, TimeSpan.FromMinutes(30),
                     ct =>
                     {
                         Interlocked.Increment(ref factoryCallCount);
@@ -1797,33 +1821,34 @@ public class GenericCacheIntegrationTests : IDisposable
                 string key = $"disk-large-thrash-{keyIndex}";
                 byte[] expectedData = keyData[key];
 
-                using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                    ct =>
-                    {
-                        Interlocked.Increment(ref factoryCallCount);
-                        return Task.FromResult(new CacheFactoryResult<Stream>
-                        {
-                            Value = new MemoryStream(expectedData),
-                            SizeBytes = expectedData.Length
-                        });
-                    }, CancellationToken.None);
-
                 // Verify with random access reads
-                byte[] buffer = new byte[4096];
-                int[] offsets = { 0, entrySize / 4, entrySize / 2, entrySize - 4096 };
-
-                foreach (int offset in offsets)
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                           ct =>
+                           {
+                               Interlocked.Increment(ref factoryCallCount);
+                               return Task.FromResult(new CacheFactoryResult<Stream>
+                               {
+                                   Value = new MemoryStream(expectedData),
+                                   SizeBytes = expectedData.Length
+                               });
+                           }, CancellationToken.None))
                 {
-                    handle.Value.Seek(offset, SeekOrigin.Begin);
-                    await handle.Value.ReadExactlyAsync(buffer);
-                    bool match = buffer.SequenceEqual(expectedData.AsSpan(offset, 4096).ToArray());
-                    verificationResults.Add(match);
-                }
+                    byte[] buffer = new byte[4096];
+                    int[] offsets = { 0, entrySize / 4, entrySize / 2, entrySize - 4096 };
 
-                // Periodically process cleanup
-                if (i % 5 == 0)
-                {
-                    cache.ProcessPendingCleanup();
+                    foreach (int offset in offsets)
+                    {
+                        handle.Value.Seek(offset, SeekOrigin.Begin);
+                        await handle.Value.ReadExactlyAsync(buffer);
+                        bool match = buffer.SequenceEqual(expectedData.AsSpan(offset, 4096).ToArray());
+                        verificationResults.Add(match);
+                    }
+
+                    // Periodically process cleanup
+                    if (i % 5 == 0)
+                    {
+                        cache.ProcessPendingCleanup();
+                    }
                 }
             }
 
@@ -1889,21 +1914,22 @@ public class GenericCacheIntegrationTests : IDisposable
                             string key = $"disk-concurrent-thrash-{keyIndex}";
                             byte[] expectedData = keyData[key];
 
-                            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                                ct =>
-                                {
-                                    Interlocked.Increment(ref factoryCallCount);
-                                    return Task.FromResult(new CacheFactoryResult<Stream>
-                                    {
-                                        Value = new MemoryStream(expectedData),
-                                        SizeBytes = expectedData.Length
-                                    });
-                                }, CancellationToken.None);
-
-                            byte[] buffer = new byte[entrySize];
-                            handle.Value.Seek(0, SeekOrigin.Begin);
-                            await handle.Value.ReadExactlyAsync(buffer);
-                            verificationResults.Add(buffer.SequenceEqual(expectedData));
+                            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                                       ct =>
+                                       {
+                                           Interlocked.Increment(ref factoryCallCount);
+                                           return Task.FromResult(new CacheFactoryResult<Stream>
+                                           {
+                                               Value = new MemoryStream(expectedData),
+                                               SizeBytes = expectedData.Length
+                                           });
+                                       }, CancellationToken.None))
+                            {
+                                byte[] buffer = new byte[entrySize];
+                                handle.Value.Seek(0, SeekOrigin.Begin);
+                                await handle.Value.ReadExactlyAsync(buffer);
+                                verificationResults.Add(buffer.SequenceEqual(expectedData));
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -1958,7 +1984,7 @@ public class GenericCacheIntegrationTests : IDisposable
         {
             byte[] data = CreateTestDataForKey(key, entrySize);
 
-            var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+            ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
                 ct =>
                 {
                     lock (factoryCalls)
@@ -2032,7 +2058,7 @@ public class GenericCacheIntegrationTests : IDisposable
         {
             byte[] data = CreateTestDataForKey(key, entrySize);
 
-            var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+            ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
                 ct =>
                 {
                     lock (factoryCalls)
@@ -2128,17 +2154,18 @@ public class GenericCacheIntegrationTests : IDisposable
             string key = $"consistency-key-{keyIndex}";
             byte[] data = keyData[key];
 
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }), CancellationToken.None);
-
             // Read to verify handle works
-            byte[] buffer = new byte[100];
-            handle.Value.Seek(0, SeekOrigin.Begin);
-            await handle.Value.ReadAsync(buffer);
+            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }), CancellationToken.None))
+            {
+                byte[] buffer = new byte[100];
+                handle.Value.Seek(0, SeekOrigin.Begin);
+                await handle.Value.ReadAsync(buffer);
+            }
         }
 
         // Assert - all RefCounts should be 0 after operations complete
@@ -2190,17 +2217,18 @@ public class GenericCacheIntegrationTests : IDisposable
                     string key = $"concurrent-consistency-{keyIndex}";
                     byte[] data = keyData[key];
 
-                    using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                        ct => Task.FromResult(new CacheFactoryResult<Stream>
-                        {
-                            Value = new MemoryStream(data),
-                            SizeBytes = data.Length
-                        }), CancellationToken.None);
-
                     // Small delay to increase overlap
-                    if (op % 10 == 0)
+                    using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                               ct => Task.FromResult(new CacheFactoryResult<Stream>
+                               {
+                                   Value = new MemoryStream(data),
+                                   SizeBytes = data.Length
+                               }), CancellationToken.None))
                     {
-                        await Task.Yield();
+                        if (op % 10 == 0)
+                        {
+                            await Task.Yield();
+                        }
                     }
                 }
             })
@@ -2243,16 +2271,17 @@ public class GenericCacheIntegrationTests : IDisposable
             string key = op % 2 == 0 ? "thrash-A" : "thrash-B";
             byte[] data = CreateTestDataForKey(key, entrySize);
 
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }), CancellationToken.None);
-
             // Verify size during borrow
-            cache.CurrentSizeBytes.Should().Be(entrySize,
-                $"Size should be exactly {entrySize} during operation {op}");
+            using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }), CancellationToken.None))
+            {
+                cache.CurrentSizeBytes.Should().Be(entrySize,
+                    $"Size should be exactly {entrySize} during operation {op}");
+            }
         }
 
         // Assert final state
@@ -2284,15 +2313,17 @@ public class GenericCacheIntegrationTests : IDisposable
         ];
 
         // Act - add all entries
-        foreach (var (key, size) in entries)
+        foreach ((string key, int size) in entries)
         {
             byte[] data = CreateTestDataForKey(key, size);
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }), CancellationToken.None);
+            using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }), CancellationToken.None))
+            {
+            }
         }
 
         // Calculate expected total size
@@ -2307,11 +2338,13 @@ public class GenericCacheIntegrationTests : IDisposable
         // Now access entries multiple times and verify size stays constant
         for (int round = 0; round < 5; round++)
         {
-            foreach (var (key, size) in entries)
+            foreach ((string key, int size) in entries)
             {
-                using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                    ct => throw new InvalidOperationException("Should be cached"),
-                    CancellationToken.None);
+                using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                           ct => throw new InvalidOperationException("Should be cached"),
+                           CancellationToken.None))
+                {
+                }
             }
         }
 
@@ -2336,12 +2369,14 @@ public class GenericCacheIntegrationTests : IDisposable
         {
             string key = $"clear-test-{i}";
             byte[] data = CreateTestDataForKey(key, entrySize);
-            using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }), CancellationToken.None);
+            using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }), CancellationToken.None))
+            {
+            }
         }
 
         cache.EntryCount.Should().Be(5);
@@ -2389,22 +2424,23 @@ public class GenericCacheIntegrationTests : IDisposable
                 string key = $"disk-consistency-{keyIndex}";
                 byte[] data = keyData[key];
 
-                using var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                    ct => Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(data),
-                        SizeBytes = data.Length
-                    }), CancellationToken.None);
-
                 // Read to verify handle works
-                byte[] buffer = new byte[1024];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadAsync(buffer);
-
-                // Periodically process cleanup
-                if (op % 10 == 0)
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                           ct => Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(data),
+                               SizeBytes = data.Length
+                           }), CancellationToken.None))
                 {
-                    cache.ProcessPendingCleanup();
+                    byte[] buffer = new byte[1024];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadAsync(buffer);
+
+                    // Periodically process cleanup
+                    if (op % 10 == 0)
+                    {
+                        cache.ProcessPendingCleanup();
+                    }
                 }
             }
 
@@ -2449,7 +2485,7 @@ public class GenericCacheIntegrationTests : IDisposable
         const int iterations = 100;
 
         // Pre-populate
-        using (var h = await cache.BorrowAsync("refcount-negative-test", TimeSpan.FromMinutes(30),
+        using (ICacheHandle<Stream> h = await cache.BorrowAsync("refcount-negative-test", TimeSpan.FromMinutes(30),
             ct => Task.FromResult(new CacheFactoryResult<Stream>
             {
                 Value = new MemoryStream(data),
@@ -2465,7 +2501,7 @@ public class GenericCacheIntegrationTests : IDisposable
             {
                 for (int i = 0; i < iterations; i++)
                 {
-                    var handle = await cache.BorrowAsync("refcount-negative-test", TimeSpan.FromMinutes(30),
+                    ICacheHandle<Stream> handle = await cache.BorrowAsync("refcount-negative-test", TimeSpan.FromMinutes(30),
                         ct => throw new InvalidOperationException("Should be cached"),
                         CancellationToken.None);
 
@@ -2525,7 +2561,7 @@ public class GenericCacheIntegrationTests : IDisposable
             string key = $"soak-key-{keyIndex}";
             byte[] data = keyData[key];
 
-            using (var handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+            using (ICacheHandle<Stream> handle = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
                 ct => Task.FromResult(new CacheFactoryResult<Stream>
                 {
                     Value = new MemoryStream(data),
@@ -2615,45 +2651,48 @@ public class GenericCacheIntegrationTests : IDisposable
         {
             string key = $"stress-key-{i}";
             byte[] data = keyData[key];
-            using var h = await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
-                ct => Task.FromResult(new CacheFactoryResult<Stream>
-                {
-                    Value = new MemoryStream(data),
-                    SizeBytes = data.Length
-                }), CancellationToken.None);
+            using (await cache.BorrowAsync(key, TimeSpan.FromMinutes(30),
+                       ct => Task.FromResult(new CacheFactoryResult<Stream>
+                       {
+                           Value = new MemoryStream(data),
+                           SizeBytes = data.Length
+                       }), CancellationToken.None))
+            {
+            }
         }
 
         // Act - high throughput operations
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
 
         Task[] tasks = Enumerable.Range(0, operations)
             .Select(async i =>
             {
-                var opStart = sw.ElapsedMilliseconds;
+                long opStart = sw.ElapsedMilliseconds;
 
                 string key = $"stress-key-{i % keySpace}";
                 byte[] data = keyData[key];
 
-                using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                    key,
-                    TimeSpan.FromMinutes(30),
-                    ct => Task.FromResult(new CacheFactoryResult<Stream>
-                    {
-                        Value = new MemoryStream(data),
-                        SizeBytes = data.Length
-                    }),
-                    CancellationToken.None);
-
-                byte[] buffer = new byte[data.Length];
-                handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadExactlyAsync(buffer);
-
-                if (buffer.SequenceEqual(data))
+                using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                           key,
+                           TimeSpan.FromMinutes(30),
+                           ct => Task.FromResult(new CacheFactoryResult<Stream>
+                           {
+                               Value = new MemoryStream(data),
+                               SizeBytes = data.Length
+                           }),
+                           CancellationToken.None))
                 {
-                    Interlocked.Increment(ref successCount);
-                }
+                    byte[] buffer = new byte[data.Length];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    await handle.Value.ReadExactlyAsync(buffer);
 
-                latencies.Add(sw.ElapsedMilliseconds - opStart);
+                    if (buffer.SequenceEqual(data))
+                    {
+                        Interlocked.Increment(ref successCount);
+                    }
+
+                    latencies.Add(sw.ElapsedMilliseconds - opStart);
+                }
             })
             .ToArray();
 
@@ -2699,25 +2738,26 @@ public class GenericCacheIntegrationTests : IDisposable
                     string key = $"deadlock-test-{i % fileCount}";
                     byte[] data = CreateTestDataForKey(key, fileSize);
 
-                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
-                        key,
-                        TimeSpan.FromMinutes(30),
-                        ct => Task.FromResult(new CacheFactoryResult<Stream>
-                        {
-                            Value = new MemoryStream(data),
-                            SizeBytes = data.Length
-                        }),
-                        cts.Token);
-
                     // Do some reads
-                    byte[] buffer = new byte[1024 * 1024]; // 1MB reads
-                    for (int pos = 0; pos < fileSize; pos += buffer.Length)
+                    using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                               key,
+                               TimeSpan.FromMinutes(30),
+                               ct => Task.FromResult(new CacheFactoryResult<Stream>
+                               {
+                                   Value = new MemoryStream(data),
+                                   SizeBytes = data.Length
+                               }),
+                               cts.Token))
                     {
-                        handle.Value.Seek(pos, SeekOrigin.Begin);
-                        await handle.Value.ReadExactlyAsync(buffer, cts.Token);
-                    }
+                        byte[] buffer = new byte[1024 * 1024]; // 1MB reads
+                        for (int pos = 0; pos < fileSize; pos += buffer.Length)
+                        {
+                            handle.Value.Seek(pos, SeekOrigin.Begin);
+                            await handle.Value.ReadExactlyAsync(buffer, cts.Token);
+                        }
 
-                    Interlocked.Increment(ref completedOperations);
+                        Interlocked.Increment(ref completedOperations);
+                    }
                 })
                 .ToArray();
 
