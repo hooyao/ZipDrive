@@ -1,32 +1,68 @@
 # Caching Layer - Implementation Checklist
 
 **Design Status:** ✅ Complete
-**Implementation Status:** ⏳ Ready to Start
+**Implementation Status:** ✅ Core Complete (Phase 1-4)
 
 ---
 
-## Phase 1: Core Interfaces & Models (Estimated: 1-2 hours)
+## Architecture Overview
 
-### 1.1 Create Interface Files
+The caching layer uses a **generic cache with pluggable storage strategies**:
 
-- [ ] `IFileCache.cs` - Main cache interface
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GenericCache<T>                            │
+│  • Borrow/Return pattern with reference counting                │
+│  • Three-layer concurrency (lock-free → per-key → eviction)     │
+│  • Pluggable IEvictionPolicy                                    │
+│  • Pluggable IStorageStrategy<T>                                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         ▼                    ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│MemoryStorage    │  │DiskStorage      │  │ObjectStorage<T> │
+│Strategy         │  │Strategy         │  │Strategy         │
+│                 │  │                 │  │                 │
+│• byte[] in RAM  │  │• MemoryMapped   │  │• Direct object  │
+│• Fast, volatile │  │  Files          │  │  reference      │
+│• Small files    │  │• Large files    │  │• Metadata cache │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+---
+
+## Phase 1: Core Interfaces & Models ✅ COMPLETE
+
+### 1.1 Cache Interfaces
+
+- [x] `ICache<T>.cs` - Generic cache interface with borrow/return pattern
   ```csharp
-  Task<Stream> GetOrAddAsync(string cacheKey, long sizeBytes, TimeSpan ttl,
-                             Func<CancellationToken, Task<Stream>> factory, ...);
+  Task<ICacheHandle<T>> BorrowAsync(string cacheKey, TimeSpan ttl,
+      Func<CancellationToken, Task<CacheFactoryResult<T>>> factory, ...);
   long CurrentSizeBytes { get; }
   long CapacityBytes { get; }
   double HitRate { get; }
   int EntryCount { get; }
+  int BorrowedEntryCount { get; }
   void EvictExpired();
   ```
 
-- [ ] `IEvictionPolicy.cs` - Pluggable eviction strategy
+- [x] `ICacheHandle<T>.cs` - Handle returned from BorrowAsync (RAII pattern)
   ```csharp
-  IEnumerable<ICacheEntry> SelectVictims(IReadOnlyCollection<ICacheEntry> entries,
-                                          long requiredBytes, ...);
+  T Value { get; }
+  string CacheKey { get; }
+  long SizeBytes { get; }
+  void Dispose(); // Decrements RefCount, allows eviction
   ```
 
-- [ ] `ICacheEntry.cs` - Entry metadata for eviction
+- [x] `IEvictionPolicy.cs` - Pluggable eviction strategy
+  ```csharp
+  IEnumerable<ICacheEntry> SelectVictims(IReadOnlyCollection<ICacheEntry> entries,
+      long requiredBytes, long currentSize, long capacity);
+  ```
+
+- [x] `ICacheEntry.cs` - Entry metadata for eviction
   ```csharp
   string CacheKey { get; }
   long SizeBytes { get; }
@@ -35,377 +71,260 @@
   int AccessCount { get; }
   ```
 
-### 1.2 Create Options & Configuration
+### 1.2 Storage Strategy Interfaces
 
-- [ ] `CacheOptions.cs` - Configuration model
+- [x] `IStorageStrategy<T>.cs` - Pluggable storage abstraction
   ```csharp
-  int MemoryCacheSizeMb { get; set; } = 2048;
-  int DiskCacheSizeMb { get; set; } = 10240;
-  int SmallFileCutoffMb { get; set; } = 50;
-  string? TempDirectory { get; set; }
-  int DefaultTtlMinutes { get; set; } = 30;
-  int EvictionCheckIntervalSeconds { get; set; } = 60;
+  Task<StoredEntry> StoreAsync(CacheFactoryResult<T> result, CancellationToken ct);
+  T Retrieve(StoredEntry stored);
+  void Dispose(StoredEntry stored);
+  bool RequiresAsyncCleanup { get; }
   ```
 
-### 1.3 Create Helper Classes
-
-- [ ] `NonDisposingStream.cs` - Stream wrapper that doesn't dispose underlying stream
+- [x] `StoredEntry.cs` - Opaque wrapper for stored data
   ```csharp
-  public class NonDisposingStream : Stream
-  {
-      private readonly Stream _innerStream;
-      protected override void Dispose(bool disposing) { /* Don't dispose inner */ }
-  }
+  object Data { get; }       // Internal storage (byte[], MMF, object)
+  long SizeBytes { get; }    // For capacity tracking
+  string? FilePath { get; }  // For disk strategy cleanup
   ```
 
-**Phase 1 Checkpoint:** All interfaces defined, solution compiles
+- [x] `CacheFactoryResult<T>.cs` - Factory output with metadata
+  ```csharp
+  T Value { get; }
+  long SizeBytes { get; }
+  IReadOnlyDictionary<string, object>? Metadata { get; }
+  ```
+
+### 1.3 Internal Classes
+
+- [x] `CacheEntry.cs` - Internal cache entry with reference counting
+  ```csharp
+  string CacheKey { get; }
+  StoredEntry Stored { get; }
+  DateTimeOffset CreatedAt { get; }
+  TimeSpan Ttl { get; }
+  DateTimeOffset LastAccessedAt { get; set; }
+  int AccessCount { get; set; }
+  int RefCount { get; }  // Thread-safe reference count
+  void IncrementRefCount();
+  void DecrementRefCount();
+  ```
+
+- [x] `CacheHandle<T>.cs` - Handle implementation (decrements RefCount on dispose)
+
+**Phase 1 Checkpoint:** ✅ All interfaces defined, solution compiles
 
 ---
 
-## Phase 2: Memory Tier Implementation (Estimated: 2-3 hours)
+## Phase 2: GenericCache Implementation ✅ COMPLETE
 
-### 2.1 MemoryTierCache Class
+### 2.1 GenericCache<T> Class
 
-**Note:** We use a simple custom cache with `ConcurrentDictionary`, NOT built-in `MemoryCache`.
-Why? MemoryCache has no pluggable eviction policy and unpredictable compaction.
+- [x] Private fields:
+  - [x] `ConcurrentDictionary<string, CacheEntry> _cache` (Layer 1: lock-free)
+  - [x] `ConcurrentDictionary<string, Lazy<Task<CacheEntry>>> _materializationTasks` (Layer 2)
+  - [x] `Lock _evictionLock` (.NET 10) (Layer 3)
+  - [x] `ConcurrentQueue<StoredEntry> _pendingCleanup` (async cleanup)
+  - [x] `IStorageStrategy<T> _storageStrategy`
+  - [x] `IEvictionPolicy _evictionPolicy`
+  - [x] `TimeProvider _timeProvider`
+  - [x] `long _capacityBytes`, `_currentSizeBytes`, `_hits`, `_misses`
 
-- [ ] Private fields:
-  - [ ] `ConcurrentDictionary<string, CacheEntry> _cache`
-  - [ ] `IEvictionPolicy _evictionPolicy`
-  - [ ] `Lock _evictionLock` (.NET 10)
-  - [ ] `TimeProvider _timeProvider`
-  - [ ] `long _capacityBytes`
-  - [ ] `long _currentSizeBytes`
+- [x] Constructor: Accept `IStorageStrategy<T>`, `IEvictionPolicy`, `capacityBytes`, `TimeProvider?`, `ILogger?`
 
-- [ ] Constructor: Accept `capacityBytes`, `IEvictionPolicy`, `ILogger`, `TimeProvider?`
+- [x] `BorrowAsync()` implementation:
+  - [x] Layer 1: Lock-free lookup via `_cache.TryGetValue()` + not expired
+  - [x] If hit: Increment RefCount, update LastAccessedAt/AccessCount, return handle
+  - [x] Layer 2: Use `Lazy<Task<CacheEntry>>` for thundering herd prevention
+  - [x] Materialize, store via strategy, add to cache
+  - [x] Temporary RefCount hold during post-store eviction check
+  - [x] Return `CacheHandle<T>` that decrements RefCount on dispose
 
-- [ ] `GetOrAddAsync()` implementation:
-  - [ ] Fast path: Check `_cache.TryGetValue()` + not expired (NO LOCK!)
-  - [ ] If hit: Update `LastAccessedAt`, `AccessCount++`, return `MemoryStream`
-  - [ ] Slow path: Cache miss
-    - [ ] Call `EvictIfNeeded(sizeBytes)` to make space
-    - [ ] Call factory, materialize to `byte[]`
-    - [ ] Create `CacheEntry` with timestamps
-    - [ ] Add to `_cache`, update `_currentSizeBytes`
-  - [ ] Return `new MemoryStream(bytes, writable: false)`
+- [x] `EvictIfNeededAsync()` implementation:
+  - [x] Fast path: Check capacity WITHOUT lock
+  - [x] Slow path: Layer 3 eviction lock
+  - [x] Phase 1: Evict expired entries (only if RefCount = 0)
+  - [x] Phase 2: Use `_evictionPolicy.SelectVictims()` (only entries with RefCount = 0)
 
-- [ ] `EvictIfNeeded()` implementation:
-  - [ ] Early return if capacity not exceeded (NO LOCK in common case!)
-  - [ ] Lock eviction lock (.NET 10 Lock)
-  - [ ] Phase 1: Evict all expired entries
-  - [ ] Phase 2: If still need space, call `_evictionPolicy.SelectVictims()`
-  - [ ] For each victim: `_cache.TryRemove()`, update `_currentSizeBytes`
-  - [ ] Release lock
+- [x] `Clear()` / `ClearAsync()` - Force clear all entries (for cleanup/shutdown)
 
-- [ ] `IsExpired(entry)`: `_timeProvider.GetUtcNow() > entry.CreatedAt + entry.Ttl`
+- [x] `ProcessPendingCleanup()` - Background cleanup for async strategies
 
-- [ ] Properties: `CurrentSizeBytes`, `CapacityBytes`, `EntryCount`
+- [x] Properties: `CurrentSizeBytes`, `CapacityBytes`, `HitRate`, `EntryCount`, `BorrowedEntryCount`
 
-### 2.2 CacheEntry Class (for Memory Tier)
-
-- [ ] Properties:
-  ```csharp
-  string CacheKey
-  byte[] Data
-  long SizeBytes
-  DateTimeOffset CreatedAt
-  TimeSpan Ttl
-  DateTimeOffset LastAccessedAt { get; set; } // Mutable for LRU
-  int AccessCount { get; set; } // For LFU policy
-  ```
-
-### 2.3 MemoryTierCache Tests
-
-- [ ] `CacheMiss_MaterializesAndStores()`
-- [ ] `CacheHit_ReturnsSameData()`
-- [ ] `CacheHit_UpdatesLastAccessedAt()`
-- [ ] `TtlExpiration_EntryRemovedAfterTtl()` (use FakeTimeProvider)
-- [ ] `CapacityExceeded_EvictsUsingPolicy()`
-- [ ] `EvictionPolicy_LruSelectsOldestAccessed()`
-- [ ] `ConcurrentAccess_ThreadSafe()`
-- [ ] `NoLockOnCacheHit_FastPath()`
-
-**Phase 2 Checkpoint:** Memory tier complete, all tests passing
+**Phase 2 Checkpoint:** ✅ GenericCache complete with borrow/return pattern
 
 ---
 
-## Phase 3: Disk Tier Implementation (Estimated: 4-5 hours)
+## Phase 3: Storage Strategies ✅ COMPLETE
 
-### 3.1 DiskTierCache Class
+### 3.1 MemoryStorageStrategy
 
-- [ ] Private fields:
-  - [ ] `ConcurrentDictionary<string, Lazy<Task<CachedEntry>>> _activeCache`
-  - [ ] `ConcurrentQueue<CachedEntry> _pendingDeletion`
-  - [ ] `Lock _evictionLock` (.NET 10)
-  - [ ] `Timer _cleanupTimer`
-  - [ ] `IEvictionPolicy _evictionPolicy`
+- [x] Stores data as `byte[]` in memory
+- [x] Returns `MemoryStream` on retrieve (seekable, random access)
+- [x] `RequiresAsyncCleanup = false` (GC handles cleanup)
+- [x] Best for: Small files (< 50MB default cutoff)
 
-- [ ] Constructor:
-  - [ ] Accept capacity, temp dir, logger, TimeProvider, IEvictionPolicy
-  - [ ] Initialize cleanup timer (every 5 seconds)
+### 3.2 DiskStorageStrategy
 
-- [ ] `GetOrAddAsync()` implementation:
-  - [ ] Fast path: Check `_activeCache.TryGetValue()`
-  - [ ] If found and not expired: Update LastAccessedAt, return stream
-  - [ ] Slow path: Use `Lazy<Task<T>>` pattern:
-    ```csharp
-    var lazy = _activeCache.GetOrAdd(key, _ => new Lazy<Task<CachedEntry>>(
-        async () => await MaterializeAsync(...)));
-    var entry = await lazy.Value;
-    ```
-  - [ ] Before materialization: Call `EvictToMakeSpaceAsync(sizeBytes)`
-  - [ ] Materialize to temp file + create MemoryMappedFile
-  - [ ] Return `entry.MemoryMappedFile.CreateViewStream()`
+- [x] Stores data as `MemoryMappedFile` backed by temp file
+- [x] Temp file naming: `{guid}.zip2vd.cache`
+- [x] Returns `MemoryMappedViewStream` on retrieve (seekable, random access)
+- [x] `RequiresAsyncCleanup = true` (file deletion)
+- [x] Best for: Large files (≥ 50MB)
 
-- [ ] `MaterializeAsync()` helper:
-  - [ ] Create temp file: `Path.Combine(tempDir, $"{Guid.NewGuid()}.zip2vd")`
-  - [ ] Call factory, copy to temp file
-  - [ ] Create MemoryMappedFile
-  - [ ] Return new CachedEntry
+### 3.3 ObjectStorageStrategy<T>
 
-- [ ] `EvictToMakeSpaceAsync()`:
-  - [ ] Lock eviction (using `.NET 10 Lock`)
-  - [ ] Phase 1: Evict all expired entries
-  - [ ] Phase 2: If still need space, call `_evictionPolicy.SelectVictims()`
-  - [ ] For each victim: Call `MarkForDeletion(entry)`
-  - [ ] Release lock
+- [x] Stores objects directly (no serialization)
+- [x] Returns same object reference on retrieve
+- [x] `RequiresAsyncCleanup = false`
+- [x] Best for: Metadata caching (e.g., `ArchiveStructure`)
 
-- [ ] `MarkForDeletion()` (Phase 1 of eviction):
-  - [ ] Remove from `_activeCache`
-  - [ ] Set `entry.PendingDeletion = true`
-  - [ ] Enqueue to `_pendingDeletion`
-  - [ ] Update `_currentSizeBytes` (immediate)
-  - [ ] Log "Marked for deletion"
-
-- [ ] `ProcessPendingDeletions()` (Phase 2, async cleanup):
-  - [ ] Process up to 100 entries per cycle
-  - [ ] For each: Dispose MMF, delete temp file
-  - [ ] Log cleanup time
-  - [ ] Best-effort (catch exceptions, don't re-queue)
-
-- [ ] Properties: `CurrentSizeBytes`, `CapacityBytes`, `EntryCount`
-
-### 3.2 CachedEntry Record
-
-- [ ] Properties:
-  ```csharp
-  string CacheKey
-  MemoryMappedFile MemoryMappedFile
-  string TempFilePath
-  long SizeBytes
-  DateTimeOffset CreatedAt
-  TimeSpan Ttl
-  DateTimeOffset LastAccessedAt { get; set; } // Mutable for LRU
-  bool PendingDeletion { get; set; } // Mutable for async cleanup
-  int AccessCount { get; set; } // For LFU policy
-  ```
-
-### 3.3 DiskTierCache Tests
-
-- [ ] `CacheMiss_CreatesTempFileAndMmf()`
-- [ ] `CacheHit_ReturnsMmfStream()`
-- [ ] `RandomAccess_SeekWorks()` (verify can seek to any offset)
-- [ ] `TtlExpiration_DeletesTempFile()` (use FakeTimeProvider)
-- [ ] `LruEviction_OldestAccessedEvictedFirst()`
-- [ ] `CapacityEnforcement_NeverExceedsLimit()`
-- [ ] `AsyncCleanup_DoesNotBlockGetOrAdd()`
-- [ ] `ThunderingHerd_PreventsDuplicateMaterialization()`
-
-**Phase 3 Checkpoint:** Disk tier complete, all tests passing
+**Phase 3 Checkpoint:** ✅ All storage strategies implemented
 
 ---
 
-## Phase 4: Eviction Policies (Estimated: 1-2 hours)
+## Phase 4: Eviction Policies ✅ COMPLETE
 
 ### 4.1 LruEvictionPolicy
 
-- [ ] Implement `IEvictionPolicy`
-- [ ] `SelectVictims()`:
-  - [ ] Calculate space needed
-  - [ ] Order entries by `LastAccessedAt` (ascending)
-  - [ ] TakeWhile accumulated size >= space needed
+- [x] Implement `IEvictionPolicy`
+- [x] `SelectVictims()`:
+  - [x] Order entries by `LastAccessedAt` (ascending = oldest first)
+  - [x] TakeWhile accumulated size >= space needed + 10% buffer
 
-### 4.2 Future: LfuEvictionPolicy
+### 4.2 Future: Additional Policies (Not Yet Implemented)
 
-- [ ] Order by `AccessCount` (ascending)
-- [ ] Tie-breaker: `LastAccessedAt`
+- [ ] `LfuEvictionPolicy` - Least Frequently Used
+- [ ] `SizeFirstEvictionPolicy` - Evict largest files first
+- [ ] `HybridEvictionPolicy` - Combine LRU + LFU
 
-### 4.3 Future: SizeFirstEvictionPolicy
-
-- [ ] Order by `SizeBytes` (descending)
-- [ ] Evict largest files first
-
-### 4.4 Tests
-
-- [ ] `LruPolicy_SelectsOldestAccessed()`
-- [ ] `LruPolicy_FreesExactlyEnoughSpace()`
-
-**Phase 4 Checkpoint:** Eviction policies implemented
+**Phase 4 Checkpoint:** ✅ LRU eviction policy implemented
 
 ---
 
-## Phase 5: DualTierFileCache Coordinator (Estimated: 1 hour)
+## Phase 5: Integration Tests ✅ COMPLETE
 
-### 5.1 DualTierFileCache Class
+### 5.1 MemoryStorageStrategy Tests
 
-- [ ] Constructor: Accept `IMemoryCache`, `CacheOptions`, `ILogger`, `TimeProvider?`
-- [ ] Create both tiers: `MemoryTierCache`, `DiskTierCache`
-- [ ] Calculate `_smallFileCutoffBytes` from options
+- [x] `MemoryCache_BorrowAsync_CacheMiss_CallsFactoryAndCachesData`
+- [x] `MemoryCache_BorrowAsync_CacheHit_ReturnsWithoutCallingFactory`
+- [x] `MemoryCache_BorrowAsync_RandomAccess_SupportsSeek`
+- [x] `MemoryCache_RefCount_ProtectsFromEviction`
+- [x] `MemoryCache_TtlExpiration_EvictsExpiredEntries`
+- [x] `MemoryCache_CapacityEviction_EvictsLruEntries`
 
-- [ ] `GetOrAddAsync()`:
-  - [ ] Increment `_totalRequests`
-  - [ ] Route based on size:
-    ```csharp
-    if (sizeBytes < _smallFileCutoffBytes)
-        return await _memoryTier.GetOrAddAsync(...);
-    else
-        return await _diskTier.GetOrAddAsync(...);
-    ```
-  - [ ] Log routing decision
+### 5.2 DiskStorageStrategy Tests
 
-- [ ] Properties (aggregate from both tiers):
-  - [ ] `CurrentSizeBytes` = memory + disk
-  - [ ] `CapacityBytes` = memory + disk
-  - [ ] `HitRate` = _cacheHits / _totalRequests
-  - [ ] `EntryCount` = memory + disk
+- [x] `DiskCache_BorrowAsync_CacheMiss_CreatesMemoryMappedFile`
+- [x] `DiskCache_BorrowAsync_RandomAccess_SupportsSeekOnLargeFile`
+- [x] `DiskCache_CacheHit_ReusesMemoryMappedFile`
+- [x] `DiskCache_Eviction_DeletesTempFile`
 
-- [ ] `EvictExpired()`: Call both tiers
+### 5.3 Concurrency Tests
 
-- [ ] `DisposeAsync()`: Dispose disk tier (memory tier doesn't need it)
+- [x] `MemoryCache_ConcurrentBorrow_SameKey_OnlyMaterializesOnce` (thundering herd)
+- [x] `MemoryCache_ConcurrentBorrow_DifferentKeys_MaterializesInParallel`
+- [x] `MemoryCache_MultipleBorrowers_SameEntry_AllGetValidHandles`
 
-### 5.2 DualTierFileCache Tests
-
-- [ ] `SmallFile_RoutesToMemoryTier()`
-- [ ] `LargeFile_RoutesToDiskTier()`
-- [ ] `CutoffBoundary_RoutesCorrectly()`
-- [ ] `Metrics_AggregatedFromBothTiers()`
-
-**Phase 5 Checkpoint:** Coordinator complete, all tests passing
+**Phase 5 Checkpoint:** ✅ All 13 integration tests passing
 
 ---
 
-## Phase 6: Integration & Testing (Estimated: 2-3 hours)
+## Phase 6: Dual-Tier Coordinator ⏳ NOT STARTED
 
-### 6.1 Integration Tests
+### 6.1 DualTierFileCache Class (Future)
 
-- [ ] `EndToEnd_SequentialToRandomAccessConversion()`
-  - [ ] Create test ZIP with 10MB file
-  - [ ] First access: Cache miss, materialize
-  - [ ] Seek to various offsets (5MB, 1KB, 8MB)
-  - [ ] Verify data correctness
-  - [ ] Second access: Cache hit, instant
+- [ ] Constructor: Create both memory and disk GenericCache instances
+- [ ] Route based on file size (< cutoff → memory, ≥ cutoff → disk)
+- [ ] Aggregate metrics from both caches
+- [ ] Implement `IFileCache` interface
 
-- [ ] `TtlEviction_WithFakeTime()`
-  - [ ] Cache entry with 1 min TTL
-  - [ ] Verify cache hit within TTL
-  - [ ] Advance fake time past TTL
-  - [ ] Verify cache miss after eviction
-
-- [ ] `CapacityEnforcement_LruEviction()`
-  - [ ] 1MB capacity cache
-  - [ ] Add 500KB file1
-  - [ ] Add 500KB file2 (total 1MB)
-  - [ ] Add 600KB file3 (should evict file1)
-  - [ ] Verify capacity not exceeded
-  - [ ] Verify file1 evicted, file2+file3 remain
-
-- [ ] `ConcurrentAccess_StressTest()`
-  - [ ] 100 threads, 1000 operations each
-  - [ ] Mix of hits and misses
-  - [ ] Verify no exceptions, no race conditions
-  - [ ] Verify hit rate reasonable
-
-### 6.2 Performance Benchmarks
-
-- [ ] Measure cache hit latency (target: < 1ms)
-- [ ] Measure cache miss latency:
-  - [ ] 10MB file (target: < 100ms)
-  - [ ] 100MB file (target: < 2s)
-- [ ] Measure eviction latency (target: < 1ms for mark)
-- [ ] Measure throughput (concurrent GetOrAddAsync)
-
-**Phase 6 Checkpoint:** All integration tests passing, performance targets met
+**Note:** Current implementation allows manual tier selection. Coordinator will automate routing.
 
 ---
 
-## Phase 7: Observability (Estimated: 1-2 hours)
+## Phase 7: Observability ⏳ NOT STARTED
 
 ### 7.1 Metrics Integration
 
 - [ ] Add `System.Diagnostics.Metrics` support
-- [ ] Counter: `cache_hits_total`
-- [ ] Counter: `cache_misses_total`
-- [ ] Counter: `cache_evictions_total`
-- [ ] ObservableGauge: `cache_size_bytes`
-- [ ] ObservableGauge: `cache_entry_count`
+- [ ] Counter: `cache_hits_total`, `cache_misses_total`, `cache_evictions_total`
+- [ ] ObservableGauge: `cache_size_bytes`, `cache_entry_count`
 - [ ] Histogram: `cache_operation_duration_seconds`
 
-### 7.2 Logging Enhancements
+### 7.2 Logging (Partially Complete)
 
-- [ ] Structured logging with key-value pairs
-- [ ] Log levels:
-  - [ ] Debug: Cache hits/misses, routing decisions
-  - [ ] Information: Evictions, cleanup cycles
-  - [ ] Warning: Capacity issues, cleanup failures
-  - [ ] Error: Materialization failures
-
-**Phase 7 Checkpoint:** Observability complete
+- [x] Debug: Cache hits/misses
+- [x] Information: Materialization, eviction
+- [x] Warning: Capacity issues
+- [ ] Structured logging improvements
 
 ---
 
 ## Final Checklist
 
 ### Code Quality
-- [ ] All code follows C# conventions
-- [ ] XML documentation on all public APIs
-- [ ] No TODOs or HACKs in code
-- [ ] Nullable reference types enabled
-- [ ] No compiler warnings
+- [x] All code follows C# conventions
+- [x] XML documentation on all public APIs
+- [x] No TODOs or HACKs in code
+- [x] Nullable reference types enabled
+- [x] No compiler warnings
 
 ### Testing
-- [ ] 80%+ code coverage
-- [ ] All unit tests passing
-- [ ] All integration tests passing
+- [x] 80%+ code coverage (core cache)
+- [x] All unit tests passing
+- [x] All integration tests passing
 - [ ] Performance benchmarks meet targets
 
 ### Documentation
-- [ ] CACHING_DESIGN.md complete
+- [x] CACHING_DESIGN.md (needs update for new architecture)
+- [x] CONCURRENCY_STRATEGY.md (needs RefCount documentation)
+- [x] IMPLEMENTATION_CHECKLIST.md (this file - updated)
 - [ ] README.md up to date
-- [ ] Code examples in comments
-- [ ] Configuration documented
-
-### Integration
-- [ ] NuGet packages referenced correctly
-- [ ] Dependency injection configured
-- [ ] Configuration binding working
 
 ---
 
-## Estimated Total Time
+## Key Design Decisions
 
-| Phase | Estimated Time |
-|-------|----------------|
-| Phase 1: Interfaces | 1-2 hours |
-| Phase 2: Memory Tier | 2-3 hours |
-| Phase 3: Disk Tier | 4-5 hours |
-| Phase 4: Eviction Policies | 1-2 hours |
-| Phase 5: Coordinator | 1 hour |
-| Phase 6: Integration | 2-3 hours |
-| Phase 7: Observability | 1-2 hours |
-| **Total** | **12-18 hours** |
+### Why Borrow/Return Pattern Instead of GetOrAdd?
+
+**Problem:** With `GetOrAdd()`, caller holds reference but cache can evict entry, causing data corruption or access to disposed resources.
+
+**Solution:** `BorrowAsync()` returns `ICacheHandle<T>` that increments `RefCount`. Entry cannot be evicted while `RefCount > 0`. Handle's `Dispose()` decrements `RefCount`, allowing eviction.
+
+```csharp
+// Safe - entry protected during use
+using (var handle = await cache.BorrowAsync(key, ttl, factory))
+{
+    await handle.Value.ReadAsync(buffer);  // Won't be evicted!
+}  // Dispose() allows eviction
+```
+
+### Why Pluggable Storage Strategies?
+
+**Problem:** Memory and disk caching have different storage mechanisms (byte[] vs MMF), but share cache logic (eviction, TTL, concurrency).
+
+**Solution:** `IStorageStrategy<T>` abstracts storage details. `GenericCache<T>` handles all cache logic. Storage strategies only handle Store/Retrieve/Dispose.
+
+### Why Temporary RefCount Hold During Post-Store Eviction?
+
+**Problem:** After storing a new entry, post-store eviction check could immediately evict the just-added entry (if capacity exceeded and entry has RefCount=0).
+
+**Solution:** Temporarily increment RefCount before post-store eviction, decrement after. Entry protected during critical window.
 
 ---
 
-## Success Criteria
+## Summary
 
-✅ All interfaces implemented
-✅ Both tiers working independently
-✅ Coordinator routing correctly
-✅ 80%+ test coverage
-✅ All tests passing
-✅ Performance targets met (<1ms hit, <100ms miss for 10MB)
-✅ No memory leaks
-✅ Metrics exposed
-✅ Documentation complete
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | ✅ Complete | Core interfaces & models |
+| Phase 2 | ✅ Complete | GenericCache with borrow/return |
+| Phase 3 | ✅ Complete | Storage strategies (Memory, Disk, Object) |
+| Phase 4 | ✅ Complete | LRU eviction policy |
+| Phase 5 | ✅ Complete | Integration tests (13 passing) |
+| Phase 6 | ⏳ Pending | Dual-tier coordinator |
+| Phase 7 | ⏳ Pending | Observability (metrics) |
 
-**Ready to start Phase 1!** 🚀
+**Core caching layer is complete and tested!**

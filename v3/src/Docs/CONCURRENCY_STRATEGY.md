@@ -7,13 +7,14 @@
 
 ## TL;DR
 
-Three-layer locking strategy maximizes concurrency while preventing thundering herd:
+Four-layer strategy maximizes concurrency while preventing thundering herd and data corruption:
 
 1. **Layer 1** (Lock-free): Cache hits = < 100ns, zero contention
 2. **Layer 2** (Per-key): Prevents duplicate materialization, different keys don't block
 3. **Layer 3** (Eviction): Only when cache full, doesn't block reads
+4. **Layer 4** (RefCount): Borrowed entries protected from eviction during use
 
-**Result:** 10 threads requesting same file = 1 materialization (not 10!)
+**Result:** 10 threads requesting same file = 1 materialization (not 10!), and entries are never evicted while in use.
 
 ---
 
@@ -343,6 +344,124 @@ public async Task DifferentKeys_RunInParallel()
 
 ---
 
+## Layer 4: Reference Counting (EVICTION PROTECTION)
+
+The borrow/return pattern uses reference counting to protect entries from eviction during use.
+
+### The Problem
+
+```
+Thread 1: BorrowAsync("file.zip") → Gets handle, starts reading
+Thread 2: BorrowAsync("large.zip") → Triggers eviction (capacity exceeded)
+Thread 2: Evicts "file.zip" (Thread 1 still reading!)
+Thread 1: 💥 Access violation / corrupted data
+```
+
+### The Solution: RefCount
+
+```csharp
+// Each entry has a thread-safe reference count
+public sealed class CacheEntry
+{
+    private int _refCount;
+
+    public int RefCount => Volatile.Read(ref _refCount);
+    public void IncrementRefCount() => Interlocked.Increment(ref _refCount);
+    public void DecrementRefCount() => Interlocked.Decrement(ref _refCount);
+}
+
+// BorrowAsync increments RefCount before returning handle
+public async Task<ICacheHandle<T>> BorrowAsync(...)
+{
+    if (_cache.TryGetValue(key, out var entry) && !IsExpired(entry))
+    {
+        entry.IncrementRefCount();  // PROTECT from eviction
+        return new CacheHandle<T>(entry, value, Return);
+    }
+    // ...
+}
+
+// Handle.Dispose() decrements RefCount
+private void Return(CacheEntry entry)
+{
+    entry.DecrementRefCount();  // ALLOW eviction
+}
+
+// Eviction ONLY considers entries with RefCount = 0
+private Task EvictIfNeededAsync(long neededBytes)
+{
+    // Only evict unborrowed entries
+    var evictableEntries = _cache.Values
+        .Where(e => e.RefCount == 0)  // Critical filter!
+        .Cast<ICacheEntry>()
+        .ToList();
+
+    // ...
+}
+```
+
+### Safe Materialization: Temporary RefCount Hold
+
+After storing a new entry, post-store eviction could immediately evict it before the caller gets a chance to borrow. Solution: temporarily hold RefCount during the critical window.
+
+```csharp
+private async Task<CacheEntry> MaterializeAndCacheAsync(...)
+{
+    var entry = new CacheEntry(...);
+
+    // Temporarily protect entry during post-store eviction check
+    entry.IncrementRefCount();  // RefCount = 1
+
+    _cache[cacheKey] = entry;
+    Interlocked.Add(ref _currentSizeBytes, stored.SizeBytes);
+
+    // Post-store eviction check (entry protected with RefCount = 1)
+    if (Interlocked.Read(ref _currentSizeBytes) > _capacityBytes)
+    {
+        await EvictIfNeededAsync(neededBytes: 0);
+    }
+
+    // Release temporary hold - caller will increment when borrowing
+    entry.DecrementRefCount();  // RefCount = 0
+
+    return entry;
+}
+```
+
+### Usage Pattern
+
+```csharp
+// Safe usage - entry protected during entire using block
+using (var handle = await cache.BorrowAsync(key, ttl, factory))
+{
+    // RefCount = 1 (or higher if other borrowers)
+    var stream = handle.Value;
+    await stream.ReadAsync(buffer);  // Won't be evicted!
+    await stream.ReadAsync(buffer);  // Still safe!
+}  // Dispose() → RefCount decremented → eviction allowed
+```
+
+### Soft Capacity Design
+
+When all entries are borrowed (RefCount > 0), eviction is impossible. The cache allows temporary capacity overage:
+
+```csharp
+if (evictableEntries.Count == 0)
+{
+    _logger?.LogWarning(
+        "All {Count} entries are borrowed, cannot evict. Allowing soft capacity overage.",
+        _cache.Count);
+    return;  // Allow overage, will converge when entries returned
+}
+```
+
+This is acceptable because:
+1. Overage is bounded by concurrent operations
+2. Cache converges back to capacity when handles are disposed
+3. Better than blocking or throwing exceptions
+
+---
+
 ## Summary
 
 ### Key Principles
@@ -351,6 +470,7 @@ public async Task DifferentKeys_RunInParallel()
 2. **Per-key locks** - Only threads requesting same key wait for each other
 3. **Parallel materialization** - Different keys materialize in parallel
 4. **Separate eviction** - Eviction doesn't block reads or materializations
+5. **Reference counting** - Borrowed entries are protected from eviction
 
 ### Performance Wins
 
@@ -359,6 +479,7 @@ public async Task DifferentKeys_RunInParallel()
 | 10 threads, same file | 1 materialization, serial | 1 materialization, shared | Same work, instant for 9 threads |
 | 10 threads, different files | 10 materializations, serial | 10 materializations, parallel | 10x throughput |
 | Cache hit latency | Lock overhead (µs) | Lock-free (ns) | 1000x faster |
+| Entry in use during eviction | Data corruption / crash | Entry protected | 100% safe |
 
 ### Critical Success Factors
 
@@ -367,5 +488,7 @@ public async Task DifferentKeys_RunInParallel()
 ✅ `LazyThreadSafetyMode.ExecutionAndPublication` for thread-safety
 ✅ Separate eviction lock (doesn't block reads)
 ✅ Double-check pattern (minimize lock time)
+✅ `RefCount` for eviction protection (borrow/return pattern)
+✅ Temporary RefCount hold during post-store eviction
 
 **This concurrency strategy is essential for high-performance caching in multi-threaded scenarios.**

@@ -71,7 +71,9 @@
       "WebSearch",
       "ReadFile",
       "WriteFile",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "mcp__github__get_me",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

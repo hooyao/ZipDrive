@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project is currently in active development, focusing on implementing a robust dual-tier caching system with pluggable eviction policies.
+**ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer implemented and tested**.
 
 **Key Difference from V1**: V3 uses clean architecture with strict separation of concerns, async/await throughout, and modern .NET patterns. The caching layer is the core component that solves the fundamental mismatch between ZIP's sequential access and Windows file system's random access requirements.
+
+**Current Status**: Core caching layer complete with 13 passing integration tests. DokanNet integration pending.
 
 ## Technology Stack
 
@@ -148,9 +150,11 @@ ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict depe
 
 This is the **most important** subsystem. It solves the core problem: ZIP provides sequential-only access (compressed streams), but Windows file system requires random access at arbitrary offsets.
 
-**Architecture**: Dual-tier caching with unified eviction policy
-- **Memory Tier** (files < 50MB): `ConcurrentDictionary` + `byte[]` storage
-- **Disk Tier** (files ≥ 50MB): `MemoryMappedFile` backed by temp files
+**Architecture**: Generic cache with pluggable storage strategies and borrow/return pattern
+- **GenericCache<T>**: Single cache implementation with reference counting
+- **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
+- **DiskStorageStrategy**: `MemoryMappedFile` backed by temp files for large files (≥ 50MB)
+- **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
 
 **Why Custom Cache (not built-in MemoryCache)?**
 - Built-in `MemoryCache` lacks pluggable eviction policies
@@ -158,16 +162,24 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - No control over which entries get evicted
 - We need deterministic LRU/LFU/Size-First strategies
 
-**Three-Layer Concurrency Strategy** (prevents thundering herd):
+**Borrow/Return Pattern with Reference Counting**:
+- `BorrowAsync()` returns `ICacheHandle<T>` that increments `RefCount`
+- Entries with `RefCount > 0` are protected from eviction
+- `Dispose()` on handle decrements `RefCount`, allowing eviction
+- Prevents data corruption when reading while eviction occurs
+
+**Four-Layer Concurrency Strategy** (prevents thundering herd + data corruption):
 1. **Layer 1 (Lock-free)**: `ConcurrentDictionary.TryGetValue` for cache hits (< 100ns, zero contention)
 2. **Layer 2 (Per-key)**: `Lazy<Task<T>>` prevents duplicate materialization of same file
 3. **Layer 3 (Eviction)**: Global lock only when capacity exceeded (infrequent)
+4. **Layer 4 (RefCount)**: Borrowed entries protected from eviction during use
 
 **Key Features**:
 - TTL-based expiration (default: 30 minutes)
 - Size-based capacity limits (2GB memory + 10GB disk)
 - Async cleanup (< 1ms eviction latency via mark-for-deletion)
 - Pluggable `IEvictionPolicy` (Strategy pattern)
+- `Clear()` and `ClearAsync()` for cleanup/shutdown
 
 **Documentation**: See `src/Docs/`:
 - [`CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md) - Comprehensive design (1500+ lines)
@@ -230,10 +242,10 @@ Command-line interface entry point (currently placeholder).
 | Pattern | Location | Purpose |
 |---------|----------|---------|
 | **Clean Architecture** | Solution structure | Dependency inversion, testability |
-| **Pluggable Strategy** | `IArchiveProvider`, `IEvictionPolicy` | Format extensibility, eviction algorithms |
-| **Dual-Tier Caching** | `DualTierFileCache` | Memory vs disk trade-off |
+| **Pluggable Strategy** | `IStorageStrategy<T>`, `IEvictionPolicy` | Storage and eviction extensibility |
+| **Borrow/Return (RAII)** | `GenericCache<T>`, `ICacheHandle<T>` | Reference counting, eviction protection |
 | **Lazy Materialization** | `Lazy<Task<T>>` | Thundering herd prevention |
-| **Async Cleanup** | `DiskTierCache` | Non-blocking eviction |
+| **Async Cleanup** | `DiskStorageStrategy` | Non-blocking eviction |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 
 ## Critical Concurrency Rules
@@ -245,6 +257,8 @@ When working with the caching layer:
 3. **Different keys must not block each other** - Parallel materialization is critical
 4. **Eviction must not block reads** - Use separate eviction lock
 5. **Always use TimeProvider for TTL** - Enables deterministic testing with `FakeTimeProvider`
+6. **Borrow/Return pattern is mandatory** - Always dispose `ICacheHandle<T>` to allow eviction
+7. **Entries with RefCount > 0 are protected** - Never evict borrowed entries
 
 ## Testing Strategy
 
@@ -333,28 +347,31 @@ When working with the caching layer:
 ### Why .NET 10 target?
 ⚠️ **Note**: `global.json` currently specifies .NET 10.0.100 (preview). For production deployment, consider targeting .NET 8 LTS instead.
 
-## Implementation Roadmap (Active Task: Caching)
+## Implementation Roadmap
 
 Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) for granular steps.
 
-1. **Phase 1 (Interfaces)**: `IFileCache`, `IEvictionPolicy`, `CacheOptions`
-2. **Phase 2 (Memory Tier)**: `MemoryTierCache` with `ConcurrentDictionary` and `Lazy<Task<T>>`
-3. **Phase 3 (Disk Tier)**: `DiskTierCache` with `MemoryMappedFile` and async cleanup
-4. **Phase 4 (Policies)**: Implement `LruEvictionPolicy`
-5. **Phase 5 (Coordinator)**: `DualTierFileCache` to route based on file size
-6. **Phase 6 (Integration)**: Verify sequential-to-random conversion
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 (Interfaces) | ✅ Complete | `ICache<T>`, `ICacheHandle<T>`, `IStorageStrategy<T>`, `IEvictionPolicy` |
+| Phase 2 (GenericCache) | ✅ Complete | Borrow/return pattern, reference counting, four-layer concurrency |
+| Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `DiskStorageStrategy`, `ObjectStorageStrategy<T>` |
+| Phase 4 (Eviction) | ✅ Complete | `LruEvictionPolicy` |
+| Phase 5 (Tests) | ✅ Complete | 13 integration tests passing |
+| Phase 6 (Coordinator) | ⏳ Pending | Dual-tier routing based on file size |
+| Phase 7 (Observability) | ⏳ Pending | Metrics, health checks |
 
 ## Known Limitations / Future Work
 
 - [ ] Mount/Unmount implementation (DokanNet integration)
 - [ ] CLI argument parsing and hosted service
+- [ ] Dual-tier coordinator (automatic memory/disk routing)
 - [ ] TAR/7Z format providers (extensibility is designed in)
 - [ ] Health checks and metrics endpoints
 - [ ] Password-protected ZIP support (ZipCrypto, AES)
 - [ ] Write support (currently read-only)
 - [ ] ZIP64 support (files > 4GB, archives > 65535 entries)
 - [ ] LZMA compression support
-- [ ] Warm tier caching (three-tier strategy)
 
 ## Code Style Conventions
 
@@ -388,10 +405,10 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ## Success Criteria
 
 V3 is considered complete when:
-- ✅ Caching layer fully implemented with 80%+ test coverage
-- ✅ ZIP provider implemented and tested
-- ✅ DokanNet adapter functional (mount/unmount works)
-- ✅ CLI accepts arguments and mounts drives
-- ✅ All performance targets met
-- ✅ No memory leaks (validated with 24hr soak test)
-- ✅ Comprehensive documentation written
+- [x] Caching layer fully implemented with 80%+ test coverage
+- [ ] ZIP provider implemented and tested
+- [ ] DokanNet adapter functional (mount/unmount works)
+- [ ] CLI accepts arguments and mounts drives
+- [ ] All performance targets met
+- [ ] No memory leaks (validated with 24hr soak test)
+- [x] Comprehensive documentation written

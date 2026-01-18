@@ -18,7 +18,7 @@ public interface IEvictionPolicy
     /// Selects cache entries to evict to free up the required space.
     /// </summary>
     /// <param name="entries">
-    /// All non-expired cache entries available for eviction.
+    /// All non-expired cache entries available for eviction (only entries with RefCount = 0).
     /// </param>
     /// <param name="requiredBytes">
     /// The number of bytes needed for a new entry.
