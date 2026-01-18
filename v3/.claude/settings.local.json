@@ -73,7 +73,8 @@
       "WriteFile",
       "Bash(git config:*)",
       "mcp__github__get_me",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
