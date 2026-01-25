@@ -19,7 +19,10 @@
 - `DiskStorageStrategy` → MemoryMappedFile for large files
 - `ObjectStorageStrategy<T>` → any object (ZIP structure, metadata)
 
-**Related Document**: This document describes the **File Content Cache** (decompressed file data). For the **ZIP Structure Cache** (parsed Central Directory metadata), see [`ZIP_STRUCTURE_CACHE_DESIGN.md`](ZIP_STRUCTURE_CACHE_DESIGN.md).
+**Related Documents**:
+- This document describes the **File Content Cache** (decompressed file data)
+- For the **ZIP Structure Cache** (parsed Central Directory metadata), see [`ZIP_STRUCTURE_CACHE_DESIGN.md`](ZIP_STRUCTURE_CACHE_DESIGN.md)
+- For **formal requirements and scenarios**, see [`openspec/specs/file-content-cache/spec.md`](../../openspec/specs/file-content-cache/spec.md)
 
 **Two-Level Caching Architecture**:
 ```

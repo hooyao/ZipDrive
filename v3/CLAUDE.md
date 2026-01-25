@@ -470,6 +470,11 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 
 ## Related Documentation
 
+### OpenSpec Specifications
+- **File Content Cache Spec**: [`openspec/specs/file-content-cache/spec.md`](openspec/specs/file-content-cache/spec.md) - Formal requirements and scenarios
+- **File Content Cache Design**: [`openspec/specs/file-content-cache/design.md`](openspec/specs/file-content-cache/design.md) - Architecture and decisions
+
+### Design Documents
 - **File Content Caching**: [`src/Docs/CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md)
 - **ZIP Structure Cache**: [`src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md`](src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md)
 - **Streaming ZIP Reader**: [`src/Docs/STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
