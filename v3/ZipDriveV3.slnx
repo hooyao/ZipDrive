@@ -11,5 +11,9 @@
     <Project Path="tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj" />
     <Project Path="tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj" />
     <Project Path="tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj" />
+    <Project Path="tests/ZipDriveV3.TestHelpers/ZipDriveV3.TestHelpers.csproj" />
+    <Project Path="tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj" />
+    <Project Path="tests/ZipDriveV3.Benchmarks/ZipDriveV3.Benchmarks.csproj" />
+    <Project Path="tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj" />
   </Folder>
 </Solution>

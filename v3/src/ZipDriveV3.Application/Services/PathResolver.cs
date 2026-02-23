@@ -4,39 +4,41 @@ using ZipDriveV3.Domain.Models;
 namespace ZipDriveV3.Application.Services;
 
 /// <summary>
-/// Resolves virtual drive paths to archive + internal path.
-/// Example: "\archive.zip\folder\file.txt" → ("archive.zip", "folder/file.txt")
+/// Normalizes raw virtual paths and resolves them against the archive trie.
 /// </summary>
 public sealed class PathResolver : IPathResolver
 {
-    public PathResolutionResult Resolve(string virtualPath)
+    private readonly IArchiveTrie _archiveTrie;
+
+    public PathResolver(IArchiveTrie archiveTrie)
     {
-        // Handle null, empty, or root path
-        if (string.IsNullOrWhiteSpace(virtualPath) || virtualPath == "\\")
-        {
-            return new PathResolutionResult(null, "", PathResolutionStatus.RootDirectory);
-        }
+        _archiveTrie = archiveTrie;
+    }
 
-        // Split path by backslash
-        string[] parts = virtualPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+    public ArchiveTrieResult Resolve(string? virtualPath)
+    {
+        string normalized = Normalize(virtualPath);
+        return _archiveTrie.Resolve(normalized);
+    }
 
-        if (parts.Length == 0)
-        {
-            return new PathResolutionResult(null, "", PathResolutionStatus.RootDirectory);
-        }
+    /// <summary>
+    /// Normalizes a raw path: convert backslashes, trim slashes, collapse doubles.
+    /// </summary>
+    internal static string Normalize(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "";
 
-        // First part is the archive key
-        string archiveKey = parts[0];
+        // Replace backslashes with forward slashes
+        string result = path.Replace('\\', '/');
 
-        if (parts.Length == 1)
-        {
-            // Just the archive name, no internal path
-            return new PathResolutionResult(archiveKey, "", PathResolutionStatus.ArchiveRoot);
-        }
+        // Trim leading and trailing slashes
+        result = result.Trim('/');
 
-        // Rest is the internal path (convert backslashes to forward slashes)
-        string internalPath = string.Join('/', parts.Skip(1));
+        // Collapse consecutive slashes
+        while (result.Contains("//"))
+            result = result.Replace("//", "/");
 
-        return new PathResolutionResult(archiveKey, internalPath, PathResolutionStatus.Success);
+        return result;
     }
 }

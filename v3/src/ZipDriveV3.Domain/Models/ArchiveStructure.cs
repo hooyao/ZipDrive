@@ -1,75 +1,35 @@
+using KTrie;
+
 namespace ZipDriveV3.Domain.Models;
 
 /// <summary>
 /// Cached structure of a single ZIP archive.
-/// Built by parsing the Central Directory once, then cached.
+/// Uses a trie for efficient path lookup and prefix-based directory listing.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This class represents the fully parsed metadata of a ZIP archive,
-/// including a flat dictionary for O(1) file lookups and a hierarchical
-/// tree for directory listings.
-/// </para>
-/// <para>
 /// <strong>Memory estimation:</strong> ~114 bytes per entry
-/// (ZipEntryInfo ~40 bytes + filename string ~50 bytes + dictionary overhead ~24 bytes).
-/// </para>
-/// <para>
-/// Example memory usage:
-/// <list type="bullet">
-/// <item>100 files: ~11 KB</item>
-/// <item>1,000 files: ~114 KB</item>
-/// <item>10,000 files: ~1.1 MB</item>
-/// <item>100,000 files: ~11 MB</item>
-/// </list>
+/// (ZipEntryInfo ~48 bytes + filename string ~50 bytes + trie node overhead ~16 bytes).
 /// </para>
 /// </remarks>
 public sealed class ArchiveStructure
 {
     /// <summary>
-    /// Unique key identifying this archive.
+    /// Unique key identifying this archive (virtual path, e.g., "games/doom.zip").
     /// </summary>
-    /// <remarks>
-    /// Typically the filename without path (e.g., "archive.zip").
-    /// Used as the virtual directory name under the mount point.
-    /// </remarks>
     public required string ArchiveKey { get; init; }
 
     /// <summary>
     /// Absolute filesystem path to the ZIP file.
     /// </summary>
-    /// <remarks>
-    /// Used to open FileStream for extraction operations.
-    /// </remarks>
     public required string AbsolutePath { get; init; }
 
     /// <summary>
-    /// Flat dictionary of all entries, keyed by internal path.
+    /// Trie of all entries, keyed by internal path.
+    /// Directories have trailing /, files do not.
+    /// Always uses Ordinal (case-sensitive) comparison per ZIP spec.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Path format:
-    /// <list type="bullet">
-    /// <item>Forward slashes as separators</item>
-    /// <item>No leading slash</item>
-    /// <item>No trailing slash for files</item>
-    /// <item>Example: "folder/subfolder/file.txt"</item>
-    /// </list>
-    /// </para>
-    /// <para>
-    /// Uses <see cref="StringComparer.OrdinalIgnoreCase"/> for Windows-style
-    /// case-insensitive path matching.
-    /// </para>
-    /// </remarks>
-    public required IReadOnlyDictionary<string, ZipEntryInfo> Entries { get; init; }
-
-    /// <summary>
-    /// Hierarchical tree structure for directory listing.
-    /// </summary>
-    /// <remarks>
-    /// Used by DokanNet's FindFiles operation to enumerate directory contents.
-    /// </remarks>
-    public required DirectoryNode RootDirectory { get; init; }
+    public required TrieDictionary<ZipEntryInfo> Entries { get; init; }
 
     /// <summary>
     /// Total number of entries in the archive.
@@ -79,17 +39,11 @@ public sealed class ArchiveStructure
     /// <summary>
     /// Timestamp when this structure was built.
     /// </summary>
-    /// <remarks>
-    /// Used for cache invalidation if ZIP file modification time is newer.
-    /// </remarks>
     public required DateTimeOffset BuiltAt { get; init; }
 
     /// <summary>
     /// True if this is a ZIP64 archive.
     /// </summary>
-    /// <remarks>
-    /// ZIP64 archives may contain files larger than 4GB or more than 65535 entries.
-    /// </remarks>
     public bool IsZip64 { get; init; }
 
     /// <summary>
@@ -105,9 +59,6 @@ public sealed class ArchiveStructure
     /// <summary>
     /// Estimated memory usage of this structure in bytes.
     /// </summary>
-    /// <remarks>
-    /// Used by the cache for capacity tracking and eviction decisions.
-    /// </remarks>
     public long EstimatedMemoryBytes { get; init; }
 
     /// <summary>
@@ -116,9 +67,12 @@ public sealed class ArchiveStructure
     public string? Comment { get; init; }
 
     /// <summary>
-    /// Looks up a file or directory entry by path.
+    /// Looks up a file or directory entry by exact path.
     /// </summary>
-    /// <param name="internalPath">Path within the archive (forward slashes, no leading slash).</param>
+    /// <param name="internalPath">
+    /// Path within the archive. Files have no trailing slash.
+    /// Directories must include trailing / for exact match.
+    /// </param>
     /// <returns>The entry info if found, or null if not found.</returns>
     public ZipEntryInfo? GetEntry(string internalPath)
     {
@@ -126,25 +80,56 @@ public sealed class ArchiveStructure
     }
 
     /// <summary>
-    /// Gets the directory node for a given path.
+    /// Checks if a directory exists in the archive.
+    /// Accepts paths with or without trailing slash.
     /// </summary>
-    /// <param name="directoryPath">Path to the directory (empty string for root).</param>
-    /// <returns>The directory node if found, or null if not found.</returns>
-    public DirectoryNode? GetDirectory(string directoryPath)
+    public bool DirectoryExists(string dirPath)
     {
-        if (string.IsNullOrEmpty(directoryPath))
-            return RootDirectory;
+        string key = dirPath.EndsWith('/') ? dirPath : dirPath + "/";
+        return Entries.TryGetValue(key, out ZipEntryInfo entry) && entry.IsDirectory;
+    }
 
-        string[] parts = directoryPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        DirectoryNode current = RootDirectory;
+    /// <summary>
+    /// Lists direct children of a directory using trie prefix enumeration.
+    /// </summary>
+    /// <param name="dirPath">Directory path (empty string for root). Trailing slash optional.</param>
+    /// <returns>Direct children as (Name, ZipEntryInfo) tuples.</returns>
+    public IEnumerable<(string Name, ZipEntryInfo Entry)> ListDirectory(string dirPath)
+    {
+        // Normalize: ensure trailing / for non-root
+        string prefix = string.IsNullOrEmpty(dirPath)
+            ? ""
+            : (dirPath.EndsWith('/') ? dirPath : dirPath + "/");
 
-        foreach (string part in parts)
+        // KTrie doesn't support empty prefix in EnumerateByPrefix, so enumerate all for root
+        IEnumerable<KeyValuePair<string, ZipEntryInfo>> source =
+            string.IsNullOrEmpty(prefix) ? Entries : Entries.EnumerateByPrefix(prefix);
+
+        foreach (KeyValuePair<string, ZipEntryInfo> kvp in source)
         {
-            if (!current.Subdirectories.TryGetValue(part, out DirectoryNode? subdir))
-                return null;
-            current = subdir;
-        }
+            // Skip the directory entry itself
+            if (kvp.Key == prefix)
+                continue;
 
-        return current;
+            // Get remaining path after prefix
+            ReadOnlySpan<char> remaining = kvp.Key.AsSpan(prefix.Length);
+
+            // Check if direct child:
+            // - File: no '/' in remaining
+            // - Directory: exactly one '/' at the end
+            int slashIndex = remaining.IndexOf('/');
+
+            if (slashIndex == -1)
+            {
+                // File (no slash)
+                yield return (remaining.ToString(), kvp.Value);
+            }
+            else if (slashIndex == remaining.Length - 1)
+            {
+                // Directory (trailing slash only) - return name without slash
+                yield return (remaining[..slashIndex].ToString(), kvp.Value);
+            }
+            // else: nested entry, skip
+        }
     }
 }

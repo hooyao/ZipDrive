@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="FluentAssertions" Version="7.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
@@ -22,6 +23,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ZipDriveV3.Domain\ZipDriveV3.Domain.csproj" />
     <ProjectReference Include="..\..\src\ZipDriveV3.Application\ZipDriveV3.Application.csproj" />
+    <ProjectReference Include="..\..\src\ZipDriveV3.Infrastructure.Caching\ZipDriveV3.Infrastructure.Caching.csproj" />
+    <ProjectReference Include="..\..\src\ZipDriveV3.Infrastructure.Archives.Zip\ZipDriveV3.Infrastructure.Archives.Zip.csproj" />
   </ItemGroup>
 
 </Project>
