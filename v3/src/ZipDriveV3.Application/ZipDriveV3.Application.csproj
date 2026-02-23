@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ZipDriveV3.Domain\ZipDriveV3.Domain.csproj" />
+    <ProjectReference Include="..\ZipDriveV3.Infrastructure.Caching\ZipDriveV3.Infrastructure.Caching.csproj" />
+    <ProjectReference Include="..\ZipDriveV3.Infrastructure.Archives.Zip\ZipDriveV3.Infrastructure.Archives.Zip.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -14,5 +16,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZipDriveV3.Domain.Tests" />
+  </ItemGroup>
 
 </Project>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using KTrie;
 using Microsoft.Extensions.Logging;
 using ZipDriveV3.Domain.Abstractions;
 using ZipDriveV3.Domain.Models;
@@ -10,33 +11,18 @@ namespace ZipDriveV3.Infrastructure.Caching;
 /// <summary>
 /// Caches parsed ZIP archive structures using GenericCache with ObjectStorageStrategy.
 /// Uses <see cref="IZipReader.StreamCentralDirectoryAsync"/> for memory-efficient parsing.
+/// Builds TrieDictionary-based ArchiveStructure with parent directory synthesis.
 /// </summary>
-/// <remarks>
-/// <para>
-/// <strong>Key Features:</strong>
-/// <list type="bullet">
-/// <item>Streaming Central Directory parsing (no bulk allocation)</item>
-/// <item>Thundering herd prevention via GenericCache's Lazy&lt;Task&gt;</item>
-/// <item>LRU eviction with TTL-based expiration</item>
-/// <item>Memory estimation for capacity tracking</item>
-/// </list>
-/// </para>
-/// <para>
-/// <strong>Memory Estimation:</strong>
-/// ~114 bytes per ZIP entry (struct + filename string + dictionary overhead).
-/// </para>
-/// </remarks>
 public sealed class ArchiveStructureCache : IArchiveStructureCache
 {
     /// <summary>
     /// Estimated memory overhead per ZIP entry in bytes.
-    /// Includes: ZipEntryInfo struct (~40) + filename string (~50 avg) + dictionary overhead (~24).
+    /// Includes: ZipEntryInfo struct (~48) + filename string (~50 avg) + trie node overhead (~16).
     /// </summary>
     private const long BytesPerEntry = 114;
 
     /// <summary>
     /// Base overhead per ArchiveStructure object in bytes.
-    /// Includes: ArchiveStructure object + AbsolutePath string + ArchiveKey string + DirectoryNode tree overhead.
     /// </summary>
     private const long BaseStructureOverhead = 1024;
 
@@ -48,14 +34,6 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
 
     private long _missCount;
 
-    /// <summary>
-    /// Creates a new ArchiveStructureCache.
-    /// </summary>
-    /// <param name="cache">Generic cache for storing ArchiveStructure objects.</param>
-    /// <param name="zipReaderFactory">Factory that creates IZipReader from file path.</param>
-    /// <param name="timeProvider">Optional time provider for testing.</param>
-    /// <param name="defaultTtl">Default TTL for cached structures (default: 30 minutes).</param>
-    /// <param name="logger">Optional logger.</param>
     public ArchiveStructureCache(
         ICache<ArchiveStructure> cache,
         Func<string, IZipReader> zipReaderFactory,
@@ -85,28 +63,32 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
 
         _logger?.LogDebug("GetOrBuildAsync: {ArchiveKey} at {Path}", archiveKey, absolutePath);
 
-        // Use GenericCache's borrow pattern - it handles thundering herd prevention
         ICacheHandle<ArchiveStructure> handle = await _cache.BorrowAsync(
             archiveKey,
             _defaultTtl,
             ct => BuildStructureAsync(archiveKey, absolutePath, ct),
             cancellationToken).ConfigureAwait(false);
 
-        // Track our own hit/miss counts (cache already tracks hits/misses internally)
-        // We can infer from cache's hit rate, but let's track explicitly for interface compliance
+        try
+        {
+            ArchiveStructure structure = handle.Value;
 
-        ArchiveStructure structure = handle.Value;
+            _logger?.LogDebug(
+                "Returning structure for {ArchiveKey}: {EntryCount} entries",
+                archiveKey,
+                structure.EntryCount);
 
-        _logger?.LogDebug(
-            "Returning structure for {ArchiveKey}: {EntryCount} entries",
-            archiveKey,
-            structure.EntryCount);
-
-        return structure;
+            return structure;
+        }
+        finally
+        {
+            handle.Dispose();
+        }
     }
 
     /// <summary>
-    /// Builds the archive structure by streaming the Central Directory.
+    /// Builds the archive structure by streaming the Central Directory into a trie.
+    /// Synthesizes parent directory entries for paths missing explicit directory entries.
     /// </summary>
     private async Task<CacheFactoryResult<ArchiveStructure>> BuildStructureAsync(
         string archiveKey,
@@ -116,9 +98,9 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         _logger?.LogInformation("Building structure for {ArchiveKey} at {Path}", archiveKey, absolutePath);
         Interlocked.Increment(ref _missCount);
 
-        Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
-        IZipReader reader = _zipReaderFactory(absolutePath);
+        await using IZipReader reader = _zipReaderFactory(absolutePath);
 
         // Phase 1: Read EOCD
         ZipEocd eocd = await reader.ReadEocdAsync(cancellationToken).ConfigureAwait(false);
@@ -127,36 +109,38 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             "EOCD: {EntryCount} entries, CD at {Offset}, size {Size}, ZIP64={IsZip64}",
             eocd.EntryCount, eocd.CentralDirectoryOffset, eocd.CentralDirectorySize, eocd.IsZip64);
 
-        // Phase 2: Pre-allocate collections with reasonable initial capacity
-        int initialCapacity = (int)Math.Min(eocd.EntryCount, 100_000);
-        Dictionary<string, ZipEntryInfo> entries = new Dictionary<string, ZipEntryInfo>(initialCapacity, StringComparer.OrdinalIgnoreCase);
-        DirectoryNode rootDirectory = new DirectoryNode { Name = "", FullPath = "" };
+        // Phase 2: Build trie from Central Directory entries
+        TrieDictionary<ZipEntryInfo> trie = new();
+        HashSet<string> directoriesSeen = new(StringComparer.Ordinal);
 
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
         int entryCount = 0;
 
-        // Phase 3: Stream Central Directory entries one-by-one
         await foreach (ZipCentralDirectoryEntry cdEntry in reader.StreamCentralDirectoryAsync(eocd, cancellationToken)
             .ConfigureAwait(false))
         {
-            // Convert to domain model
             ZipEntryInfo entryInfo = ConvertToZipEntryInfo(cdEntry);
-
-            // Normalize path
             string normalizedPath = NormalizePath(cdEntry.FileName);
 
-            // Add to flat dictionary
-            entries[normalizedPath] = entryInfo;
+            if (entryInfo.IsDirectory)
+            {
+                string dirPath = normalizedPath.EndsWith('/') ? normalizedPath : normalizedPath + "/";
+                trie[dirPath] = entryInfo;
+                directoriesSeen.Add(dirPath);
+            }
+            else
+            {
+                string filePath = normalizedPath.TrimEnd('/');
+                trie[filePath] = entryInfo;
+                totalUncompressedSize += cdEntry.UncompressedSize;
+                totalCompressedSize += cdEntry.CompressedSize;
 
-            // Build directory tree incrementally
-            AddToDirectoryTree(rootDirectory, normalizedPath, cdEntry.FileName, entryInfo);
+                EnsureParentDirectories(trie, filePath, directoriesSeen);
+            }
 
-            totalUncompressedSize += cdEntry.UncompressedSize;
-            totalCompressedSize += cdEntry.CompressedSize;
             entryCount++;
 
-            // Log progress for large archives
             if (entryCount % 10_000 == 0)
             {
                 _logger?.LogDebug("Parsed {Count} entries...", entryCount);
@@ -165,15 +149,13 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
 
         stopwatch.Stop();
 
-        // Calculate estimated memory usage
-        long estimatedMemory = BaseStructureOverhead + (entries.Count * BytesPerEntry);
+        long estimatedMemory = BaseStructureOverhead + (trie.Count * BytesPerEntry);
 
         ArchiveStructure structure = new ArchiveStructure
         {
             ArchiveKey = archiveKey,
             AbsolutePath = absolutePath,
-            Entries = entries,
-            RootDirectory = rootDirectory,
+            Entries = trie,
             BuiltAt = _timeProvider.GetUtcNow(),
             IsZip64 = eocd.IsZip64,
             TotalUncompressedSize = totalUncompressedSize,
@@ -186,7 +168,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             "Built structure for {ArchiveKey}: {EntryCount} entries in {ElapsedMs}ms, " +
             "estimated {MemoryMb:F2} MB",
             archiveKey,
-            entries.Count,
+            trie.Count,
             stopwatch.ElapsedMilliseconds,
             estimatedMemory / (1024.0 * 1024.0));
 
@@ -196,7 +178,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             SizeBytes = estimatedMemory,
             Metadata = new Dictionary<string, object>
             {
-                ["EntryCount"] = entries.Count,
+                ["EntryCount"] = trie.Count,
                 ["IsZip64"] = eocd.IsZip64,
                 ["TotalUncompressedSize"] = totalUncompressedSize,
                 ["BuildTimeMs"] = stopwatch.ElapsedMilliseconds
@@ -205,8 +187,41 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     }
 
     /// <summary>
-    /// Converts a Central Directory entry to the domain ZipEntryInfo.
+    /// Ensures all parent directories exist for a file path.
+    /// Creates synthetic directory entries for any missing parent segments.
     /// </summary>
+    private static void EnsureParentDirectories(
+        TrieDictionary<ZipEntryInfo> trie,
+        string filePath,
+        HashSet<string> seen)
+    {
+        int lastSlash = filePath.LastIndexOf('/');
+        while (lastSlash > 0)
+        {
+            string dirPath = filePath[..(lastSlash + 1)]; // Include trailing /
+
+            if (!seen.Add(dirPath))
+                break; // Already processed this and all parents
+
+            if (!trie.ContainsKey(dirPath))
+            {
+                trie[dirPath] = new ZipEntryInfo
+                {
+                    LocalHeaderOffset = 0,
+                    CompressedSize = 0,
+                    UncompressedSize = 0,
+                    CompressionMethod = 0,
+                    IsDirectory = true,
+                    LastModified = DateTime.UtcNow,
+                    Attributes = FileAttributes.Directory,
+                    Crc32 = 0
+                };
+            }
+
+            lastSlash = filePath.LastIndexOf('/', lastSlash - 1);
+        }
+    }
+
     private static ZipEntryInfo ConvertToZipEntryInfo(ZipCentralDirectoryEntry cdEntry)
     {
         return new ZipEntryInfo
@@ -223,23 +238,14 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         };
     }
 
-    /// <summary>
-    /// Converts ZIP external attributes to FileAttributes.
-    /// </summary>
     private static FileAttributes ConvertAttributes(ZipCentralDirectoryEntry entry)
     {
         if (entry.IsDirectory)
             return FileAttributes.Directory;
 
-        // Check if Unix (high byte of VersionMadeBy is 3)
         if (entry.HostOs == ZipConstants.OsUnix)
-        {
-            // Unix: permissions are in high 16 bits of external attributes
-            // For now, just return Normal for files
             return FileAttributes.Normal;
-        }
 
-        // DOS/Windows: low byte contains DOS attributes
         uint dosAttrs = entry.ExternalFileAttributes & 0xFF;
         FileAttributes attrs = FileAttributes.Normal;
 
@@ -255,57 +261,14 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         return attrs;
     }
 
-    /// <summary>
-    /// Normalizes a ZIP path for consistent lookups.
-    /// </summary>
     private static string NormalizePath(string fileName)
     {
-        // Replace backslashes with forward slashes
         string normalized = fileName.Replace('\\', '/');
 
-        // Remove leading slash if present
         if (normalized.StartsWith('/'))
             normalized = normalized[1..];
 
-        // Remove trailing slash for files (keep for directories to distinguish)
-        // Actually, for dictionary lookups we want consistent paths, so remove trailing slash
-        if (normalized.EndsWith('/') && normalized.Length > 1)
-            normalized = normalized[..^1];
-
         return normalized;
-    }
-
-    /// <summary>
-    /// Adds an entry to the directory tree, creating parent directories as needed.
-    /// </summary>
-    private static void AddToDirectoryTree(
-        DirectoryNode root,
-        string normalizedPath,
-        string originalPath,
-        ZipEntryInfo entry)
-    {
-        string[] parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
-            return;
-
-        DirectoryNode current = root;
-
-        for (int i = 0; i < parts.Length; i++)
-        {
-            string part = parts[i];
-            bool isLastPart = i == parts.Length - 1;
-
-            if (isLastPart && !entry.IsDirectory)
-            {
-                // This is a file - add to current directory
-                current.AddFile(part, entry);
-            }
-            else
-            {
-                // This is a directory (explicit or implicit parent) - ensure it exists
-                current = current.GetOrAddSubdirectory(part);
-            }
-        }
     }
 
     /// <inheritdoc />
@@ -313,9 +276,6 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(archiveKey);
 
-        // GenericCache doesn't expose direct removal by key
-        // We would need to add this capability to GenericCache
-        // For now, log a warning
         _logger?.LogWarning(
             "Invalidate called for {ArchiveKey} but direct removal is not supported. " +
             "Entry will expire based on TTL.",
@@ -358,18 +318,10 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     {
         get
         {
-            // Calculate from cache hit rate and our miss count
             double cacheHitRate = _cache.HitRate;
             long totalMisses = Interlocked.Read(ref _missCount);
 
-            // hits / (hits + misses) = hitRate
-            // hits = hitRate * (hits + misses)
-            // hits = hitRate * hits + hitRate * misses
-            // hits - hitRate * hits = hitRate * misses
-            // hits * (1 - hitRate) = hitRate * misses
-            // hits = hitRate * misses / (1 - hitRate)
-
-            if (Math.Abs(cacheHitRate - 1.0) < 0.0001) // Nearly 100% hit rate
+            if (Math.Abs(cacheHitRate - 1.0) < 0.0001)
                 return _cache.EntryCount > 0 ? long.MaxValue : 0;
 
             return (long)(cacheHitRate * totalMisses / (1 - cacheHitRate));
