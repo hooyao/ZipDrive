@@ -1,7 +1,7 @@
 # ZipDrive V3 - Implementation Checklist
 
 **Design Status:** ✅ Complete
-**Implementation Status:** ✅ Core Complete (Caching + ZIP Reader)
+**Implementation Status:** ✅ Core Complete (Caching + ZIP Reader + Dual-Tier + Observability)
 
 ---
 
@@ -233,34 +233,60 @@ The caching layer uses a **generic cache with pluggable storage strategies**:
 
 ---
 
-## Phase 6: Dual-Tier Coordinator ⏳ NOT STARTED
+## Phase 6: Dual-Tier Coordinator ✅ COMPLETE
 
-### 6.1 DualTierFileCache Class (Future)
+### 6.1 DualTierFileCache Class
 
-- [ ] Constructor: Create both memory and disk GenericCache instances
-- [ ] Route based on file size (< cutoff → memory, ≥ cutoff → disk)
-- [ ] Aggregate metrics from both caches
-- [ ] Implement `IFileCache` interface
+- [x] Constructor: Create both memory and disk GenericCache instances with named tiers
+- [x] Route based on file size via `BorrowAsync(key, ttl, sizeHintBytes, factory)` overload
+- [x] Aggregate properties from both caches (`CurrentSizeBytes`, `EntryCount`, `HitRate`, `BorrowedEntryCount`)
+- [x] Implement `ICache<Stream>` interface (transparent to VFS)
+- [x] `EvictExpired()` delegates to both tiers
+- [x] Unit tests: 6 tests (routing, aggregation, eviction, interface compliance)
 
-**Note:** Current implementation allows manual tier selection. Coordinator will automate routing.
+### 6.2 VFS Integration
+
+- [x] `ZipVirtualFileSystem.ReadFileAsync` passes size hint from `ZipEntryInfo.UncompressedSize`
+- [x] DI registration in `Program.cs` replaces single `GenericCache<Stream>` with `DualTierFileCache`
+
+**Phase 6 Checkpoint:** ✅ Dual-tier cache coordinator implemented and tested
 
 ---
 
-## Phase 7: Observability ⏳ NOT STARTED
+## Phase 7: Observability ✅ COMPLETE
 
-### 7.1 Metrics Integration
+### 7.1 Metrics Integration (System.Diagnostics.Metrics)
 
-- [ ] Add `System.Diagnostics.Metrics` support
-- [ ] Counter: `cache_hits_total`, `cache_misses_total`, `cache_evictions_total`
-- [ ] ObservableGauge: `cache_size_bytes`, `cache_entry_count`
-- [ ] Histogram: `cache_operation_duration_seconds`
+- [x] `CacheTelemetry.cs` — `Meter("ZipDriveV3.Caching")` with counters, histograms, observable gauges
+- [x] `ZipTelemetry.cs` — `Meter("ZipDriveV3.Zip")` with extraction duration and bytes extracted
+- [x] `DokanTelemetry.cs` — `Meter("ZipDriveV3.Dokan")` with read latency histogram
+- [x] `SizeBucketClassifier.cs` — Maps file sizes to 6 buckets (tiny→huge), 18 boundary tests
+- [x] `GenericCache<T>` emits `cache.hits`, `cache.misses`, `cache.evictions` counters with `tier` tag
+- [x] `GenericCache<T>` emits `cache.materialization.duration` histogram with `tier` and `size_bucket` tags
+- [x] Observable gauges: `cache.size_bytes`, `cache.entry_count`, `cache.utilization` per tier
+- [x] `GenericCache<T>` accepts `name` parameter for metric tier tagging
 
-### 7.2 Logging (Partially Complete)
+### 7.2 Tracing (System.Diagnostics.ActivitySource)
 
-- [x] Debug: Cache hits/misses
-- [x] Information: Materialization, eviction
-- [x] Warning: Capacity issues
-- [ ] Structured logging improvements
+- [x] `cache.borrow` span with `tier` and `result` (hit/miss) tags
+- [x] `cache.materialize` child span with `tier`, `size_bucket`, `size_bytes` tags
+- [x] `cache.evict` span with `tier`, `evicted_count`, `evicted_bytes` tags
+- [x] Zero OTel package dependencies in infrastructure projects
+
+### 7.3 Logging Improvements
+
+- [x] Materialization logged at Information with `{Tier}`, `{MaterializationMs}` properties
+- [x] Eviction promoted from Debug to Information with `{Key}`, `{SizeBytes}`, `{Tier}`, `{Reason}`
+- [x] Expired entry batch log includes `{Tier}` tag
+
+### 7.4 OpenTelemetry SDK (CLI Only)
+
+- [x] `OpenTelemetry.Extensions.Hosting`, `.Exporter.OpenTelemetryProtocol`, `.Instrumentation.Runtime`, `.Instrumentation.Process`
+- [x] `AddOpenTelemetry()` wiring in `Program.cs` (metrics + tracing + OTLP export)
+- [x] `appsettings.json` includes `"OpenTelemetry"` section with default endpoint `http://localhost:4317`
+- [x] Aspire Dashboard for local visualization
+
+**Phase 7 Checkpoint:** ✅ Full observability implemented with OpenTelemetry
 
 ---
 
@@ -421,8 +447,8 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives:
 | Storage strategies | 3 | ✅ Complete | - |
 | LRU eviction policy | 4 | ✅ Complete | - |
 | Caching integration tests | 5 | ✅ Complete | 42 |
-| Dual-tier coordinator | 6 | ⏳ Pending | - |
-| Observability | 7 | ⏳ Pending | - |
+| Dual-tier coordinator | 6 | ✅ Complete | 6 |
+| Observability | 7 | ✅ Complete | 18 |
 | **ZIP Reader** | | | |
 | ZIP format structures | 1 | ✅ Complete | - |
 | Domain models | 2 | ✅ Complete | 11 |

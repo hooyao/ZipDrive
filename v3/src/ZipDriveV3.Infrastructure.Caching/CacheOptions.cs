@@ -96,10 +96,10 @@ public class CacheOptions
     /// <summary>
     /// Gets the default TTL as a TimeSpan (computed property).
     /// </summary>
-    internal TimeSpan DefaultTtl => TimeSpan.FromMinutes(DefaultTtlMinutes);
+    public TimeSpan DefaultTtl => TimeSpan.FromMinutes(DefaultTtlMinutes);
 
     /// <summary>
     /// Gets the eviction check interval as a TimeSpan (computed property).
     /// </summary>
-    internal TimeSpan EvictionCheckInterval => TimeSpan.FromSeconds(EvictionCheckIntervalSeconds);
+    public TimeSpan EvictionCheckInterval => TimeSpan.FromSeconds(EvictionCheckIntervalSeconds);
 }

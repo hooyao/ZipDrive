@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer (42 tests) and streaming ZIP reader (15 tests) complete. DokanNet integration pending.
+**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, and DokanNet adapter implemented. 153 total tests passing.
 
 ## Development Workflow Requirements
 
@@ -30,7 +30,7 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 - **Language**: C# 13/14 (implied by .NET 10)
 - **SDK Version**: 10.0.100
 - **Project Structure**: Clean Architecture / Onion Architecture
-- **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`
+- **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`
 
 ## Prerequisites
 
@@ -164,11 +164,13 @@ ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict depe
 
 This is the **most important** subsystem. It solves the core problem: ZIP provides sequential-only access (compressed streams), but Windows file system requires random access at arbitrary offsets.
 
-**Architecture**: Generic cache with pluggable storage strategies and borrow/return pattern
-- **GenericCache<T>**: Single cache implementation with reference counting
+**Architecture**: Generic cache with pluggable storage strategies, borrow/return pattern, and dual-tier routing
+- **GenericCache<T>**: Single cache implementation with reference counting and `System.Diagnostics.Metrics` instrumentation
+- **DualTierFileCache**: Routes to memory or disk tier based on `CacheOptions.SmallFileCutoffMb` (default 50MB)
 - **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
 - **DiskStorageStrategy**: `MemoryMappedFile` backed by temp files for large files (≥ 50MB)
 - **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
+- **CacheTelemetry**: Static metrics (counters, histograms, observable gauges) and ActivitySource for tracing
 
 **Why Custom Cache (not built-in MemoryCache)?**
 - Built-in `MemoryCache` lacks pluggable eviction policies
@@ -277,11 +279,22 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives using
 
 #### **FileSystem (`src/ZipDriveV3.Infrastructure.FileSystem`)**
 
-DokanNet integration for Windows file system mounting (to be implemented).
+DokanNet integration for Windows file system mounting.
+
+**Key Components**:
+- `DokanFileSystemAdapter`: Implements `IDokanOperations2`, translates Dokan calls to `IVirtualFileSystem`
+- `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
+- `DokanTelemetry`: Static `Meter("ZipDriveV3.Dokan")` with read latency histogram
 
 ### Presentation Layer (`src/ZipDriveV3.Cli`)
 
-Command-line interface entry point (currently placeholder).
+Command-line interface entry point with OpenTelemetry SDK wiring.
+
+**Key Responsibilities**:
+- DI registration for all services (including `DualTierFileCache`)
+- OpenTelemetry SDK configuration (OTLP export to Aspire Dashboard)
+- Serilog structured logging
+- Configuration binding (`Mount`, `Cache`, `OpenTelemetry` sections)
 
 ## Key Design Patterns
 
@@ -292,6 +305,8 @@ Command-line interface entry point (currently placeholder).
 | **Borrow/Return (RAII)** | `GenericCache<T>`, `ICacheHandle<T>` | Reference counting, eviction protection |
 | **Lazy Materialization** | `Lazy<Task<T>>` | Thundering herd prevention |
 | **Async Cleanup** | `DiskStorageStrategy` | Non-blocking eviction |
+| **Dual-Tier Routing** | `DualTierFileCache` | Size-based memory/disk routing |
+| **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 
 ## Critical Concurrency Rules
@@ -345,6 +360,18 @@ When working with the caching layer:
 - High memory systems: Increase both memory capacity and cutoff
 - Fast SSD: Aggressive disk caching with larger `DiskCacheSizeMb`
 
+### OpenTelemetry (`appsettings.json` → "OpenTelemetry" section)
+
+```json
+{
+  "OpenTelemetry": {
+    "Endpoint": "http://localhost:4317"
+  }
+}
+```
+
+**Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
+
 ## Common Development Tasks
 
 ### Implementing a New Eviction Policy
@@ -364,10 +391,12 @@ When working with the caching layer:
 
 ### Debugging Cache Behavior
 
-1. Enable verbose logging in `appsettings.json`
-2. Check cache hit/miss metrics (exposed via `IFileCache.HitRate`)
-3. Monitor eviction events in logs
-4. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
+1. Start Aspire Dashboard for live metrics/traces: `docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`
+2. Check cache hit/miss metrics in dashboard (`cache.hits`, `cache.misses` counters by tier)
+3. Monitor materialization duration histogram (`cache.materialization.duration`) by size bucket
+4. Review eviction events in logs (now at Information level with `{Tier}` and `{Reason}` tags)
+5. Use `dotnet-counters monitor --counters ZipDriveV3.Caching` for quick CLI metrics
+6. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
 
 ## Important Architectural Decisions
 
@@ -406,8 +435,8 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `DiskStorageStrategy`, `ObjectStorageStrategy<T>` |
 | Phase 4 (Eviction) | ✅ Complete | `LruEvictionPolicy` |
 | Phase 5 (Tests) | ✅ Complete | 42 integration tests passing |
-| Phase 6 (Coordinator) | ⏳ Pending | Dual-tier routing based on file size |
-| Phase 7 (Observability) | ⏳ Pending | Metrics, health checks |
+| Phase 6 (Coordinator) | ✅ Complete | `DualTierFileCache` with size-hint routing (6 tests) |
+| Phase 7 (Observability) | ✅ Complete | OpenTelemetry metrics, tracing, Aspire Dashboard export |
 
 ### Streaming ZIP Reader
 
@@ -425,17 +454,20 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Component | Status | Description |
 |-----------|--------|-------------|
 | ZipArchiveProvider | ⏳ Pending | `IArchiveProvider` implementation |
-| DokanNet Adapter | ⏳ Pending | File system mounting |
-| CLI | ⏳ Pending | Command-line interface |
-| Multi-archive | ⏳ Pending | `IArchivePrefixTree` for multiple ZIPs |
+| DokanNet Adapter | ✅ Complete | `DokanFileSystemAdapter` + `DokanHostedService` |
+| CLI | ✅ Complete | OTel wiring, DualTierFileCache DI, config binding |
+| Multi-archive | ✅ Complete | `ArchiveTrie` + `ArchiveDiscovery` |
+| Observability | ✅ Complete | OpenTelemetry metrics/tracing, Aspire Dashboard |
+| Dual-tier Cache | ✅ Complete | `DualTierFileCache` with size-hint routing |
 
 ## Known Limitations / Future Work
 
-- [ ] Mount/Unmount implementation (DokanNet integration)
-- [ ] CLI argument parsing and hosted service
-- [ ] Dual-tier coordinator (automatic memory/disk routing)
+- [x] Mount/Unmount implementation (DokanNet integration) - **Implemented**
+- [x] CLI argument parsing and hosted service - **Implemented**
+- [x] Dual-tier coordinator (automatic memory/disk routing) - **Implemented**
+- [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard) - **Implemented**
 - [ ] TAR/7Z format providers (extensibility is designed in)
-- [ ] Health checks and metrics endpoints
+- [ ] Health checks endpoints
 - [ ] Password-protected ZIP support (ZipCrypto, AES)
 - [ ] Write support (currently read-only)
 - [x] ZIP64 support (files > 4GB, archives > 65535 entries) - **Implemented**
@@ -454,7 +486,9 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 
 ### OpenSpec Specifications
 - **File Content Cache Spec**: [`openspec/specs/file-content-cache/spec.md`](openspec/specs/file-content-cache/spec.md) - Formal requirements and scenarios
-- **File Content Cache Design**: [`openspec/specs/file-content-cache/design.md`](openspec/specs/file-content-cache/design.md) - Architecture and decisions
+- **Telemetry Spec**: [`openspec/specs/telemetry/spec.md`](openspec/specs/telemetry/spec.md) - Metrics, tracing, and observability requirements
+- **Dual-Tier Cache Spec**: [`openspec/specs/dual-tier-cache-coordinator/spec.md`](openspec/specs/dual-tier-cache-coordinator/spec.md) - Size-based routing requirements
+- **CLI Application Spec**: [`openspec/specs/cli-application/spec.md`](openspec/specs/cli-application/spec.md) - Host, OTel, and DI requirements
 
 ### Design Documents
 - **File Content Caching**: [`src/Docs/CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md)
@@ -478,10 +512,12 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ## Success Criteria
 
 V3 is considered complete when:
-- [x] Caching layer fully implemented with 80%+ test coverage (42 tests)
+- [x] Caching layer fully implemented with 80%+ test coverage (66 tests)
 - [x] ZIP reader implemented and tested (15 tests)
-- [ ] DokanNet adapter functional (mount/unmount works)
-- [ ] CLI accepts arguments and mounts drives
+- [x] DokanNet adapter functional (mount/unmount works)
+- [x] CLI accepts arguments and mounts drives
+- [x] Dual-tier cache coordinator implemented and tested (6 tests)
+- [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
 - [ ] All performance targets met
 - [ ] No memory leaks (validated with 24hr soak test)
 - [x] Comprehensive documentation written

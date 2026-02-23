@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
@@ -34,24 +35,26 @@ public class VfsTestFixture : IAsyncLifetime
         var archiveTrie = new ArchiveTrie(charComparer);
         ArchiveTrie = archiveTrie;
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
 
-        Func<string, IZipReader> readerFactory = path => new ZipReader(File.OpenRead(path));
+        var readerFactory = new ZipReaderFactory();
 
-        var structureCacheStorage = new ObjectStorageStrategy<ArchiveStructure>();
-        var structureCacheEviction = new LruEvictionPolicy();
-        var structureCacheGeneric = new GenericCache<ArchiveStructure>(
-            structureCacheStorage, structureCacheEviction, 256 * 1024 * 1024);
-        var structureCache = new ArchiveStructureCache(structureCacheGeneric, readerFactory);
+        var structureStore = new ArchiveStructureStore(
+            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var cacheOpts = Microsoft.Extensions.Options.Options.Create(
+            new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
+        var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
 
-        var fileCacheStorage = new MemoryStorageStrategy();
-        var fileCacheEviction = new LruEvictionPolicy();
-        var fileCache = new GenericCache<Stream>(
-            fileCacheStorage, fileCacheEviction, 256 * 1024 * 1024);
+        var fileCache = new DualTierFileCache(
+            cacheOpts,
+            new LruEvictionPolicy(), TimeProvider.System,
+            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
 
         var vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileCache,
-            discovery, pathResolver, readerFactory);
+            discovery, pathResolver, readerFactory,
+            cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = RootPath, MaxDiscoveryDepth = 6 });
         Vfs = vfs;

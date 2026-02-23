@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain.Models;
 
@@ -37,7 +38,7 @@ public class ArchiveDiscoveryTests : IDisposable
         CreateZip("root.zip");
         CreateZip("sub/nested.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 1);
 
         results.Should().ContainSingle(a => a.VirtualPath == "root.zip");
@@ -50,7 +51,7 @@ public class ArchiveDiscoveryTests : IDisposable
         CreateZip("sub/nested.zip");
         CreateZip("sub/deep/deeper.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 2);
 
         results.Should().Contain(a => a.VirtualPath == "root.zip");
@@ -64,7 +65,7 @@ public class ArchiveDiscoveryTests : IDisposable
         CreateZip("root.zip");
         CreateZip("sub/nested.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 0); // Clamped to 1
 
         results.Should().ContainSingle(a => a.VirtualPath == "root.zip");
@@ -75,7 +76,7 @@ public class ArchiveDiscoveryTests : IDisposable
     {
         CreateZip("root.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 100); // Clamped to 6
 
         results.Should().ContainSingle(a => a.VirtualPath == "root.zip");
@@ -88,7 +89,7 @@ public class ArchiveDiscoveryTests : IDisposable
     {
         CreateZip("games/fps/doom.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 6);
 
         results.Should().ContainSingle();
@@ -103,7 +104,7 @@ public class ArchiveDiscoveryTests : IDisposable
     {
         CreateZip("test.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 6);
 
         var descriptor = results.Should().ContainSingle().Which;
@@ -118,7 +119,7 @@ public class ArchiveDiscoveryTests : IDisposable
     [Fact]
     public async Task DiscoverAsync_EmptyDirectory_ReturnsEmptyList()
     {
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 6);
 
         results.Should().BeEmpty();
@@ -127,7 +128,7 @@ public class ArchiveDiscoveryTests : IDisposable
     [Fact]
     public async Task DiscoverAsync_NonExistentDirectory_ThrowsDirectoryNotFoundException()
     {
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
 
         Func<Task> act = () => discovery.DiscoverAsync(Path.Combine(_tempRoot, "nonexistent"), maxDepth: 6);
 
@@ -140,14 +141,16 @@ public class ArchiveDiscoveryTests : IDisposable
     public async Task DiscoverAsync_CancellationRequested_ThrowsOperationCanceledException()
     {
         CreateZip("test.zip");
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        using (var cts = new CancellationTokenSource())
+        {
+            cts.Cancel();
 
-        var discovery = new ArchiveDiscovery();
+            var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
 
-        Func<Task> act = () => discovery.DiscoverAsync(_tempRoot, maxDepth: 6, cts.Token);
+            Func<Task> act = () => discovery.DiscoverAsync(_tempRoot, maxDepth: 6, cts.Token);
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+            await act.Should().ThrowAsync<OperationCanceledException>();
+        }
     }
 
     // === Integration: multi-folder structure ===
@@ -160,7 +163,7 @@ public class ArchiveDiscoveryTests : IDisposable
         CreateZip("docs/manual.zip");
         CreateZip("backup.zip");
 
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var results = await discovery.DiscoverAsync(_tempRoot, maxDepth: 6);
 
         results.Should().HaveCount(4);

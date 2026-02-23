@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
 using ZipDriveV3.Domain.Abstractions;
@@ -49,26 +50,27 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
         var charComparer = CaseInsensitiveCharComparer.Instance; // Windows-style
         var archiveTrie = new ArchiveTrie(charComparer);
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery();
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
 
-        Func<string, IZipReader> readerFactory = path =>
-            new ZipReader(File.OpenRead(path));
+        var readerFactory = new ZipReaderFactory();
 
-        var structureCacheStorage = new ObjectStorageStrategy<ArchiveStructure>();
-        var structureCacheEviction = new LruEvictionPolicy();
-        var structureCacheGeneric = new GenericCache<ArchiveStructure>(
-            structureCacheStorage, structureCacheEviction, 256 * 1024 * 1024);
+        var structureStore = new ArchiveStructureStore(
+            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var cacheOpts = Microsoft.Extensions.Options.Options.Create(
+            new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
         var structureCache = new ArchiveStructureCache(
-            structureCacheGeneric, readerFactory);
+            structureStore, readerFactory,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
 
-        var fileCacheStorage = new MemoryStorageStrategy();
-        var fileCacheEviction = new LruEvictionPolicy();
-        var fileCache = new GenericCache<Stream>(
-            fileCacheStorage, fileCacheEviction, 256 * 1024 * 1024);
+        var fileCache = new DualTierFileCache(
+            cacheOpts,
+            new LruEvictionPolicy(), TimeProvider.System,
+            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
 
         _vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileCache,
-            discovery, pathResolver, readerFactory);
+            discovery, pathResolver, readerFactory,
+            cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 6 });
     }
@@ -97,23 +99,34 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
         string fullPath = Path.Combine(_tempRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
 
-        using ZipArchive archive = ZipFile.Open(fullPath, ZipArchiveMode.Create);
-        foreach ((string name, string content) in files)
+        using (ZipArchive archive = ZipFile.Open(fullPath, ZipArchiveMode.Create))
         {
-            // Create parent directories
-            string[] parts = name.Split('/');
-            if (parts.Length > 1)
+            foreach ((string name, string content) in files)
             {
-                string dirPath = string.Join('/', parts[..^1]) + "/";
-                if (!files.ContainsKey(dirPath))
+                // Create parent directories
+                string[] parts = name.Split('/');
+                if (parts.Length > 1)
                 {
-                    try { archive.CreateEntry(dirPath); } catch { /* ignore duplicate */ }
+                    string dirPath = string.Join('/', parts[..^1]) + "/";
+                    if (!files.ContainsKey(dirPath))
+                    {
+                        try
+                        {
+                            archive.CreateEntry(dirPath);
+                        }
+                        catch
+                        {
+                            /* ignore duplicate */
+                        }
+                    }
+                }
+
+                ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.Fastest);
+                using (StreamWriter writer = new(entry.Open()))
+                {
+                    writer.Write(content);
                 }
             }
-
-            ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.Fastest);
-            using StreamWriter writer = new(entry.Open());
-            writer.Write(content);
         }
     }
 
@@ -147,14 +160,20 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
         // Create a fresh VFS to test event
         var trie = new ArchiveTrie(CaseInsensitiveCharComparer.Instance);
         var resolver = new PathResolver(trie);
-        var discovery = new ArchiveDiscovery();
-        Func<string, IZipReader> factory = p => new ZipReader(File.OpenRead(p));
-        var scStorage = new ObjectStorageStrategy<ArchiveStructure>();
-        var sc = new GenericCache<ArchiveStructure>(scStorage, new LruEvictionPolicy(), 64 * 1024 * 1024);
-        var structCache = new ArchiveStructureCache(sc, factory);
-        var fcStorage = new MemoryStorageStrategy();
-        var fc = new GenericCache<Stream>(fcStorage, new LruEvictionPolicy(), 64 * 1024 * 1024);
-        var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver, factory);
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
+        var factory = new ZipReaderFactory();
+        var structStore = new ArchiveStructureStore(
+            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var cacheOpts2 = Microsoft.Extensions.Options.Options.Create(
+            new CacheOptions { MemoryCacheSizeMb = 64, DiskCacheSizeMb = 64 });
+        var structCache = new ArchiveStructureCache(structStore, factory,
+            TimeProvider.System, cacheOpts2, NullLogger<ArchiveStructureCache>.Instance);
+        var fc = new DualTierFileCache(
+            cacheOpts2,
+            new LruEvictionPolicy(), TimeProvider.System,
+            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
+        var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver, factory,
+            cacheOpts2, NullLogger<ZipVirtualFileSystem>.Instance);
 
         bool? eventValue = null;
         vfs.MountStateChanged += (_, mounted) => eventValue = mounted;

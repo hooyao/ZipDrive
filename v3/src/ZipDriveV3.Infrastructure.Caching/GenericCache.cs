@@ -56,7 +56,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     private readonly IStorageStrategy<T> _storageStrategy;
     private readonly IEvictionPolicy _evictionPolicy;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<GenericCache<T>>? _logger;
+    private readonly ILogger<GenericCache<T>> _logger;
     private readonly long _capacityBytes;
     private readonly string _name;
     private readonly KeyValuePair<string, object?> _tierTag;
@@ -78,8 +78,8 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         IStorageStrategy<T> storageStrategy,
         IEvictionPolicy evictionPolicy,
         long capacityBytes,
-        TimeProvider? timeProvider = null,
-        ILogger<GenericCache<T>>? logger = null,
+        TimeProvider timeProvider,
+        ILogger<GenericCache<T>> logger,
         string? name = null)
     {
         if (capacityBytes <= 0)
@@ -88,14 +88,14 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         _storageStrategy = storageStrategy ?? throw new ArgumentNullException(nameof(storageStrategy));
         _evictionPolicy = evictionPolicy ?? throw new ArgumentNullException(nameof(evictionPolicy));
         _capacityBytes = capacityBytes;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider;
         _logger = logger;
         _name = name ?? typeof(T).Name;
         _tierTag = new KeyValuePair<string, object?>("tier", _name);
 
         CacheTelemetry.RegisterInstance(this);
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "GenericCache<{Type}> initialized with capacity: {CapacityMb:F1} MB, tier: {Tier}",
             typeof(T).Name,
             capacityBytes / (1024.0 * 1024.0),
@@ -115,58 +115,60 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         if (string.IsNullOrWhiteSpace(cacheKey))
             throw new ArgumentException("Cache key cannot be empty or whitespace", nameof(cacheKey));
 
-        using Activity? borrowActivity = CacheTelemetry.Source.StartActivity("cache.borrow");
-        borrowActivity?.SetTag("tier", _name);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // LAYER 1: Lock-free cache lookup (FAST PATH)
-        // ═══════════════════════════════════════════════════════════════════
-        if (_cache.TryGetValue(cacheKey, out CacheEntry? existingEntry) && !IsExpired(existingEntry))
+        using (Activity? borrowActivity = CacheTelemetry.Source.StartActivity("cache.borrow"))
         {
-            // Increment RefCount BEFORE returning handle (protects from eviction)
-            existingEntry.IncrementRefCount();
-            existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
-            existingEntry.AccessCount++;
-            Interlocked.Increment(ref _hits);
+            borrowActivity?.SetTag("tier", _name);
 
-            CacheTelemetry.Hits.Add(1, _tierTag);
-            borrowActivity?.SetTag("result", "hit");
+            // ═══════════════════════════════════════════════════════════════════
+            // LAYER 1: Lock-free cache lookup (FAST PATH)
+            // ═══════════════════════════════════════════════════════════════════
+            if (_cache.TryGetValue(cacheKey, out CacheEntry? existingEntry) && !IsExpired(existingEntry))
+            {
+                // Increment RefCount BEFORE returning handle (protects from eviction)
+                existingEntry.IncrementRefCount();
+                existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
+                existingEntry.AccessCount++;
+                Interlocked.Increment(ref _hits);
 
-            _logger?.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
+                CacheTelemetry.Hits.Add(1, _tierTag);
+                borrowActivity?.SetTag("result", "hit");
 
-            T value = _storageStrategy.Retrieve(existingEntry.Stored);
-            return new CacheHandle<T>(existingEntry, value, Return);
-        }
+                _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // LAYER 2: Per-key materialization lock (THUNDERING HERD PREVENTION)
-        // ═══════════════════════════════════════════════════════════════════
-        Interlocked.Increment(ref _misses);
+                T value = _storageStrategy.Retrieve(existingEntry.Stored);
+                return new CacheHandle<T>(existingEntry, value, Return);
+            }
 
-        CacheTelemetry.Misses.Add(1, _tierTag);
-        borrowActivity?.SetTag("result", "miss");
+            // ═══════════════════════════════════════════════════════════════════
+            // LAYER 2: Per-key materialization lock (THUNDERING HERD PREVENTION)
+            // ═══════════════════════════════════════════════════════════════════
+            Interlocked.Increment(ref _misses);
 
-        _logger?.LogDebug("Cache MISS: {Key}", cacheKey);
+            CacheTelemetry.Misses.Add(1, _tierTag);
+            borrowActivity?.SetTag("result", "miss");
 
-        Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
-            new Lazy<Task<CacheEntry>>(
-                () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
-                LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
+            _logger.LogDebug("Cache MISS: {Key}", cacheKey);
 
-        try
-        {
-            CacheEntry entry = await lazy.Value.ConfigureAwait(false);
+            Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
+                new Lazy<Task<CacheEntry>>(
+                    () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
+                    LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
 
-            // Increment RefCount for each borrower (thundering herd: all get handles)
-            entry.IncrementRefCount();
+            try
+            {
+                CacheEntry entry = await lazy.Value.ConfigureAwait(false);
 
-            T value = _storageStrategy.Retrieve(entry.Stored);
-            return new CacheHandle<T>(entry, value, Return);
-        }
-        finally
-        {
-            // Clean up the lazy task to prevent memory leaks
-            _materializationTasks.TryRemove(cacheKey, out _);
+                // Increment RefCount for each borrower (thundering herd: all get handles)
+                entry.IncrementRefCount();
+
+                T value = _storageStrategy.Retrieve(entry.Stored);
+                return new CacheHandle<T>(entry, value, Return);
+            }
+            finally
+            {
+                // Clean up the lazy task to prevent memory leaks
+                _materializationTasks.TryRemove(cacheKey, out _);
+            }
         }
     }
 
@@ -177,7 +179,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     private void Return(CacheEntry entry)
     {
         entry.DecrementRefCount();
-        _logger?.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
+        _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
     }
 
     /// <summary>
@@ -189,7 +191,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         Func<CancellationToken, Task<CacheFactoryResult<T>>> factory,
         CancellationToken cancellationToken)
     {
-        _logger?.LogDebug("Materializing: {Key}", cacheKey);
+        _logger.LogDebug("Materializing: {Key}", cacheKey);
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
@@ -199,71 +201,73 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         double materializationMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
         string sizeBucket = SizeBucketClassifier.Classify(result.SizeBytes);
 
-        using Activity? materializeActivity = CacheTelemetry.Source.StartActivity("cache.materialize");
-        materializeActivity?.SetTag("tier", _name);
-        materializeActivity?.SetTag("size_bucket", sizeBucket);
-        materializeActivity?.SetTag("size_bytes", result.SizeBytes);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // LAYER 3: Eviction (only if capacity exceeded)
-        // Only evicts entries with RefCount = 0
-        // ═══════════════════════════════════════════════════════════════════
-        await EvictIfNeededAsync(result.SizeBytes).ConfigureAwait(false);
-
-        // Store using strategy - returns opaque StoredEntry
-        StoredEntry stored = await _storageStrategy.StoreAsync(result, cancellationToken).ConfigureAwait(false);
-
-        CacheEntry entry = new CacheEntry(
-            cacheKey,
-            stored,
-            _timeProvider.GetUtcNow(),
-            ttl);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // CRITICAL: Order matters for consistency!
-        // 1. Add to cache FIRST
-        // 2. Update size counter SECOND
-        // 3. Run post-store eviction check
-        //
-        // This ensures _currentSizeBytes may temporarily UNDERCOUNT
-        // (safe - causes less eviction) but will NEVER OVERCOUNT
-        // (dangerous - could prevent needed eviction).
-        // ═══════════════════════════════════════════════════════════════════
-
-        // Temporarily increment RefCount to protect entry during post-store eviction
-        entry.IncrementRefCount();
-
-        _cache[cacheKey] = entry;
-        Interlocked.Add(ref _currentSizeBytes, stored.SizeBytes);
-
-        CacheTelemetry.MaterializationDuration.Record(materializationMs,
-            _tierTag,
-            new KeyValuePair<string, object?>("size_bucket", sizeBucket));
-
-        _logger?.LogInformation(
-            "Materialized: {Key} ({SizeMb:F2} MB, {UtilizationPct:F1}% capacity, {Tier} tier, {MaterializationMs:F1} ms)",
-            cacheKey,
-            stored.SizeBytes / (1024.0 * 1024.0),
-            (CurrentSizeBytes / (double)_capacityBytes) * 100,
-            _name,
-            materializationMs);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // POST-STORE CAPACITY CHECK (Soft Capacity Design)
-        //
-        // Multiple concurrent materializations may cause temporary
-        // overage. This check ensures we converge back to capacity.
-        // The newly added entry is protected by RefCount = 1.
-        // ═══════════════════════════════════════════════════════════════════
-        if (Interlocked.Read(ref _currentSizeBytes) > _capacityBytes)
+        using (Activity? materializeActivity = CacheTelemetry.Source.StartActivity("cache.materialize"))
         {
-            await EvictIfNeededAsync(neededBytes: 0).ConfigureAwait(false);
+            materializeActivity?.SetTag("tier", _name);
+            materializeActivity?.SetTag("size_bucket", sizeBucket);
+            materializeActivity?.SetTag("size_bytes", result.SizeBytes);
+
+            // ═══════════════════════════════════════════════════════════════════
+            // LAYER 3: Eviction (only if capacity exceeded)
+            // Only evicts entries with RefCount = 0
+            // ═══════════════════════════════════════════════════════════════════
+            await EvictIfNeededAsync(result.SizeBytes).ConfigureAwait(false);
+
+            // Store using strategy - returns opaque StoredEntry
+            StoredEntry stored = await _storageStrategy.StoreAsync(result, cancellationToken).ConfigureAwait(false);
+
+            CacheEntry entry = new CacheEntry(
+                cacheKey,
+                stored,
+                _timeProvider.GetUtcNow(),
+                ttl);
+
+            // ═══════════════════════════════════════════════════════════════════
+            // CRITICAL: Order matters for consistency!
+            // 1. Add to cache FIRST
+            // 2. Update size counter SECOND
+            // 3. Run post-store eviction check
+            //
+            // This ensures _currentSizeBytes may temporarily UNDERCOUNT
+            // (safe - causes less eviction) but will NEVER OVERCOUNT
+            // (dangerous - could prevent needed eviction).
+            // ═══════════════════════════════════════════════════════════════════
+
+            // Temporarily increment RefCount to protect entry during post-store eviction
+            entry.IncrementRefCount();
+
+            _cache[cacheKey] = entry;
+            Interlocked.Add(ref _currentSizeBytes, stored.SizeBytes);
+
+            CacheTelemetry.MaterializationDuration.Record(materializationMs,
+                _tierTag,
+                new KeyValuePair<string, object?>("size_bucket", sizeBucket));
+
+            _logger.LogInformation(
+                "Materialized: {Key} ({SizeMb:F2} MB, {UtilizationPct:F1}% capacity, {Tier} tier, {MaterializationMs:F1} ms)",
+                cacheKey,
+                stored.SizeBytes / (1024.0 * 1024.0),
+                (CurrentSizeBytes / (double)_capacityBytes) * 100,
+                _name,
+                materializationMs);
+
+            // ═══════════════════════════════════════════════════════════════════
+            // POST-STORE CAPACITY CHECK (Soft Capacity Design)
+            //
+            // Multiple concurrent materializations may cause temporary
+            // overage. This check ensures we converge back to capacity.
+            // The newly added entry is protected by RefCount = 1.
+            // ═══════════════════════════════════════════════════════════════════
+            if (Interlocked.Read(ref _currentSizeBytes) > _capacityBytes)
+            {
+                await EvictIfNeededAsync(neededBytes: 0).ConfigureAwait(false);
+            }
+
+            // Release the temporary hold - caller will increment when borrowing
+            entry.DecrementRefCount();
+
+            return entry;
         }
-
-        // Release the temporary hold - caller will increment when borrowing
-        entry.DecrementRefCount();
-
-        return entry;
     }
 
     /// <summary>
@@ -278,113 +282,115 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             return Task.CompletedTask;
         }
 
-        _logger?.LogDebug(
+        _logger.LogDebug(
             "Eviction check: current={CurrentMb:F1}MB, needed={NeededMb:F1}MB, capacity={CapacityMb:F1}MB",
             CurrentSizeBytes / (1024.0 * 1024.0),
             neededBytes / (1024.0 * 1024.0),
             _capacityBytes / (1024.0 * 1024.0));
 
         // Slow path: Acquire eviction lock
-        using Activity? evictActivity = CacheTelemetry.Source.StartActivity("cache.evict");
-        evictActivity?.SetTag("tier", _name);
-
-        using (_evictionLock.EnterScope())
+        using (Activity? evictActivity = CacheTelemetry.Source.StartActivity("cache.evict"))
         {
-            // Double-check after acquiring lock (another thread might have evicted already)
-            if (_currentSizeBytes + neededBytes <= _capacityBytes)
+            evictActivity?.SetTag("tier", _name);
+
+            using (_evictionLock.EnterScope())
             {
-                evictActivity?.SetTag("evicted_count", 0);
-                evictActivity?.SetTag("evicted_bytes", 0L);
-                return Task.CompletedTask;
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // IMPORTANT: Only evict entries with RefCount = 0
-            // Entries currently borrowed are protected from eviction
-            // ═══════════════════════════════════════════════════════════════
-
-            // Phase 1: Evict expired entries first (only if not borrowed)
-            DateTimeOffset now = _timeProvider.GetUtcNow();
-            List<string> expiredKeys = _cache
-                .Where(kvp => now > kvp.Value.ExpiresAt)
-                .Where(kvp => kvp.Value.RefCount == 0) // Only evict if not borrowed
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            int expiredCount = 0;
-            long expiredBytes = 0L;
-
-            foreach (string key in expiredKeys)
-            {
-                if (TryEvictEntry(key, "expired", out long evictedBytes))
+                // Double-check after acquiring lock (another thread might have evicted already)
+                if (_currentSizeBytes + neededBytes <= _capacityBytes)
                 {
-                    expiredCount++;
-                    expiredBytes += evictedBytes;
-                }
-            }
-
-            if (expiredCount > 0)
-            {
-                _logger?.LogInformation(
-                    "Evicted {Count} expired entries ({SizeMb:F2} MB, {Tier} tier)",
-                    expiredCount,
-                    expiredBytes / (1024.0 * 1024.0),
-                    _name);
-            }
-
-            // Phase 2: Use eviction policy if still need space
-            if (_currentSizeBytes + neededBytes > _capacityBytes)
-            {
-                // Only consider entries with RefCount = 0 for eviction
-                List<ICacheEntry> evictableEntries = _cache.Values
-                    .Where(e => e.RefCount == 0)
-                    .Cast<ICacheEntry>()
-                    .ToList();
-
-                if (evictableEntries.Count == 0)
-                {
-                    _logger?.LogWarning(
-                        "All {Count} entries are borrowed, cannot evict. Allowing soft capacity overage.",
-                        _cache.Count);
+                    evictActivity?.SetTag("evicted_count", 0);
+                    evictActivity?.SetTag("evicted_bytes", 0L);
                     return Task.CompletedTask;
                 }
 
-                IEnumerable<ICacheEntry> victims = _evictionPolicy.SelectVictims(
-                    evictableEntries,
-                    neededBytes,
-                    _currentSizeBytes,
-                    _capacityBytes);
+                // ═══════════════════════════════════════════════════════════════
+                // IMPORTANT: Only evict entries with RefCount = 0
+                // Entries currently borrowed are protected from eviction
+                // ═══════════════════════════════════════════════════════════════
 
-                int policyEvictedCount = 0;
-                long policyEvictedBytes = 0L;
+                // Phase 1: Evict expired entries first (only if not borrowed)
+                DateTimeOffset now = _timeProvider.GetUtcNow();
+                List<string> expiredKeys = _cache
+                    .Where(kvp => now > kvp.Value.ExpiresAt)
+                    .Where(kvp => kvp.Value.RefCount == 0) // Only evict if not borrowed
+                    .Select(kvp => kvp.Key)
+                    .ToList();
 
-                foreach (ICacheEntry victim in victims)
+                int expiredCount = 0;
+                long expiredBytes = 0L;
+
+                foreach (string key in expiredKeys)
                 {
-                    if (TryEvictEntry(victim.CacheKey, "policy", out long evictedBytes))
+                    if (TryEvictEntry(key, "expired", out long evictedBytes))
                     {
-                        policyEvictedCount++;
-                        policyEvictedBytes += evictedBytes;
+                        expiredCount++;
+                        expiredBytes += evictedBytes;
                     }
                 }
 
-                if (policyEvictedCount > 0)
+                if (expiredCount > 0)
                 {
-                    _logger?.LogInformation(
-                        "Evicted {Count} entries via policy ({SizeMb:F2} MB, {Tier} tier)",
-                        policyEvictedCount,
-                        policyEvictedBytes / (1024.0 * 1024.0),
+                    _logger.LogInformation(
+                        "Evicted {Count} expired entries ({SizeMb:F2} MB, {Tier} tier)",
+                        expiredCount,
+                        expiredBytes / (1024.0 * 1024.0),
                         _name);
-
-                    expiredCount += policyEvictedCount;
-                    expiredBytes += policyEvictedBytes;
                 }
+
+                // Phase 2: Use eviction policy if still need space
+                if (_currentSizeBytes + neededBytes > _capacityBytes)
+                {
+                    // Only consider entries with RefCount = 0 for eviction
+                    List<ICacheEntry> evictableEntries = _cache.Values
+                        .Where(e => e.RefCount == 0)
+                        .Cast<ICacheEntry>()
+                        .ToList();
+
+                    if (evictableEntries.Count == 0)
+                    {
+                        _logger.LogWarning(
+                            "All {Count} entries are borrowed, cannot evict. Allowing soft capacity overage.",
+                            _cache.Count);
+                        return Task.CompletedTask;
+                    }
+
+                    IEnumerable<ICacheEntry> victims = _evictionPolicy.SelectVictims(
+                        evictableEntries,
+                        neededBytes,
+                        _currentSizeBytes,
+                        _capacityBytes);
+
+                    int policyEvictedCount = 0;
+                    long policyEvictedBytes = 0L;
+
+                    foreach (ICacheEntry victim in victims)
+                    {
+                        if (TryEvictEntry(victim.CacheKey, "policy", out long evictedBytes))
+                        {
+                            policyEvictedCount++;
+                            policyEvictedBytes += evictedBytes;
+                        }
+                    }
+
+                    if (policyEvictedCount > 0)
+                    {
+                        _logger.LogInformation(
+                            "Evicted {Count} entries via policy ({SizeMb:F2} MB, {Tier} tier)",
+                            policyEvictedCount,
+                            policyEvictedBytes / (1024.0 * 1024.0),
+                            _name);
+
+                        expiredCount += policyEvictedCount;
+                        expiredBytes += policyEvictedBytes;
+                    }
+                }
+
+                evictActivity?.SetTag("evicted_count", expiredCount);
+                evictActivity?.SetTag("evicted_bytes", expiredBytes);
             }
 
-            evictActivity?.SetTag("evicted_count", expiredCount);
-            evictActivity?.SetTag("evicted_bytes", expiredBytes);
+            return Task.CompletedTask;
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -402,7 +408,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         // Double-check RefCount before eviction (another thread might have borrowed)
         if (entry.RefCount > 0)
         {
-            _logger?.LogDebug("Skipping eviction of {Key}: RefCount={RefCount}", key, entry.RefCount);
+            _logger.LogDebug("Skipping eviction of {Key}: RefCount={RefCount}", key, entry.RefCount);
             return false;
         }
 
@@ -421,7 +427,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 _pendingCleanup.Enqueue(removed.Stored);
             }
 
-            _logger?.LogInformation(
+            _logger.LogInformation(
                 "Evicted: {Key} ({SizeBytes} bytes, {Tier} tier, reason: {Reason})",
                 key, evictedBytes, _name, reason);
 
@@ -455,13 +461,13 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to cleanup stored entry");
+                _logger.LogWarning(ex, "Failed to cleanup stored entry");
             }
         }
 
         if (processed > 0)
         {
-            _logger?.LogDebug("Processed {Count} pending cleanup items", processed);
+            _logger.LogDebug("Processed {Count} pending cleanup items", processed);
         }
 
         return processed;
@@ -491,7 +497,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
         if (evictedCount > 0)
         {
-            _logger?.LogInformation(
+            _logger.LogInformation(
                 "Manual eviction: removed {Count} expired entries ({SizeMb:F2} MB, {Tier} tier)",
                 evictedCount,
                 evictedBytes / (1024.0 * 1024.0),
@@ -524,7 +530,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to dispose entry {Key} during Clear()", key);
+                    _logger.LogWarning(ex, "Failed to dispose entry {Key} during Clear()", key);
                 }
             }
         }
@@ -540,11 +546,11 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to process pending cleanup during Clear()");
+                _logger.LogWarning(ex, "Failed to process pending cleanup during Clear()");
             }
         }
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "Cache cleared: removed {Count} entries ({SizeMb:F2} MB)",
             clearedCount,
             clearedBytes / (1024.0 * 1024.0));
@@ -578,7 +584,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to dispose entry {Key} during ClearAsync()", key);
+                    _logger.LogWarning(ex, "Failed to dispose entry {Key} during ClearAsync()", key);
                 }
 
                 // Yield every 10 entries to allow other work
@@ -609,11 +615,11 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to process pending cleanup during ClearAsync()");
+                _logger.LogWarning(ex, "Failed to process pending cleanup during ClearAsync()");
             }
         }
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "Cache cleared: removed {Count} entries ({SizeMb:F2} MB)",
             clearedCount,
             clearedBytes / (1024.0 * 1024.0));

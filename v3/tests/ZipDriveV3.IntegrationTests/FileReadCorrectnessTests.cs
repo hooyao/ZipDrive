@@ -127,20 +127,22 @@ public class FileReadCorrectnessTests
         if (fileEntry == null) return;
 
         // Read in 4KB chunks
-        using MemoryStream ms = new();
-        byte[] chunk = new byte[4096];
-        long offset = 0;
-        while (true)
+        using (MemoryStream ms = new())
         {
-            int read = await _fixture.Vfs.ReadFileAsync(
-                $"{archivePath}/{fileEntry.FileName}", chunk, offset);
-            if (read == 0) break;
-            ms.Write(chunk, 0, read);
-            offset += read;
-        }
+            byte[] chunk = new byte[4096];
+            long offset = 0;
+            while (true)
+            {
+                int read = await _fixture.Vfs.ReadFileAsync(
+                    $"{archivePath}/{fileEntry.FileName}", chunk, offset);
+                if (read == 0) break;
+                ms.Write(chunk, 0, read);
+                offset += read;
+            }
 
-        string actualSha256 = TestZipGenerator.ComputeSha256(ms.ToArray());
-        actualSha256.Should().Be(fileEntry.Sha256);
+            string actualSha256 = TestZipGenerator.ComputeSha256(ms.ToArray());
+            actualSha256.Should().Be(fileEntry.Sha256);
+        }
     }
 
     [Fact]

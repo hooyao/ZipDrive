@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using KTrie;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ZipDriveV3.Domain.Abstractions;
 using ZipDriveV3.Domain.Models;
 using ZipDriveV3.Infrastructure.Archives.Zip;
@@ -26,28 +27,28 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     /// </summary>
     private const long BaseStructureOverhead = 1024;
 
-    private readonly ICache<ArchiveStructure> _cache;
-    private readonly Func<string, IZipReader> _zipReaderFactory;
+    private readonly IArchiveStructureStore _cache;
+    private readonly IZipReaderFactory _zipReaderFactory;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _defaultTtl;
-    private readonly ILogger<ArchiveStructureCache>? _logger;
+    private readonly ILogger<ArchiveStructureCache> _logger;
 
     private long _missCount;
 
     public ArchiveStructureCache(
-        ICache<ArchiveStructure> cache,
-        Func<string, IZipReader> zipReaderFactory,
-        TimeProvider? timeProvider = null,
-        TimeSpan? defaultTtl = null,
-        ILogger<ArchiveStructureCache>? logger = null)
+        IArchiveStructureStore cache,
+        IZipReaderFactory zipReaderFactory,
+        TimeProvider timeProvider,
+        IOptions<CacheOptions> cacheOptions,
+        ILogger<ArchiveStructureCache> logger)
     {
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _zipReaderFactory = zipReaderFactory ?? throw new ArgumentNullException(nameof(zipReaderFactory));
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _defaultTtl = defaultTtl ?? TimeSpan.FromMinutes(30);
+        _timeProvider = timeProvider;
+        _defaultTtl = cacheOptions.Value.DefaultTtl;
         _logger = logger;
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "ArchiveStructureCache initialized with TTL={TtlMinutes} minutes",
             _defaultTtl.TotalMinutes);
     }
@@ -61,7 +62,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         ArgumentException.ThrowIfNullOrWhiteSpace(archiveKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
 
-        _logger?.LogDebug("GetOrBuildAsync: {ArchiveKey} at {Path}", archiveKey, absolutePath);
+        _logger.LogDebug("GetOrBuildAsync: {ArchiveKey} at {Path}", archiveKey, absolutePath);
 
         ICacheHandle<ArchiveStructure> handle = await _cache.BorrowAsync(
             archiveKey,
@@ -73,7 +74,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         {
             ArchiveStructure structure = handle.Value;
 
-            _logger?.LogDebug(
+            _logger.LogDebug(
                 "Returning structure for {ArchiveKey}: {EntryCount} entries",
                 archiveKey,
                 structure.EntryCount);
@@ -95,95 +96,97 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         string absolutePath,
         CancellationToken cancellationToken)
     {
-        _logger?.LogInformation("Building structure for {ArchiveKey} at {Path}", archiveKey, absolutePath);
+        _logger.LogInformation("Building structure for {ArchiveKey} at {Path}", archiveKey, absolutePath);
         Interlocked.Increment(ref _missCount);
 
         Stopwatch stopwatch = Stopwatch.StartNew();
 
-        await using IZipReader reader = _zipReaderFactory(absolutePath);
-
         // Phase 1: Read EOCD
-        ZipEocd eocd = await reader.ReadEocdAsync(cancellationToken).ConfigureAwait(false);
-
-        _logger?.LogDebug(
-            "EOCD: {EntryCount} entries, CD at {Offset}, size {Size}, ZIP64={IsZip64}",
-            eocd.EntryCount, eocd.CentralDirectoryOffset, eocd.CentralDirectorySize, eocd.IsZip64);
-
-        // Phase 2: Build trie from Central Directory entries
-        TrieDictionary<ZipEntryInfo> trie = new();
-        HashSet<string> directoriesSeen = new(StringComparer.Ordinal);
-
-        long totalUncompressedSize = 0;
-        long totalCompressedSize = 0;
-        int entryCount = 0;
-
-        await foreach (ZipCentralDirectoryEntry cdEntry in reader.StreamCentralDirectoryAsync(eocd, cancellationToken)
-            .ConfigureAwait(false))
+        await using (IZipReader reader = _zipReaderFactory.Create(absolutePath))
         {
-            ZipEntryInfo entryInfo = ConvertToZipEntryInfo(cdEntry);
-            string normalizedPath = NormalizePath(cdEntry.FileName);
+            ZipEocd eocd = await reader.ReadEocdAsync(cancellationToken).ConfigureAwait(false);
 
-            if (entryInfo.IsDirectory)
+            _logger.LogDebug(
+                "EOCD: {EntryCount} entries, CD at {Offset}, size {Size}, ZIP64={IsZip64}",
+                eocd.EntryCount, eocd.CentralDirectoryOffset, eocd.CentralDirectorySize, eocd.IsZip64);
+
+            // Phase 2: Build trie from Central Directory entries
+            TrieDictionary<ZipEntryInfo> trie = new();
+            HashSet<string> directoriesSeen = new(StringComparer.Ordinal);
+
+            long totalUncompressedSize = 0;
+            long totalCompressedSize = 0;
+            int entryCount = 0;
+
+            await foreach (ZipCentralDirectoryEntry cdEntry in reader
+                               .StreamCentralDirectoryAsync(eocd, cancellationToken)
+                               .ConfigureAwait(false))
             {
-                string dirPath = normalizedPath.EndsWith('/') ? normalizedPath : normalizedPath + "/";
-                trie[dirPath] = entryInfo;
-                directoriesSeen.Add(dirPath);
+                ZipEntryInfo entryInfo = ConvertToZipEntryInfo(cdEntry);
+                string normalizedPath = NormalizePath(cdEntry.FileName);
+
+                if (entryInfo.IsDirectory)
+                {
+                    string dirPath = normalizedPath.EndsWith('/') ? normalizedPath : normalizedPath + "/";
+                    trie[dirPath] = entryInfo;
+                    directoriesSeen.Add(dirPath);
+                }
+                else
+                {
+                    string filePath = normalizedPath.TrimEnd('/');
+                    trie[filePath] = entryInfo;
+                    totalUncompressedSize += cdEntry.UncompressedSize;
+                    totalCompressedSize += cdEntry.CompressedSize;
+
+                    EnsureParentDirectories(trie, filePath, directoriesSeen);
+                }
+
+                entryCount++;
+
+                if (entryCount % 10_000 == 0)
+                {
+                    _logger.LogDebug("Parsed {Count} entries...", entryCount);
+                }
             }
-            else
+
+            stopwatch.Stop();
+
+            long estimatedMemory = BaseStructureOverhead + (trie.Count * BytesPerEntry);
+
+            ArchiveStructure structure = new ArchiveStructure
             {
-                string filePath = normalizedPath.TrimEnd('/');
-                trie[filePath] = entryInfo;
-                totalUncompressedSize += cdEntry.UncompressedSize;
-                totalCompressedSize += cdEntry.CompressedSize;
+                ArchiveKey = archiveKey,
+                AbsolutePath = absolutePath,
+                Entries = trie,
+                BuiltAt = _timeProvider.GetUtcNow(),
+                IsZip64 = eocd.IsZip64,
+                TotalUncompressedSize = totalUncompressedSize,
+                TotalCompressedSize = totalCompressedSize,
+                EstimatedMemoryBytes = estimatedMemory,
+                Comment = eocd.Comment
+            };
 
-                EnsureParentDirectories(trie, filePath, directoriesSeen);
-            }
+            _logger.LogInformation(
+                "Built structure for {ArchiveKey}: {EntryCount} entries in {ElapsedMs}ms, " +
+                "estimated {MemoryMb:F2} MB",
+                archiveKey,
+                trie.Count,
+                stopwatch.ElapsedMilliseconds,
+                estimatedMemory / (1024.0 * 1024.0));
 
-            entryCount++;
-
-            if (entryCount % 10_000 == 0)
+            return new CacheFactoryResult<ArchiveStructure>
             {
-                _logger?.LogDebug("Parsed {Count} entries...", entryCount);
-            }
+                Value = structure,
+                SizeBytes = estimatedMemory,
+                Metadata = new Dictionary<string, object>
+                {
+                    ["EntryCount"] = trie.Count,
+                    ["IsZip64"] = eocd.IsZip64,
+                    ["TotalUncompressedSize"] = totalUncompressedSize,
+                    ["BuildTimeMs"] = stopwatch.ElapsedMilliseconds
+                }
+            };
         }
-
-        stopwatch.Stop();
-
-        long estimatedMemory = BaseStructureOverhead + (trie.Count * BytesPerEntry);
-
-        ArchiveStructure structure = new ArchiveStructure
-        {
-            ArchiveKey = archiveKey,
-            AbsolutePath = absolutePath,
-            Entries = trie,
-            BuiltAt = _timeProvider.GetUtcNow(),
-            IsZip64 = eocd.IsZip64,
-            TotalUncompressedSize = totalUncompressedSize,
-            TotalCompressedSize = totalCompressedSize,
-            EstimatedMemoryBytes = estimatedMemory,
-            Comment = eocd.Comment
-        };
-
-        _logger?.LogInformation(
-            "Built structure for {ArchiveKey}: {EntryCount} entries in {ElapsedMs}ms, " +
-            "estimated {MemoryMb:F2} MB",
-            archiveKey,
-            trie.Count,
-            stopwatch.ElapsedMilliseconds,
-            estimatedMemory / (1024.0 * 1024.0));
-
-        return new CacheFactoryResult<ArchiveStructure>
-        {
-            Value = structure,
-            SizeBytes = estimatedMemory,
-            Metadata = new Dictionary<string, object>
-            {
-                ["EntryCount"] = trie.Count,
-                ["IsZip64"] = eocd.IsZip64,
-                ["TotalUncompressedSize"] = totalUncompressedSize,
-                ["BuildTimeMs"] = stopwatch.ElapsedMilliseconds
-            }
-        };
     }
 
     /// <summary>
@@ -276,7 +279,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(archiveKey);
 
-        _logger?.LogWarning(
+        _logger.LogWarning(
             "Invalidate called for {ArchiveKey} but direct removal is not supported. " +
             "Entry will expire based on TTL.",
             archiveKey);
@@ -287,15 +290,8 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     /// <inheritdoc />
     public void Clear()
     {
-        if (_cache is GenericCache<ArchiveStructure> genericCache)
-        {
-            genericCache.Clear();
-            _logger?.LogInformation("Cache cleared");
-        }
-        else
-        {
-            _logger?.LogWarning("Clear() not supported for this cache implementation");
-        }
+        _cache.Clear();
+        _logger.LogInformation("Cache cleared");
     }
 
     /// <inheritdoc />

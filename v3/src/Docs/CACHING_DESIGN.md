@@ -1,8 +1,8 @@
 # ZipDrive V3 - File Content Cache Design Document
 
-**Version:** 1.5
-**Last Updated:** 2026-01-18
-**Status:** ✅ Implementation Complete (Core)
+**Version:** 2.0
+**Last Updated:** 2026-02-23
+**Status:** ✅ Implementation Complete (Core + Dual-Tier + Observability)
 
 ---
 

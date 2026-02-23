@@ -1,7 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -9,7 +8,6 @@ using Serilog;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
 using ZipDriveV3.Domain.Abstractions;
-using ZipDriveV3.Domain.Models;
 using ZipDriveV3.Infrastructure.Archives.Zip;
 using ZipDriveV3.Infrastructure.Caching;
 using ZipDriveV3.Infrastructure.FileSystem;
@@ -53,65 +51,31 @@ builder.ConfigureServices((context, services) =>
             .AddSource("ZipDriveV3.Dokan")
             .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
+    // Shared infrastructure
+    services.AddSingleton(TimeProvider.System);
+
     // Archive trie (platform-aware case sensitivity)
     IEqualityComparer<char>? charComparer = OperatingSystem.IsWindows()
         ? CaseInsensitiveCharComparer.Instance
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
 
-    // Path resolver
-    services.AddSingleton<IPathResolver>(sp =>
-        new PathResolver(sp.GetRequiredService<IArchiveTrie>()));
-
-    // Archive discovery
+    // Application services
+    services.AddSingleton<IPathResolver, PathResolver>();
     services.AddSingleton<IArchiveDiscovery, ArchiveDiscovery>();
-
-    // ZIP reader factory
-    services.AddSingleton<Func<string, IZipReader>>(sp =>
-        path => new ZipReader(File.OpenRead(path)));
+    services.AddSingleton<IZipReaderFactory, ZipReaderFactory>();
 
     // Cache infrastructure
     services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
+    services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
+    services.AddSingleton<IArchiveStructureCache, ArchiveStructureCache>();
+    services.AddSingleton<DualTierFileCache>();
 
-    services.AddSingleton<ICache<ArchiveStructure>>(sp =>
-    {
-        var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CacheOptions>>().Value;
-        var storage = new ObjectStorageStrategy<ArchiveStructure>();
-        var eviction = sp.GetRequiredService<IEvictionPolicy>();
-        // Use a reasonable capacity for structure cache (256 MB)
-        return new GenericCache<ArchiveStructure>(storage, eviction, 256 * 1024 * 1024, name: "structure");
-    });
+    // Cache maintenance (periodic eviction + cleanup)
+    services.AddHostedService<CacheMaintenanceService>();
 
-    services.AddSingleton<IArchiveStructureCache>(sp =>
-        new ArchiveStructureCache(
-            sp.GetRequiredService<ICache<ArchiveStructure>>(),
-            sp.GetRequiredService<Func<string, IZipReader>>()));
-
-    // Dual-tier file content cache (memory + disk)
-    services.AddSingleton<DualTierFileCache>(sp =>
-    {
-        var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CacheOptions>>().Value;
-        var eviction = sp.GetRequiredService<IEvictionPolicy>();
-        var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-        return new DualTierFileCache(options, eviction,
-            logger: loggerFactory.CreateLogger<DualTierFileCache>(),
-            loggerFactory: loggerFactory);
-    });
-
-    services.AddSingleton<ICache<Stream>>(sp => sp.GetRequiredService<DualTierFileCache>());
-
-    // VFS
-    services.AddSingleton<IVirtualFileSystem>(sp =>
-        new ZipVirtualFileSystem(
-            sp.GetRequiredService<IArchiveTrie>(),
-            sp.GetRequiredService<IArchiveStructureCache>(),
-            sp.GetRequiredService<ICache<Stream>>(),
-            sp.GetRequiredService<IArchiveDiscovery>(),
-            sp.GetRequiredService<IPathResolver>(),
-            sp.GetRequiredService<Func<string, IZipReader>>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger<ZipVirtualFileSystem>()));
-
-    // Dokan adapter and hosted service
+    // VFS and Dokan
+    services.AddSingleton<IVirtualFileSystem, ZipVirtualFileSystem>();
     services.AddSingleton<DokanFileSystemAdapter>();
     services.AddHostedService<DokanHostedService>();
 });

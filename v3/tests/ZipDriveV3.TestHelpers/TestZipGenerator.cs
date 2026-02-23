@@ -27,53 +27,57 @@ public static class TestZipGenerator
             GeneratedAtUtc = DateTime.UtcNow
         };
 
-        using FileStream fs = File.Create(outputPath);
-        using ZipArchive archive = new(fs, ZipArchiveMode.Create, leaveOpen: false);
-
-        HashSet<string> createdDirs = new();
-
-        foreach ((string filePath, long size) in fileSpecs)
+        using (FileStream fs = File.Create(outputPath))
         {
-            // Ensure parent directories exist as entries
-            EnsureDirectoryEntries(archive, filePath, createdDirs, manifest);
-
-            if (size < 0)
+            using (ZipArchive archive = new(fs, ZipArchiveMode.Create, leaveOpen: false))
             {
-                // Directory entry
-                continue;
+                HashSet<string> createdDirs = new();
+
+                foreach ((string filePath, long size) in fileSpecs)
+                {
+                    // Ensure parent directories exist as entries
+                    EnsureDirectoryEntries(archive, filePath, createdDirs, manifest);
+
+                    if (size < 0)
+                    {
+                        // Directory entry
+                        continue;
+                    }
+
+                    // Generate deterministic content
+                    byte[] content = GenerateDeterministicContent(filePath, size);
+                    string sha256 = ComputeSha256(content);
+
+                    // Determine compression
+                    CompressionLevel level = size > 50 * 1024 * 1024
+                        ? CompressionLevel.NoCompression // Large files stored for speed
+                        : CompressionLevel.Fastest;
+
+                    ZipArchiveEntry entry = archive.CreateEntry(filePath, level);
+                    using (Stream entryStream = entry.Open())
+                    {
+                        await entryStream.WriteAsync(content);
+                    }
+
+                    manifest.Entries.Add(new ManifestEntry
+                    {
+                        FileName = filePath,
+                        UncompressedSize = size,
+                        Sha256 = sha256,
+                        IsDirectory = false,
+                        CompressionMethod = level == CompressionLevel.NoCompression ? "Store" : "Deflate"
+                    });
+                }
+
+                // Embed manifest as __manifest__.json (no BOM)
+                string manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);
+                ZipArchiveEntry manifestEntry = archive.CreateEntry("__manifest__.json", CompressionLevel.Fastest);
+                using (StreamWriter writer = new(manifestEntry.Open(),
+                           new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+                {
+                    await writer.WriteAsync(manifestJson);
+                }
             }
-
-            // Generate deterministic content
-            byte[] content = GenerateDeterministicContent(filePath, size);
-            string sha256 = ComputeSha256(content);
-
-            // Determine compression
-            CompressionLevel level = size > 50 * 1024 * 1024
-                ? CompressionLevel.NoCompression  // Large files stored for speed
-                : CompressionLevel.Fastest;
-
-            ZipArchiveEntry entry = archive.CreateEntry(filePath, level);
-            using (Stream entryStream = entry.Open())
-            {
-                await entryStream.WriteAsync(content);
-            }
-
-            manifest.Entries.Add(new ManifestEntry
-            {
-                FileName = filePath,
-                UncompressedSize = size,
-                Sha256 = sha256,
-                IsDirectory = false,
-                CompressionMethod = level == CompressionLevel.NoCompression ? "Store" : "Deflate"
-            });
-        }
-
-        // Embed manifest as __manifest__.json (no BOM)
-        string manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);
-        ZipArchiveEntry manifestEntry = archive.CreateEntry("__manifest__.json", CompressionLevel.Fastest);
-        using (StreamWriter writer = new(manifestEntry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-        {
-            await writer.WriteAsync(manifestJson);
         }
     }
 
@@ -134,14 +138,18 @@ public static class TestZipGenerator
     /// </summary>
     public static async Task<ZipManifest> LoadManifestFromZipAsync(string zipPath)
     {
-        using ZipArchive archive = ZipFile.OpenRead(zipPath);
-        ZipArchiveEntry? entry = archive.GetEntry("__manifest__.json");
-        if (entry == null)
-            throw new InvalidOperationException($"No __manifest__.json found in {zipPath}");
+        using (ZipArchive archive = ZipFile.OpenRead(zipPath))
+        {
+            ZipArchiveEntry? entry = archive.GetEntry("__manifest__.json");
+            if (entry == null)
+                throw new InvalidOperationException($"No __manifest__.json found in {zipPath}");
 
-        using Stream stream = entry.Open();
-        return await JsonSerializer.DeserializeAsync<ZipManifest>(stream) ??
-            throw new InvalidOperationException("Failed to deserialize manifest");
+            using (Stream stream = entry.Open())
+            {
+                return await JsonSerializer.DeserializeAsync<ZipManifest>(stream) ??
+                       throw new InvalidOperationException("Failed to deserialize manifest");
+            }
+        }
     }
 
     /// <summary>

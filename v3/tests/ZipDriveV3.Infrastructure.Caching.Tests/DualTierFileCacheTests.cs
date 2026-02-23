@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ZipDriveV3.Infrastructure.Caching.Tests;
 
@@ -15,7 +17,11 @@ public class DualTierFileCacheTests
     private static DualTierFileCache CreateCache(CacheOptions? options = null)
     {
         var opts = options ?? DefaultOptions();
-        return new DualTierFileCache(opts, new LruEvictionPolicy());
+        return new DualTierFileCache(Microsoft.Extensions.Options.Options.Create(opts),
+            new LruEvictionPolicy(),
+            TimeProvider.System,
+            NullLogger<DualTierFileCache>.Instance,
+            NullLoggerFactory.Instance);
     }
 
     private static Func<CancellationToken, Task<CacheFactoryResult<Stream>>> CreateFactory(int sizeBytes)
@@ -38,12 +44,13 @@ public class DualTierFileCacheTests
         var cache = CreateCache(DefaultOptions(cutoffMb: 1)); // 1 MB cutoff
         int smallSize = 512; // 512 bytes - well under 1 MB
 
-        using var handle = await cache.BorrowAsync("small-file", TimeSpan.FromMinutes(5),
-            sizeHintBytes: smallSize, CreateFactory(smallSize));
-
-        handle.Value.Should().NotBeNull();
-        cache.MemoryTier.EntryCount.Should().Be(1);
-        cache.DiskTier.EntryCount.Should().Be(0);
+        using (var handle = await cache.BorrowAsync("small-file", TimeSpan.FromMinutes(5),
+                   sizeHintBytes: smallSize, CreateFactory(smallSize)))
+        {
+            handle.Value.Should().NotBeNull();
+            cache.MemoryTier.EntryCount.Should().Be(1);
+            cache.DiskTier.EntryCount.Should().Be(0);
+        }
     }
 
     [Fact]
@@ -53,12 +60,13 @@ public class DualTierFileCacheTests
         var cache = CreateCache(options);
         int largeSize = 2 * 1024 * 1024; // 2 MB - above 1 MB cutoff
 
-        using var handle = await cache.BorrowAsync("large-file", TimeSpan.FromMinutes(5),
-            sizeHintBytes: largeSize, CreateFactory(largeSize));
-
-        handle.Value.Should().NotBeNull();
-        cache.MemoryTier.EntryCount.Should().Be(0);
-        cache.DiskTier.EntryCount.Should().Be(1);
+        using (var handle = await cache.BorrowAsync("large-file", TimeSpan.FromMinutes(5),
+                   sizeHintBytes: largeSize, CreateFactory(largeSize)))
+        {
+            handle.Value.Should().NotBeNull();
+            cache.MemoryTier.EntryCount.Should().Be(0);
+            cache.DiskTier.EntryCount.Should().Be(1);
+        }
     }
 
     [Fact]
@@ -129,10 +137,12 @@ public class DualTierFileCacheTests
 
         // Use the ICache<Stream> interface (no size hint)
         ICache<Stream> cacheInterface = cache;
-        using var handle = await cacheInterface.BorrowAsync("no-hint", TimeSpan.FromMinutes(5),
-            CreateFactory(256));
 
-        cache.MemoryTier.EntryCount.Should().Be(1);
-        cache.DiskTier.EntryCount.Should().Be(0);
+        using (await cacheInterface.BorrowAsync("no-hint", TimeSpan.FromMinutes(5),
+                   CreateFactory(256)))
+        {
+            cache.MemoryTier.EntryCount.Should().Be(1);
+            cache.DiskTier.EntryCount.Should().Be(0);
+        }
     }
 }

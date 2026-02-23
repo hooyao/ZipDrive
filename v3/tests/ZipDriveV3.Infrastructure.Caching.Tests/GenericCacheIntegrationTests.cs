@@ -2791,7 +2791,7 @@ public class GenericCacheIntegrationTests : IDisposable
     private GenericCache<Stream> CreateDiskCache(long capacityBytes)
     {
         return new GenericCache<Stream>(
-            new DiskStorageStrategy(_tempDir, NullLogger<DiskStorageStrategy>.Instance),
+            new DiskStorageStrategy(NullLogger<DiskStorageStrategy>.Instance, _tempDir),
             new LruEvictionPolicy(),
             capacityBytes,
             _fakeTime,

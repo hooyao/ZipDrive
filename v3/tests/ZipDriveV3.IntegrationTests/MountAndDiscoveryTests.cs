@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain.Models;
 using ZipDriveV3.TestHelpers;
 
@@ -54,7 +56,7 @@ public class MountAndDiscoveryTests
             var fixture = new VfsTestFixture();
             // Use a custom path - can't reuse the shared fixture for this test
             // Just verify discovery on empty returns empty
-            var discovery = new ZipDriveV3.Application.Services.ArchiveDiscovery();
+            var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
             var results = await discovery.DiscoverAsync(emptyDir, 6);
             results.Should().BeEmpty();
         }

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
 using ZipDriveV3.Domain.Abstractions;
@@ -38,17 +39,23 @@ public class EnduranceTest : IAsyncLifetime
         var charComparer = CaseInsensitiveCharComparer.Instance;
         var archiveTrie = new ArchiveTrie(charComparer);
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery();
-        Func<string, IZipReader> readerFactory = path => new ZipReader(File.OpenRead(path));
+        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
+        var readerFactory = new ZipReaderFactory();
 
-        var scStorage = new ObjectStorageStrategy<ArchiveStructure>();
-        var sc = new GenericCache<ArchiveStructure>(scStorage, new LruEvictionPolicy(), 128 * 1024 * 1024);
-        var structureCache = new ArchiveStructureCache(sc, readerFactory);
+        var structureStore = new ArchiveStructureStore(
+            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var cacheOpts = Microsoft.Extensions.Options.Options.Create(
+            new CacheOptions { MemoryCacheSizeMb = 128, DiskCacheSizeMb = 128 });
+        var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
 
-        var fcStorage = new MemoryStorageStrategy();
-        var fc = new GenericCache<Stream>(fcStorage, new LruEvictionPolicy(), 128 * 1024 * 1024);
+        var fc = new DualTierFileCache(
+            cacheOpts,
+            new LruEvictionPolicy(), TimeProvider.System,
+            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
 
-        var vfs = new ZipVirtualFileSystem(archiveTrie, structureCache, fc, discovery, pathResolver, readerFactory);
+        var vfs = new ZipVirtualFileSystem(archiveTrie, structureCache, fc, discovery, pathResolver, readerFactory,
+            cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
         await vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
         _vfs = vfs;
     }
@@ -68,43 +75,46 @@ public class EnduranceTest : IAsyncLifetime
         double hours = double.Parse(durationStr);
         TimeSpan duration = TimeSpan.FromHours(hours);
 
-        using CancellationTokenSource cts = new(duration);
-        Stopwatch sw = Stopwatch.StartNew();
-
-        // Collect all archive paths
-        List<string> archivePaths = new();
-        await CollectArchivePathsAsync("", archivePaths);
-
-        if (archivePaths.Count == 0)
+        using (CancellationTokenSource cts = new(duration))
         {
-            // No archives - skip
-            return;
-        }
+            Stopwatch sw = Stopwatch.StartNew();
 
-        // Launch 20 concurrent tasks with different workloads
-        Random rng = new(42);
-        Task[] tasks = new Task[20];
-        for (int i = 0; i < 20; i++)
-        {
-            int taskId = i;
-            tasks[i] = taskId switch
+            // Collect all archive paths
+            List<string> archivePaths = new();
+            await CollectArchivePathsAsync("", archivePaths);
+
+            if (archivePaths.Count == 0)
             {
-                < 8 => RunRandomFileBrowserAsync(archivePaths, rng.Next(), cts.Token),
-                < 14 => RunSequentialReaderAsync(archivePaths, rng.Next(), cts.Token),
-                < 18 => RunPathResolutionStressAsync(archivePaths, rng.Next(), cts.Token),
-                _ => RunConcurrentAccessAsync(archivePaths, rng.Next(), cts.Token)
-            };
+                // No archives - skip
+                return;
+            }
+
+            // Launch 20 concurrent tasks with different workloads
+            Random rng = new(42);
+            Task[] tasks = new Task[20];
+            for (int i = 0; i < 20; i++)
+            {
+                int taskId = i;
+                tasks[i] = taskId switch
+                {
+                    < 8 => RunRandomFileBrowserAsync(archivePaths, rng.Next(), cts.Token),
+                    < 14 => RunSequentialReaderAsync(archivePaths, rng.Next(), cts.Token),
+                    < 18 => RunPathResolutionStressAsync(archivePaths, rng.Next(), cts.Token),
+                    _ => RunConcurrentAccessAsync(archivePaths, rng.Next(), cts.Token)
+                };
+            }
+
+            await Task.WhenAll(tasks);
+            sw.Stop();
+
+            // Report
+            long reads = Interlocked.Read(ref _totalReads);
+            long verified = Interlocked.Read(ref _verifiedReads);
+
+            _errors.Should()
+                .BeEmpty($"Expected zero errors but got {_errors.Count}: {string.Join("; ", _errors.Take(5))}");
+            reads.Should().BeGreaterThan(0, "Should have performed some reads");
         }
-
-        await Task.WhenAll(tasks);
-        sw.Stop();
-
-        // Report
-        long reads = Interlocked.Read(ref _totalReads);
-        long verified = Interlocked.Read(ref _verifiedReads);
-
-        _errors.Should().BeEmpty($"Expected zero errors but got {_errors.Count}: {string.Join("; ", _errors.Take(5))}");
-        reads.Should().BeGreaterThan(0, "Should have performed some reads");
     }
 
     private async Task RunRandomFileBrowserAsync(List<string> archives, int seed, CancellationToken ct)

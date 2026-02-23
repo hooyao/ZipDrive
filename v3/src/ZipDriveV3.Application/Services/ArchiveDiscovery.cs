@@ -12,9 +12,9 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
     private const int MinDepth = 1;
     private const int MaxDepth = 6;
 
-    private readonly ILogger<ArchiveDiscovery>? _logger;
+    private readonly ILogger<ArchiveDiscovery> _logger;
 
-    public ArchiveDiscovery(ILogger<ArchiveDiscovery>? logger = null)
+    public ArchiveDiscovery(ILogger<ArchiveDiscovery> logger)
     {
         _logger = logger;
     }
@@ -35,14 +35,14 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
         // Clamp depth to valid range
         int clampedDepth = Math.Clamp(maxDepth, MinDepth, MaxDepth);
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "Discovering ZIP files under {RootPath} with depth {Depth}",
             rootPath, clampedDepth);
 
         List<ArchiveDescriptor> results = new();
         ScanDirectory(rootPath, rootPath, clampedDepth, 0, results, cancellationToken);
 
-        _logger?.LogInformation("Discovered {Count} ZIP files", results.Count);
+        _logger.LogInformation("Discovered {Count} ZIP files", results.Count);
 
         return Task.FromResult<IReadOnlyList<ArchiveDescriptor>>(results);
     }
@@ -84,7 +84,7 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
                 }
                 catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
                 {
-                    _logger?.LogWarning(ex, "Skipping inaccessible ZIP file: {Path}", filePath);
+                    _logger.LogWarning(ex, "Skipping inaccessible ZIP file: {Path}", filePath);
                 }
             }
 
@@ -99,13 +99,13 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
                 }
                 catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
                 {
-                    _logger?.LogWarning(ex, "Skipping inaccessible directory: {Path}", dirPath);
+                    _logger.LogWarning(ex, "Skipping inaccessible directory: {Path}", dirPath);
                 }
             }
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
-            _logger?.LogWarning(ex, "Cannot access directory: {Path}", currentPath);
+            _logger.LogWarning(ex, "Cannot access directory: {Path}", currentPath);
         }
     }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ZipDriveV3.Infrastructure.Caching;
 
@@ -11,41 +12,42 @@ public sealed class DualTierFileCache : ICache<Stream>
     private readonly GenericCache<Stream> _memoryCache;
     private readonly GenericCache<Stream> _diskCache;
     private readonly long _cutoffBytes;
-    private readonly ILogger<DualTierFileCache>? _logger;
+    private readonly ILogger<DualTierFileCache> _logger;
 
     public DualTierFileCache(
-        CacheOptions options,
+        IOptions<CacheOptions> options,
         IEvictionPolicy evictionPolicy,
-        TimeProvider? timeProvider = null,
-        ILogger<DualTierFileCache>? logger = null,
-        ILoggerFactory? loggerFactory = null)
+        TimeProvider timeProvider,
+        ILogger<DualTierFileCache> logger,
+        ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(evictionPolicy);
 
-        _cutoffBytes = options.SmallFileCutoffBytes;
+        CacheOptions opts = options.Value;
+        _cutoffBytes = opts.SmallFileCutoffBytes;
         _logger = logger;
 
         _memoryCache = new GenericCache<Stream>(
             new MemoryStorageStrategy(),
             evictionPolicy,
-            options.MemoryCacheSizeBytes,
+            opts.MemoryCacheSizeBytes,
             timeProvider,
-            loggerFactory?.CreateLogger<GenericCache<Stream>>(),
+            loggerFactory.CreateLogger<GenericCache<Stream>>(),
             name: "memory");
 
         _diskCache = new GenericCache<Stream>(
-            new DiskStorageStrategy(options.TempDirectory,
-                loggerFactory?.CreateLogger<DiskStorageStrategy>()),
+            new DiskStorageStrategy(loggerFactory.CreateLogger<DiskStorageStrategy>(),
+                opts.TempDirectory),
             evictionPolicy,
-            options.DiskCacheSizeBytes,
+            opts.DiskCacheSizeBytes,
             timeProvider,
-            loggerFactory?.CreateLogger<GenericCache<Stream>>(),
+            loggerFactory.CreateLogger<GenericCache<Stream>>(),
             name: "disk");
 
-        _logger?.LogInformation(
+        _logger.LogInformation(
             "DualTierFileCache initialized: memory={MemoryMb}MB, disk={DiskMb}MB, cutoff={CutoffMb}MB",
-            options.MemoryCacheSizeMb, options.DiskCacheSizeMb, options.SmallFileCutoffMb);
+            opts.MemoryCacheSizeMb, opts.DiskCacheSizeMb, opts.SmallFileCutoffMb);
     }
 
     /// <summary>
@@ -138,4 +140,15 @@ public sealed class DualTierFileCache : ICache<Stream>
     /// Gets the size cutoff in bytes.
     /// </summary>
     internal long CutoffBytes => _cutoffBytes;
+
+    /// <summary>
+    /// Processes pending async cleanup items on both tiers (e.g., temp file deletion on disk tier).
+    /// Call this periodically from a background maintenance task.
+    /// </summary>
+    /// <param name="maxItems">Maximum number of items to process per tier.</param>
+    /// <returns>Total number of items processed across both tiers.</returns>
+    public int ProcessPendingCleanup(int maxItems = 100)
+    {
+        return _memoryCache.ProcessPendingCleanup(maxItems) + _diskCache.ProcessPendingCleanup(maxItems);
+    }
 }

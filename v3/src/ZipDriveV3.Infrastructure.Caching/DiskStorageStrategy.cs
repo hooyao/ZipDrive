@@ -12,14 +12,14 @@ namespace ZipDriveV3.Infrastructure.Caching;
 public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
 {
     private readonly string _tempDirectory;
-    private readonly ILogger<DiskStorageStrategy>? _logger;
+    private readonly ILogger<DiskStorageStrategy> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiskStorageStrategy"/> class.
     /// </summary>
     /// <param name="tempDirectory">The directory for temporary cache files. If null, uses system temp.</param>
-    /// <param name="logger">Optional logger instance.</param>
-    public DiskStorageStrategy(string? tempDirectory = null, ILogger<DiskStorageStrategy>? logger = null)
+    /// <param name="logger">Logger instance.</param>
+    public DiskStorageStrategy(ILogger<DiskStorageStrategy> logger, string? tempDirectory = null)
     {
         _tempDirectory = tempDirectory ?? Path.GetTempPath();
         _logger = logger;
@@ -39,7 +39,7 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
 
         string tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.zip2vd.cache");
 
-        _logger?.LogDebug("Creating temp file: {Path} ({Size} bytes)", tempPath, result.SizeBytes);
+        _logger.LogDebug("Creating temp file: {Path} ({Size} bytes)", tempPath, result.SizeBytes);
 
         // Write to temp file
         await using (FileStream fileStream = new FileStream(
@@ -88,7 +88,7 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Failed to dispose MMF for {Path}", entry.TempFilePath);
+            _logger.LogWarning(ex, "Failed to dispose MMF for {Path}", entry.TempFilePath);
         }
 
         try
@@ -96,12 +96,12 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
             if (File.Exists(entry.TempFilePath))
             {
                 File.Delete(entry.TempFilePath);
-                _logger?.LogDebug("Deleted temp file: {Path}", entry.TempFilePath);
+                _logger.LogDebug("Deleted temp file: {Path}", entry.TempFilePath);
             }
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Failed to delete temp file: {Path}", entry.TempFilePath);
+            _logger.LogWarning(ex, "Failed to delete temp file: {Path}", entry.TempFilePath);
         }
     }
 

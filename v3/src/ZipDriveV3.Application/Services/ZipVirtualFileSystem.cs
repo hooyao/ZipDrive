@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ZipDriveV3.Domain.Abstractions;
 using ZipDriveV3.Domain.Exceptions;
 using ZipDriveV3.Domain.Models;
@@ -15,31 +16,30 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 {
     private readonly IArchiveTrie _archiveTrie;
     private readonly IArchiveStructureCache _structureCache;
-    private readonly ICache<Stream> _fileCacheBase;
-    private readonly DualTierFileCache? _dualTierCache;
+    private readonly DualTierFileCache _fileCache;
     private readonly IArchiveDiscovery _discovery;
     private readonly IPathResolver _pathResolver;
-    private readonly Func<string, IZipReader> _zipReaderFactory;
-    private readonly ILogger<ZipVirtualFileSystem>? _logger;
-
-    private VfsMountOptions? _mountOptions;
+    private readonly IZipReaderFactory _zipReaderFactory;
+    private readonly CacheOptions _cacheOptions;
+    private readonly ILogger<ZipVirtualFileSystem> _logger;
 
     public ZipVirtualFileSystem(
         IArchiveTrie archiveTrie,
         IArchiveStructureCache structureCache,
-        ICache<Stream> fileCache,
+        DualTierFileCache fileCache,
         IArchiveDiscovery discovery,
         IPathResolver pathResolver,
-        Func<string, IZipReader> zipReaderFactory,
-        ILogger<ZipVirtualFileSystem>? logger = null)
+        IZipReaderFactory zipReaderFactory,
+        IOptions<CacheOptions> cacheOptions,
+        ILogger<ZipVirtualFileSystem> logger)
     {
         _archiveTrie = archiveTrie;
         _structureCache = structureCache;
-        _fileCacheBase = fileCache;
-        _dualTierCache = fileCache as DualTierFileCache;
+        _fileCache = fileCache;
         _discovery = discovery;
         _pathResolver = pathResolver;
         _zipReaderFactory = zipReaderFactory;
+        _cacheOptions = cacheOptions.Value;
         _logger = logger;
     }
 
@@ -54,7 +54,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        _logger?.LogInformation("Mounting VFS from {RootPath} with depth {Depth}",
+        _logger.LogInformation("Mounting VFS from {RootPath} with depth {Depth}",
             options.RootPath, options.MaxDiscoveryDepth);
 
         IReadOnlyList<ArchiveDescriptor> archives = await _discovery.DiscoverAsync(
@@ -67,20 +67,18 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
             _archiveTrie.AddArchive(archive);
         }
 
-        _mountOptions = options;
         IsMounted = true;
         MountStateChanged?.Invoke(this, true);
 
-        _logger?.LogInformation("VFS mounted: {ArchiveCount} archives discovered", archives.Count);
+        _logger.LogInformation("VFS mounted: {ArchiveCount} archives discovered", archives.Count);
     }
 
     /// <inheritdoc />
     public Task UnmountAsync(CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Unmounting VFS");
+        _logger.LogInformation("Unmounting VFS");
 
         _structureCache.Clear();
-        _mountOptions = null;
         IsMounted = false;
         MountStateChanged?.Invoke(this, false);
 
@@ -190,38 +188,33 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
         {
             // Materialize: extract file from ZIP into a stream
-            await using IZipReader reader = _zipReaderFactory(archive.PhysicalPath);
-            Stream decompressedStream = await reader.OpenEntryStreamAsync(entry.Value, ct).ConfigureAwait(false);
-
-            // Read entire file into a stream for random access
-            MemoryStream ms = new((int)Math.Min(fileSizeBytes, int.MaxValue));
-            await decompressedStream.CopyToAsync(ms, ct).ConfigureAwait(false);
-            ms.Position = 0;
-
-            return new CacheFactoryResult<Stream>
+            await using (IZipReader reader = _zipReaderFactory.Create(archive.PhysicalPath))
             {
-                Value = ms,
-                SizeBytes = ms.Length
-            };
+                Stream decompressedStream = await reader.OpenEntryStreamAsync(entry.Value, ct).ConfigureAwait(false);
+
+                // Read entire file into a stream for random access
+                MemoryStream ms = new((int)Math.Min(fileSizeBytes, int.MaxValue));
+                await decompressedStream.CopyToAsync(ms, ct).ConfigureAwait(false);
+                ms.Position = 0;
+
+                return new CacheFactoryResult<Stream>
+                {
+                    Value = ms,
+                    SizeBytes = ms.Length
+                };
+            }
         };
 
-        // Use size-hint routing if dual-tier cache is available
-        ICacheHandle<Stream> handle = _dualTierCache != null
-            ? await _dualTierCache.BorrowAsync(cacheKey, TimeSpan.FromMinutes(30), fileSizeBytes, factory, cancellationToken).ConfigureAwait(false)
-            : await _fileCacheBase.BorrowAsync(cacheKey, TimeSpan.FromMinutes(30), factory, cancellationToken).ConfigureAwait(false);
-
-        try
+        using (ICacheHandle<Stream> handle = await _fileCache.BorrowAsync(
+                   cacheKey, _cacheOptions.DefaultTtl, fileSizeBytes, factory, cancellationToken).ConfigureAwait(false))
         {
             Stream stream = handle.Value;
             stream.Position = offset;
 
             int bytesToRead = (int)Math.Min(buffer.Length, entry.Value.UncompressedSize - offset);
-            int bytesRead = await stream.ReadAsync(buffer.AsMemory(0, bytesToRead), cancellationToken).ConfigureAwait(false);
+            int bytesRead = await stream.ReadAsync(buffer.AsMemory(0, bytesToRead), cancellationToken)
+                .ConfigureAwait(false);
             return bytesRead;
-        }
-        finally
-        {
-            handle.Dispose();
         }
     }
 
