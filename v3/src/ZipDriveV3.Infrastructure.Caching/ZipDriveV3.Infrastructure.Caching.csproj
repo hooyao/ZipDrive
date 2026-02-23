@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ZipDriveV3.Infrastructure.Tests" />
+    <InternalsVisibleTo Include="ZipDriveV3.Infrastructure.Caching.Tests" />
   </ItemGroup>
 
   <ItemGroup>

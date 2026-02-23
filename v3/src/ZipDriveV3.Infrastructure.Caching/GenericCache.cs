@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ZipDriveV3.Infrastructure.Caching;
@@ -34,7 +35,7 @@ namespace ZipDriveV3.Infrastructure.Caching;
 /// </item>
 /// </list>
 /// </remarks>
-public sealed class GenericCache<T> : ICache<T>
+public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Layer 1: Lock-free reads
@@ -57,6 +58,8 @@ public sealed class GenericCache<T> : ICache<T>
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<GenericCache<T>>? _logger;
     private readonly long _capacityBytes;
+    private readonly string _name;
+    private readonly KeyValuePair<string, object?> _tierTag;
 
     private long _currentSizeBytes;
     private long _hits;
@@ -70,12 +73,14 @@ public sealed class GenericCache<T> : ICache<T>
     /// <param name="capacityBytes">The maximum capacity in bytes.</param>
     /// <param name="timeProvider">Optional time provider for TTL management. If null, uses TimeProvider.System.</param>
     /// <param name="logger">Optional logger instance.</param>
+    /// <param name="name">Optional name for this cache instance, used as the 'tier' metric tag. Defaults to type name.</param>
     public GenericCache(
         IStorageStrategy<T> storageStrategy,
         IEvictionPolicy evictionPolicy,
         long capacityBytes,
         TimeProvider? timeProvider = null,
-        ILogger<GenericCache<T>>? logger = null)
+        ILogger<GenericCache<T>>? logger = null,
+        string? name = null)
     {
         if (capacityBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacityBytes), "Capacity must be positive");
@@ -85,11 +90,16 @@ public sealed class GenericCache<T> : ICache<T>
         _capacityBytes = capacityBytes;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
+        _name = name ?? typeof(T).Name;
+        _tierTag = new KeyValuePair<string, object?>("tier", _name);
+
+        CacheTelemetry.RegisterInstance(this);
 
         _logger?.LogInformation(
-            "GenericCache<{Type}> initialized with capacity: {CapacityMb:F1} MB",
+            "GenericCache<{Type}> initialized with capacity: {CapacityMb:F1} MB, tier: {Tier}",
             typeof(T).Name,
-            capacityBytes / (1024.0 * 1024.0));
+            capacityBytes / (1024.0 * 1024.0),
+            _name);
     }
 
     /// <inheritdoc />
@@ -105,6 +115,9 @@ public sealed class GenericCache<T> : ICache<T>
         if (string.IsNullOrWhiteSpace(cacheKey))
             throw new ArgumentException("Cache key cannot be empty or whitespace", nameof(cacheKey));
 
+        using Activity? borrowActivity = CacheTelemetry.Source.StartActivity("cache.borrow");
+        borrowActivity?.SetTag("tier", _name);
+
         // ═══════════════════════════════════════════════════════════════════
         // LAYER 1: Lock-free cache lookup (FAST PATH)
         // ═══════════════════════════════════════════════════════════════════
@@ -116,6 +129,9 @@ public sealed class GenericCache<T> : ICache<T>
             existingEntry.AccessCount++;
             Interlocked.Increment(ref _hits);
 
+            CacheTelemetry.Hits.Add(1, _tierTag);
+            borrowActivity?.SetTag("result", "hit");
+
             _logger?.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
 
             T value = _storageStrategy.Retrieve(existingEntry.Stored);
@@ -126,6 +142,10 @@ public sealed class GenericCache<T> : ICache<T>
         // LAYER 2: Per-key materialization lock (THUNDERING HERD PREVENTION)
         // ═══════════════════════════════════════════════════════════════════
         Interlocked.Increment(ref _misses);
+
+        CacheTelemetry.Misses.Add(1, _tierTag);
+        borrowActivity?.SetTag("result", "miss");
+
         _logger?.LogDebug("Cache MISS: {Key}", cacheKey);
 
         Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
@@ -171,8 +191,18 @@ public sealed class GenericCache<T> : ICache<T>
     {
         _logger?.LogDebug("Materializing: {Key}", cacheKey);
 
+        long startTimestamp = Stopwatch.GetTimestamp();
+
         // Call factory to get data AND size
         CacheFactoryResult<T> result = await factory(cancellationToken).ConfigureAwait(false);
+
+        double materializationMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        string sizeBucket = SizeBucketClassifier.Classify(result.SizeBytes);
+
+        using Activity? materializeActivity = CacheTelemetry.Source.StartActivity("cache.materialize");
+        materializeActivity?.SetTag("tier", _name);
+        materializeActivity?.SetTag("size_bucket", sizeBucket);
+        materializeActivity?.SetTag("size_bytes", result.SizeBytes);
 
         // ═══════════════════════════════════════════════════════════════════
         // LAYER 3: Eviction (only if capacity exceeded)
@@ -206,11 +236,17 @@ public sealed class GenericCache<T> : ICache<T>
         _cache[cacheKey] = entry;
         Interlocked.Add(ref _currentSizeBytes, stored.SizeBytes);
 
+        CacheTelemetry.MaterializationDuration.Record(materializationMs,
+            _tierTag,
+            new KeyValuePair<string, object?>("size_bucket", sizeBucket));
+
         _logger?.LogInformation(
-            "Materialized: {Key} ({SizeMb:F2} MB, {UtilizationPct:F1}% capacity)",
+            "Materialized: {Key} ({SizeMb:F2} MB, {UtilizationPct:F1}% capacity, {Tier} tier, {MaterializationMs:F1} ms)",
             cacheKey,
             stored.SizeBytes / (1024.0 * 1024.0),
-            (CurrentSizeBytes / (double)_capacityBytes) * 100);
+            (CurrentSizeBytes / (double)_capacityBytes) * 100,
+            _name,
+            materializationMs);
 
         // ═══════════════════════════════════════════════════════════════════
         // POST-STORE CAPACITY CHECK (Soft Capacity Design)
@@ -249,11 +285,16 @@ public sealed class GenericCache<T> : ICache<T>
             _capacityBytes / (1024.0 * 1024.0));
 
         // Slow path: Acquire eviction lock
+        using Activity? evictActivity = CacheTelemetry.Source.StartActivity("cache.evict");
+        evictActivity?.SetTag("tier", _name);
+
         using (_evictionLock.EnterScope())
         {
             // Double-check after acquiring lock (another thread might have evicted already)
             if (_currentSizeBytes + neededBytes <= _capacityBytes)
             {
+                evictActivity?.SetTag("evicted_count", 0);
+                evictActivity?.SetTag("evicted_bytes", 0L);
                 return Task.CompletedTask;
             }
 
@@ -275,7 +316,7 @@ public sealed class GenericCache<T> : ICache<T>
 
             foreach (string key in expiredKeys)
             {
-                if (TryEvictEntry(key, out long evictedBytes))
+                if (TryEvictEntry(key, "expired", out long evictedBytes))
                 {
                     expiredCount++;
                     expiredBytes += evictedBytes;
@@ -285,9 +326,10 @@ public sealed class GenericCache<T> : ICache<T>
             if (expiredCount > 0)
             {
                 _logger?.LogInformation(
-                    "Evicted {Count} expired entries ({SizeMb:F2} MB)",
+                    "Evicted {Count} expired entries ({SizeMb:F2} MB, {Tier} tier)",
                     expiredCount,
-                    expiredBytes / (1024.0 * 1024.0));
+                    expiredBytes / (1024.0 * 1024.0),
+                    _name);
             }
 
             // Phase 2: Use eviction policy if still need space
@@ -318,7 +360,7 @@ public sealed class GenericCache<T> : ICache<T>
 
                 foreach (ICacheEntry victim in victims)
                 {
-                    if (TryEvictEntry(victim.CacheKey, out long evictedBytes))
+                    if (TryEvictEntry(victim.CacheKey, "policy", out long evictedBytes))
                     {
                         policyEvictedCount++;
                         policyEvictedBytes += evictedBytes;
@@ -328,11 +370,18 @@ public sealed class GenericCache<T> : ICache<T>
                 if (policyEvictedCount > 0)
                 {
                     _logger?.LogInformation(
-                        "Evicted {Count} entries via policy ({SizeMb:F2} MB)",
+                        "Evicted {Count} entries via policy ({SizeMb:F2} MB, {Tier} tier)",
                         policyEvictedCount,
-                        policyEvictedBytes / (1024.0 * 1024.0));
+                        policyEvictedBytes / (1024.0 * 1024.0),
+                        _name);
+
+                    expiredCount += policyEvictedCount;
+                    expiredBytes += policyEvictedBytes;
                 }
             }
+
+            evictActivity?.SetTag("evicted_count", expiredCount);
+            evictActivity?.SetTag("evicted_bytes", expiredBytes);
         }
 
         return Task.CompletedTask;
@@ -341,7 +390,7 @@ public sealed class GenericCache<T> : ICache<T>
     /// <summary>
     /// Attempts to evict a single entry by key.
     /// </summary>
-    private bool TryEvictEntry(string key, out long evictedBytes)
+    private bool TryEvictEntry(string key, string reason, out long evictedBytes)
     {
         evictedBytes = 0;
 
@@ -362,17 +411,23 @@ public sealed class GenericCache<T> : ICache<T>
             evictedBytes = removed.Stored.SizeBytes;
             Interlocked.Add(ref _currentSizeBytes, -evictedBytes);
 
+            CacheTelemetry.Evictions.Add(1,
+                _tierTag,
+                new KeyValuePair<string, object?>("reason", reason));
+
             if (_storageStrategy.RequiresAsyncCleanup)
             {
                 // Queue for background cleanup (non-blocking)
                 _pendingCleanup.Enqueue(removed.Stored);
-                _logger?.LogDebug("Queued for cleanup: {Key}", key);
             }
-            else
+
+            _logger?.LogInformation(
+                "Evicted: {Key} ({SizeBytes} bytes, {Tier} tier, reason: {Reason})",
+                key, evictedBytes, _name, reason);
+
+            if (!_storageStrategy.RequiresAsyncCleanup)
             {
-                // Inline cleanup (fast, GC-based)
                 _storageStrategy.Dispose(removed.Stored);
-                _logger?.LogDebug("Evicted: {Key} ({SizeBytes} bytes)", key, evictedBytes);
             }
 
             return true;
@@ -427,7 +482,7 @@ public sealed class GenericCache<T> : ICache<T>
 
         foreach (string key in expiredKeys)
         {
-            if (TryEvictEntry(key, out long bytes))
+            if (TryEvictEntry(key, "manual", out long bytes))
             {
                 evictedCount++;
                 evictedBytes += bytes;
@@ -437,9 +492,10 @@ public sealed class GenericCache<T> : ICache<T>
         if (evictedCount > 0)
         {
             _logger?.LogInformation(
-                "Manual eviction: removed {Count} expired entries ({SizeMb:F2} MB)",
+                "Manual eviction: removed {Count} expired entries ({SizeMb:F2} MB, {Tier} tier)",
                 evictedCount,
-                evictedBytes / (1024.0 * 1024.0));
+                evictedBytes / (1024.0 * 1024.0),
+                _name);
         }
     }
 
@@ -568,6 +624,14 @@ public sealed class GenericCache<T> : ICache<T>
     /// </summary>
     private bool IsExpired(CacheEntry entry)
         => _timeProvider.GetUtcNow() > entry.ExpiresAt;
+
+    /// <summary>
+    /// Gets the name of this cache instance (used as metric tier tag).
+    /// </summary>
+    public string Name => _name;
+
+    /// <inheritdoc />
+    string ICacheMetricsSource.Name => _name;
 
     /// <inheritdoc />
     public long CurrentSizeBytes => Interlocked.Read(ref _currentSizeBytes);

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -524,6 +525,8 @@ public sealed class ZipReader : IZipReader
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        long startTimestamp = Stopwatch.GetTimestamp();
+
         // Check encryption
         if (entry.IsEncrypted)
         {
@@ -550,6 +553,17 @@ public sealed class ZipReader : IZipReader
         // Create bounded sub-stream
         SubStream dataStream = new SubStream(_stream, entry.CompressedSize, leaveOpen: true);
 
+        string compressionTag = entry.CompressionMethod == ZipConstants.CompressionMethodStore ? "store" : "deflate";
+        string sizeBucket = ClassifySizeBucket(entry.UncompressedSize);
+
+        double elapsedMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        ZipTelemetry.ExtractionDuration.Record(elapsedMs,
+            new KeyValuePair<string, object?>("size_bucket", sizeBucket),
+            new KeyValuePair<string, object?>("compression", compressionTag));
+
+        ZipTelemetry.BytesExtracted.Add(entry.UncompressedSize,
+            new KeyValuePair<string, object?>("compression", compressionTag));
+
         // Wrap in decompression stream if needed
         return entry.CompressionMethod switch
         {
@@ -558,6 +572,16 @@ public sealed class ZipReader : IZipReader
             _ => throw new UnsupportedCompressionException(entry.CompressionMethod, "(entry)", FilePath)
         };
     }
+
+    private static string ClassifySizeBucket(long sizeBytes) => sizeBytes switch
+    {
+        < 1_024L => "tiny",
+        < 1_048_576L => "small",
+        < 10_485_760L => "medium",
+        < 52_428_800L => "large",
+        < 524_288_000L => "xlarge",
+        _ => "huge"
+    };
 
     #endregion
 

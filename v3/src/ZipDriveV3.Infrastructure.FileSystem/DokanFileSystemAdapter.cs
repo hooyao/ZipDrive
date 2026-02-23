@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.AccessControl;
 using DokanNet;
 using LTRData.Extensions.Native.Memory;
@@ -69,6 +70,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
     {
         string path = fileName.Span.ToString();
         bytesRead = 0;
+        long startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -76,6 +78,11 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
             int read = _vfs.ReadFileAsync(path, tempBuffer, offset).GetAwaiter().GetResult();
             tempBuffer.AsSpan(0, read).CopyTo(buffer.Span);
             bytesRead = read;
+
+            DokanTelemetry.ReadDuration.Record(
+                Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                new KeyValuePair<string, object?>("result", "success"));
+
             return DokanResult.Success;
         }
         catch (VfsFileNotFoundException)
@@ -88,6 +95,10 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         }
         catch (Exception ex)
         {
+            DokanTelemetry.ReadDuration.Record(
+                Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                new KeyValuePair<string, object?>("result", "error"));
+
             _logger.LogError(ex, "ReadFile error: {Path}", path);
             return DokanResult.InternalError;
         }

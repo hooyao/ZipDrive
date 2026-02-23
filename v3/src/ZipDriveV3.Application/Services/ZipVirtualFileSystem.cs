@@ -15,7 +15,8 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 {
     private readonly IArchiveTrie _archiveTrie;
     private readonly IArchiveStructureCache _structureCache;
-    private readonly ICache<Stream> _fileCache;
+    private readonly ICache<Stream> _fileCacheBase;
+    private readonly DualTierFileCache? _dualTierCache;
     private readonly IArchiveDiscovery _discovery;
     private readonly IPathResolver _pathResolver;
     private readonly Func<string, IZipReader> _zipReaderFactory;
@@ -34,7 +35,8 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
     {
         _archiveTrie = archiveTrie;
         _structureCache = structureCache;
-        _fileCache = fileCache;
+        _fileCacheBase = fileCache;
+        _dualTierCache = fileCache as DualTierFileCache;
         _discovery = discovery;
         _pathResolver = pathResolver;
         _zipReaderFactory = zipReaderFactory;
@@ -183,27 +185,30 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         // Borrow from file content cache
         string cacheKey = $"{archive.VirtualPath}:{internalPath}";
-        ICacheHandle<Stream> handle = await _fileCache.BorrowAsync(
-            cacheKey,
-            TimeSpan.FromMinutes(30),
-            async ct =>
+        long fileSizeBytes = entry.Value.UncompressedSize;
+
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
+        {
+            // Materialize: extract file from ZIP into a stream
+            await using IZipReader reader = _zipReaderFactory(archive.PhysicalPath);
+            Stream decompressedStream = await reader.OpenEntryStreamAsync(entry.Value, ct).ConfigureAwait(false);
+
+            // Read entire file into a stream for random access
+            MemoryStream ms = new((int)Math.Min(fileSizeBytes, int.MaxValue));
+            await decompressedStream.CopyToAsync(ms, ct).ConfigureAwait(false);
+            ms.Position = 0;
+
+            return new CacheFactoryResult<Stream>
             {
-                // Materialize: extract file from ZIP into a stream
-                await using IZipReader reader = _zipReaderFactory(archive.PhysicalPath);
-                Stream decompressedStream = await reader.OpenEntryStreamAsync(entry.Value, ct).ConfigureAwait(false);
+                Value = ms,
+                SizeBytes = ms.Length
+            };
+        };
 
-                // Read entire file into memory for random access
-                MemoryStream ms = new((int)entry.Value.UncompressedSize);
-                await decompressedStream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                ms.Position = 0;
-
-                return new CacheFactoryResult<Stream>
-                {
-                    Value = ms,
-                    SizeBytes = ms.Length
-                };
-            },
-            cancellationToken).ConfigureAwait(false);
+        // Use size-hint routing if dual-tier cache is available
+        ICacheHandle<Stream> handle = _dualTierCache != null
+            ? await _dualTierCache.BorrowAsync(cacheKey, TimeSpan.FromMinutes(30), fileSizeBytes, factory, cancellationToken).ConfigureAwait(false)
+            : await _fileCacheBase.BorrowAsync(cacheKey, TimeSpan.FromMinutes(30), factory, cancellationToken).ConfigureAwait(false);
 
         try
         {
