@@ -61,7 +61,10 @@
       "mcp__github__get_me",
       "WebFetch(domain:github.com)",
       "Bash(openspec:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.nuget.org)",
+      "Bash(powershell:*)"
     ],
     "deny": [],
     "ask": []
