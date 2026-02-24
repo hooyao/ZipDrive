@@ -38,7 +38,8 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         // Short-circuit Windows shell metadata probes before allocating a string
         if (_shortCircuitShellMetadata && ShellMetadataFilter.IsShellMetadataPath(fileName.Span))
         {
-            _logger.LogDebug("CreateFile: short-circuit shell metadata: {Path}", fileName.Span.ToString());
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("CreateFile: short-circuit shell metadata: {Path}", fileName.Span.ToString());
             return DokanResult.FileNotFound;
         }
 

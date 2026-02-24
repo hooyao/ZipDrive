@@ -19,6 +19,8 @@ public class ShellMetadataFilterTests
     [InlineData(@"\archive.zip\folder.jpg")]
     [InlineData(@"\archive.zip\folder.gif")]
     [InlineData(@"\archive.zip\icon.ico")]
+    [InlineData(@"\archive.zip\subfolder\desktop.ini")]
+    [InlineData(@"\archive.zip\a\b\c\thumbs.db")]
     public void IsShellMetadataPath_ReturnsTrue_ForKnownMetadataFiles(string path)
     {
         ShellMetadataFilter.IsShellMetadataPath(path).Should().BeTrue();
@@ -47,6 +49,8 @@ public class ShellMetadataFilterTests
     [InlineData(@"\archive.zip\subfolder\image.jpg")]
     [InlineData(@"\2000\archive.zip\photo.jpg")]
     [InlineData(@"\archive.zip\folder")]
+    [InlineData(@"\archive.zip\$RECYCLE.BIN\file.txt")]
+    [InlineData(@"\folder\System Volume Information\file.txt")]
     public void IsShellMetadataPath_ReturnsFalse_ForNormalPaths(string path)
     {
         ShellMetadataFilter.IsShellMetadataPath(path).Should().BeFalse();
