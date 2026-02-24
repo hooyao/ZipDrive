@@ -47,67 +47,11 @@ jobs:
           if ($failed) { exit 1 }
         shell: pwsh
 
-      - name: Merge TRX files
-        if: always()
-        run: |
-          $nsUri = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
-          $trxFiles = Get-ChildItem ./TestResults -Filter *.trx
-          if ($trxFiles.Count -eq 0) { Write-Error "No TRX files found"; exit 1 }
-
-          # Load base document with XmlDocument for proper namespace support
-          $base = New-Object System.Xml.XmlDocument
-          $base.Load($trxFiles[0].FullName)
-          $baseMgr = New-Object System.Xml.XmlNamespaceManager($base.NameTable)
-          $baseMgr.AddNamespace("t", $nsUri)
-
-          foreach ($file in $trxFiles | Select-Object -Skip 1) {
-            $other = New-Object System.Xml.XmlDocument
-            $other.Load($file.FullName)
-            $otherMgr = New-Object System.Xml.XmlNamespaceManager($other.NameTable)
-            $otherMgr.AddNamespace("t", $nsUri)
-
-            foreach ($node in $other.SelectNodes("//t:UnitTestResult", $otherMgr)) {
-              $imported = $base.ImportNode($node, $true)
-              $base.SelectSingleNode("//t:Results", $baseMgr).AppendChild($imported) | Out-Null
-            }
-            foreach ($node in $other.SelectNodes("//t:UnitTest", $otherMgr)) {
-              $imported = $base.ImportNode($node, $true)
-              $base.SelectSingleNode("//t:TestDefinitions", $baseMgr).AppendChild($imported) | Out-Null
-            }
-            foreach ($node in $other.SelectNodes("//t:TestEntry", $otherMgr)) {
-              $imported = $base.ImportNode($node, $true)
-              $base.SelectSingleNode("//t:TestEntries", $baseMgr).AppendChild($imported) | Out-Null
-            }
-          }
-
-          # Update counters
-          $results = $base.SelectNodes("//t:UnitTestResult", $baseMgr)
-          $total = $results.Count
-          $passed = @($results | Where-Object { $_.outcome -eq "Passed" }).Count
-          $failed = @($results | Where-Object { $_.outcome -eq "Failed" }).Count
-          $counters = $base.SelectSingleNode("//t:Counters", $baseMgr)
-          $counters.SetAttribute("total", $total.ToString())
-          $counters.SetAttribute("executed", $total.ToString())
-          $counters.SetAttribute("passed", $passed.ToString())
-          $counters.SetAttribute("failed", $failed.ToString())
-
-          $outPath = Join-Path (Resolve-Path ./TestResults) "merged.trx"
-          $base.Save($outPath)
-          Write-Host "Merged $total tests ($passed passed, $failed failed) into merged.trx"
-        shell: pwsh
-
-      - name: Create report working directory
-        if: always()
-        run: New-Item -ItemType Directory -Force -Path _TMP | Out-Null
-        shell: pwsh
-
       - name: Test report
-        uses: zyborg/dotnet-tests-report@v1
+        uses: dorny/test-reporter@v1
         if: always()
         with:
-          test_results_path: TestResults/merged.trx
-          report_name: Test Results
-          report_title: ZipDrive V3 Test Results
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          set_check_status_from_test_outcome: true
-          fail_build_on_failed_tests: true
+          name: Test Results
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
