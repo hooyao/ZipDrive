@@ -86,6 +86,8 @@ Run with:
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
+**Versioning**: `Directory.Build.props` sets `<Version>1.0.0-dev</Version>` as the default. The startup log displays the version with the `+commit-hash` metadata stripped (e.g., `ZipDrive 1.0.0-dev starting`). For release builds, the CI pipeline overrides this via `-p:Version=1.0.0` on the `dotnet publish` command line (see `.github/workflows/release.yml`), producing `ZipDrive 1.0.0 starting`.
+
 **Single-file note**: Serilog cannot auto-discover sink assemblies in single-file mode. The CLI explicitly passes `ConfigurationReaderOptions` with the Console sink assembly. If adding new Serilog sinks, register their assemblies in `Program.cs`.
 
 ## Architecture
