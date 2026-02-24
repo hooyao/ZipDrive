@@ -73,7 +73,7 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 | `Cache:SmallFileCutoffMb` | `50` | Files smaller than this go to memory; larger go to disk |
 | `Cache:TempDirectory` | System temp | Directory for disk-cached temp files |
 | `Cache:DefaultTtlMinutes` | `30` | Cache entry time-to-live |
-| `Cache:EvictionCheckIntervalSeconds` | `60` | Background maintenance sweep interval |
+| `Cache:EvictionCheckIntervalSeconds` | `10` | Background maintenance sweep interval |
 
 ### OpenTelemetry
 
