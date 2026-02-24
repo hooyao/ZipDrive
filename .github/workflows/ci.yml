@@ -28,21 +28,85 @@ jobs:
         run: dotnet build ZipDriveV3.slnx -c Release --no-restore
 
       - name: Test
-        run: >-
-          dotnet test ZipDriveV3.slnx
-          -c Release
-          --no-build
-          --verbosity normal
-          --logger "trx;LogFileName=test-results.trx"
-          --results-directory ./TestResults
-          --collect:"XPlat Code Coverage"
-          --filter "FullyQualifiedName!~EnduranceTests&FullyQualifiedName!~Benchmarks"
+        run: |
+          $projects = @(
+            "tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj",
+            "tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj",
+            "tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj",
+            "tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj",
+            "tests/ZipDriveV3.Infrastructure.Tests/ZipDriveV3.Infrastructure.Tests.csproj"
+          )
+          $failed = $false
+          foreach ($proj in $projects) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($proj)
+            dotnet test $proj -c Release --no-build --verbosity normal `
+              --logger "trx;LogFileName=$name.trx" `
+              --results-directory ./TestResults `
+              --collect:"XPlat Code Coverage"
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
+        shell: pwsh
+
+      - name: Merge TRX files
+        if: always()
+        run: |
+          $nsUri = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+          $trxFiles = Get-ChildItem ./TestResults -Filter *.trx
+          if ($trxFiles.Count -eq 0) { Write-Error "No TRX files found"; exit 1 }
+
+          function Get-NsMgr($doc) {
+            $mgr = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+            $mgr.AddNamespace("t", $nsUri)
+            return $mgr
+          }
+
+          $base = [xml](Get-Content $trxFiles[0].FullName)
+          $baseMgr = Get-NsMgr $base
+
+          foreach ($file in $trxFiles | Select-Object -Skip 1) {
+            $other = [xml](Get-Content $file.FullName)
+            $otherMgr = Get-NsMgr $other
+
+            foreach ($node in $other.SelectNodes("//t:UnitTestResult", $otherMgr)) {
+              $imported = $base.ImportNode($node, $true)
+              $base.SelectSingleNode("//t:Results", $baseMgr).AppendChild($imported) | Out-Null
+            }
+            foreach ($node in $other.SelectNodes("//t:UnitTest", $otherMgr)) {
+              $imported = $base.ImportNode($node, $true)
+              $base.SelectSingleNode("//t:TestDefinitions", $baseMgr).AppendChild($imported) | Out-Null
+            }
+            foreach ($node in $other.SelectNodes("//t:TestEntry", $otherMgr)) {
+              $imported = $base.ImportNode($node, $true)
+              $base.SelectSingleNode("//t:TestEntries", $baseMgr).AppendChild($imported) | Out-Null
+            }
+          }
+
+          # Update counters
+          $results = $base.SelectNodes("//t:UnitTestResult", $baseMgr)
+          $total = $results.Count
+          $passed = @($results | Where-Object { $_.outcome -eq "Passed" }).Count
+          $failed = @($results | Where-Object { $_.outcome -eq "Failed" }).Count
+          $counters = $base.SelectSingleNode("//t:Counters", $baseMgr)
+          $counters.SetAttribute("total", $total.ToString())
+          $counters.SetAttribute("executed", $total.ToString())
+          $counters.SetAttribute("passed", $passed.ToString())
+          $counters.SetAttribute("failed", $failed.ToString())
+
+          $base.Save("$(Resolve-Path ./TestResults)/merged.trx")
+          Write-Host "Merged $total tests ($passed passed, $failed failed) into merged.trx"
+        shell: pwsh
+
+      - name: Create report working directory
+        if: always()
+        run: New-Item -ItemType Directory -Force -Path _TMP | Out-Null
+        shell: pwsh
 
       - name: Test report
         uses: zyborg/dotnet-tests-report@v1
         if: always()
         with:
-          test_results_path: TestResults/test-results.trx
+          test_results_path: TestResults/merged.trx
           report_name: Test Results
           report_title: ZipDrive V3 Test Results
           github_token: ${{ secrets.GITHUB_TOKEN }}
