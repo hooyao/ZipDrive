@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using DokanNet;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -11,6 +12,7 @@ namespace ZipDriveV3.Infrastructure.FileSystem;
 /// Background service that manages the Dokan mount lifecycle.
 /// Mounts VFS on start, unmounts on Ctrl+C / host shutdown.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public sealed class DokanHostedService : BackgroundService
 {
     private readonly IVirtualFileSystem _vfs;

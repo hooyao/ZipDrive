@@ -320,7 +320,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 
 **Key Responsibilities**:
 - DI registration for all services (including `DualTierFileCache`)
-- OpenTelemetry SDK configuration (OTLP export to Aspire Dashboard)
+- OpenTelemetry SDK configuration (opt-in; OTLP export to Aspire Dashboard when endpoint configured)
 - Serilog structured logging
 - Configuration binding (`Mount`, `Cache`, `OpenTelemetry` sections)
 
@@ -401,6 +401,8 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 
 ### OpenTelemetry (`appsettings.json` → "OpenTelemetry" section)
 
+OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is registered (zero overhead). Set the endpoint to enable metrics and tracing export.
+
 ```json
 {
   "OpenTelemetry": {
@@ -408,6 +410,8 @@ All six options are wired and active. `CacheOptions` exposes computed properties
   }
 }
 ```
+
+Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889`
 
 **Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
 

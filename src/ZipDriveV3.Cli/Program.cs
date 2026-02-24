@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,6 +14,8 @@ using ZipDriveV3.Infrastructure.Archives.Zip;
 using ZipDriveV3.Infrastructure.Caching;
 using ZipDriveV3.Infrastructure.FileSystem;
 using MountOptions = ZipDriveV3.Infrastructure.FileSystem.MountOptions;
+
+[assembly: SupportedOSPlatform("windows")]
 
 // Required for ZIP entry name encoding
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -36,23 +39,30 @@ builder.ConfigureServices((context, services) =>
     services.Configure<MountOptions>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
 
-    // OpenTelemetry
-    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:18889";
+    // OpenTelemetry (opt-in: only when Endpoint is configured)
+    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"];
 
-    services.AddOpenTelemetry()
-        .ConfigureResource(r => r.AddService("ZipDriveV3"))
-        .WithMetrics(m => m
-            .AddMeter("ZipDriveV3.Caching")
-            .AddMeter("ZipDriveV3.Zip")
-            .AddMeter("ZipDriveV3.Dokan")
-            .AddRuntimeInstrumentation()
-            .AddProcessInstrumentation()
-            .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
-        .WithTracing(t => t
-            .AddSource("ZipDriveV3.Caching")
-            .AddSource("ZipDriveV3.Zip")
-            .AddSource("ZipDriveV3.Dokan")
-            .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+    if (!string.IsNullOrEmpty(otlpEndpoint))
+    {
+        services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddService("ZipDriveV3"))
+            .WithMetrics(m => m
+                .AddMeter("ZipDriveV3.Caching")
+                .AddMeter("ZipDriveV3.Zip")
+                .AddMeter("ZipDriveV3.Dokan")
+                .AddRuntimeInstrumentation()
+                .AddProcessInstrumentation()
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
+            .WithTracing(t => t
+                .AddSource("ZipDriveV3.Caching")
+                .AddSource("ZipDriveV3.Zip")
+                .AddSource("ZipDriveV3.Dokan")
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+    }
+    else
+    {
+        Log.Information("OpenTelemetry disabled (no OpenTelemetry:Endpoint configured)");
+    }
 
     // Shared infrastructure
     services.AddSingleton(TimeProvider.System);

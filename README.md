@@ -78,7 +78,13 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `OpenTelemetry:Endpoint` | `http://localhost:18889` | OTLP gRPC exporter endpoint |
+| `OpenTelemetry:Endpoint` | (disabled) | OTLP gRPC exporter endpoint — set to enable telemetry |
+
+OpenTelemetry is **opt-in**. To enable metrics and tracing, set the endpoint:
+
+```bash
+ZipDriveV3.Cli.exe --OpenTelemetry:Endpoint="http://localhost:18889" ...
+```
 
 To visualize metrics and traces locally, run the [Aspire Dashboard](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/overview):
 

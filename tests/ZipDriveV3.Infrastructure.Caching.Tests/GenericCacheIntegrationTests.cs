@@ -75,8 +75,7 @@ public class GenericCacheIntegrationTests : IDisposable
 
             // Read and verify data
             byte[] buffer = new byte[testData.Length];
-            int bytesRead = await handle.Value.ReadAsync(buffer);
-            bytesRead.Should().Be(testData.Length);
+            await handle.Value.ReadExactlyAsync(buffer);
             buffer.Should().BeEquivalentTo(testData);
         }
 
@@ -389,8 +388,7 @@ public class GenericCacheIntegrationTests : IDisposable
 
                 // Verify data integrity
                 byte[] buffer = new byte[testData.Length];
-                int bytesRead = await handle.Value.ReadAsync(buffer);
-                bytesRead.Should().Be(testData.Length);
+                await handle.Value.ReadExactlyAsync(buffer);
                 buffer.Should().BeEquivalentTo(testData);
             }
 
@@ -2164,7 +2162,7 @@ public class GenericCacheIntegrationTests : IDisposable
             {
                 byte[] buffer = new byte[100];
                 handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadAsync(buffer);
+                _ = await handle.Value.ReadAsync(buffer, 0, buffer.Length);
             }
         }
 
@@ -2434,7 +2432,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 {
                     byte[] buffer = new byte[1024];
                     handle.Value.Seek(0, SeekOrigin.Begin);
-                    await handle.Value.ReadAsync(buffer);
+                    _ = await handle.Value.ReadAsync(buffer, 0, buffer.Length);
 
                     // Periodically process cleanup
                     if (op % 10 == 0)
@@ -2571,7 +2569,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 // Small read
                 byte[] buffer = new byte[100];
                 handle.Value.Seek(0, SeekOrigin.Begin);
-                await handle.Value.ReadAsync(buffer);
+                _ = await handle.Value.ReadAsync(buffer, 0, buffer.Length);
             }
 
             // Periodic consistency check
