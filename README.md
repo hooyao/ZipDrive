@@ -1,3 +1,6 @@
+[![CI](https://github.com/hooyao/ZipDrive/actions/workflows/ci.yml/badge.svg)](https://github.com/hooyao/ZipDrive/actions/workflows/ci.yml)
+[![Release](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml/badge.svg)](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml)
+
 # ZipDrive
 
 A high-performance virtual file system that mounts ZIP archives as accessible Windows drives using [DokanNet](https://github.com/dokan-dev/dokany). Browse ZIP contents as if they were regular folders — no extraction needed.
@@ -200,3 +203,4 @@ Detailed design documents are available in `src/Docs/`:
 ## License
 
 See [LICENSE](LICENSE) for details.
+
