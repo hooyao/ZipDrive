@@ -5,6 +5,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
+using Serilog.Settings.Configuration;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
 using ZipDriveV3.Domain.Abstractions;
@@ -22,9 +23,11 @@ var builder = Host.CreateDefaultBuilder(args);
 
 builder.UseSerilog((context, config) =>
 {
-    config
-        .ReadFrom.Configuration(context.Configuration)
-        .WriteTo.Console();  // Ensure console output even if config fails
+    // Explicit assembly list required for single-file publish (assembly discovery is disabled)
+    var readerOptions = new ConfigurationReaderOptions(
+        typeof(Serilog.ConsoleLoggerConfigurationExtensions).Assembly);
+
+    config.ReadFrom.Configuration(context.Configuration, readerOptions);
 });
 
 builder.ConfigureServices((context, services) =>

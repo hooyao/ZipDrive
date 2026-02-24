@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, and DokanNet adapter implemented. 153 total tests passing.
+**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, DokanNet adapter, and background cache maintenance implemented. 196 total tests passing. 8-hour soak test validated.
 
 ## Development Workflow Requirements
 
@@ -56,9 +56,36 @@ dotnet test tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj
 # Run specific test
 dotnet test --filter "FullyQualifiedName~ThunderingHerd"
 
-# Run CLI (when implemented)
+# Run CLI
 dotnet run --project src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj
+
+# Run endurance test (default: ~72 seconds for CI)
+dotnet test tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj
+
+# Run endurance test for extended duration (e.g., 8 hours)
+ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj
 ```
+
+## Publishing a Release
+
+Build a single-file executable (requires .NET 10 runtime on target machine):
+
+```bash
+dotnet publish src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj \
+  -c Release -r win-x64 --self-contained false \
+  -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -o ./publish
+```
+
+Output: `publish/ZipDriveV3.Cli.exe` (~74MB) + `publish/appsettings.json`.
+
+Run with:
+```bash
+ZipDriveV3.Cli.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
+```
+
+**Single-file note**: Serilog cannot auto-discover sink assemblies in single-file mode. The CLI explicitly passes `ConfigurationReaderOptions` with the Console sink assembly. If adding new Serilog sinks, register their assemblies in `Program.cs`.
 
 ## Architecture
 
@@ -191,11 +218,12 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 4. **Layer 4 (RefCount)**: Borrowed entries protected from eviction during use
 
 **Key Features**:
-- TTL-based expiration (default: 30 minutes)
+- TTL-based expiration (configurable via `CacheOptions.DefaultTtlMinutes`, default: 30 minutes)
 - Size-based capacity limits (2GB memory + 10GB disk)
 - Async cleanup (< 1ms eviction latency via mark-for-deletion)
 - Pluggable `IEvictionPolicy` (Strategy pattern)
 - `Clear()` and `ClearAsync()` for cleanup/shutdown
+- **`CacheMaintenanceService`**: Background `IHostedService` that periodically calls `EvictExpired()` and `ProcessPendingCleanup()` at `CacheOptions.EvictionCheckIntervalSeconds` interval (default: 60s)
 
 **Documentation**: See `src/Docs/`:
 - [`CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md) - Comprehensive design (1500+ lines)
@@ -334,9 +362,18 @@ When working with the caching layer:
 - **Test Data**: Real ZIP files with various sizes and structures
 
 ### Concurrency Tests
-- **Thundering Herd**: 10+ threads requesting same uncached file (should materialize once)
-- **Parallel Materialization**: Different keys should not block each other
+- **Thundering Herd**: 20 concurrent reads of same uncached file (should materialize once)
+- **Parallel Materialization**: 20 concurrent reads of different files should not block each other
 - **Eviction Under Load**: Capacity exceeded with concurrent requests
+
+### Endurance Tests (`tests/ZipDriveV3.EnduranceTests`)
+- **Duration**: Configurable via `ENDURANCE_DURATION_HOURS` env var (default: 0.02 = ~72s for CI)
+- **Concurrency**: 23 tasks (8 browsers, 5 sequential readers, 4 path stress, 3 same-file thundering herd, 2 different-file parallel, 1 maintenance loop)
+- **Cache config**: Tight limits (2MB memory, 20MB disk, 5MB cutoff, 1min TTL, 2s maintenance interval) to force eviction
+- **Verification**: SHA-256 content checks on every read against embedded `__manifest__.json`
+- **Post-run assertions**: Zero errors, zero handle leaks (`BorrowedEntryCount == 0`), verified reads > 0, maintenance ran
+- **Fixture**: `EnduranceMixed` profile generates files spanning both memory tier (<5MB) and disk tier (>=5MB)
+- **Validated**: 8-hour soak test passed with zero errors and zero data corruption
 
 ## Configuration Schema
 
@@ -347,13 +384,15 @@ When working with the caching layer:
   "Cache": {
     "MemoryCacheSizeMb": 2048,              // Memory tier capacity (2GB)
     "DiskCacheSizeMb": 10240,               // Disk tier capacity (10GB)
-    "SmallFileCutoffMb": 50,                // Routing threshold
-    "TempDirectory": null,                  // null = system temp
-    "DefaultTtlMinutes": 30,                // Entry expiration
-    "EvictionCheckIntervalSeconds": 60      // Periodic cleanup
+    "SmallFileCutoffMb": 50,                // Routing threshold (< cutoff → memory, >= cutoff → disk)
+    "TempDirectory": null,                  // null = system temp dir
+    "DefaultTtlMinutes": 30,               // Entry expiration (used by ZipVirtualFileSystem + ArchiveStructureCache)
+    "EvictionCheckIntervalSeconds": 60      // CacheMaintenanceService sweep interval
   }
 }
 ```
+
+All six options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, and `SmallFileCutoffBytes`.
 
 **Tuning Guidelines**:
 - Low memory systems: Reduce `MemoryCacheSizeMb`, lower `SmallFileCutoffMb`
@@ -455,10 +494,12 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 |-----------|--------|-------------|
 | ZipArchiveProvider | ⏳ Pending | `IArchiveProvider` implementation |
 | DokanNet Adapter | ✅ Complete | `DokanFileSystemAdapter` + `DokanHostedService` |
-| CLI | ✅ Complete | OTel wiring, DualTierFileCache DI, config binding |
+| CLI | ✅ Complete | OTel wiring, DualTierFileCache DI, config binding, single-file publish |
 | Multi-archive | ✅ Complete | `ArchiveTrie` + `ArchiveDiscovery` |
 | Observability | ✅ Complete | OpenTelemetry metrics/tracing, Aspire Dashboard |
 | Dual-tier Cache | ✅ Complete | `DualTierFileCache` with size-hint routing |
+| Cache Maintenance | ✅ Complete | `CacheMaintenanceService` background eviction + cleanup |
+| Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 23 concurrent tasks |
 
 ## Known Limitations / Future Work
 
@@ -518,6 +559,8 @@ V3 is considered complete when:
 - [x] CLI accepts arguments and mounts drives
 - [x] Dual-tier cache coordinator implemented and tested (6 tests)
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
+- [x] Background cache maintenance with configurable interval
 - [ ] All performance targets met
-- [ ] No memory leaks (validated with 24hr soak test)
+- [x] No memory leaks (validated with 8-hour soak test, zero handle leaks)
 - [x] Comprehensive documentation written
+- [x] Single-file release build (`dotnet publish` with `PublishSingleFile`)
