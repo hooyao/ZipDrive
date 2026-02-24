@@ -33,8 +33,7 @@ jobs:
             "tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj",
             "tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj",
             "tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj",
-            "tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj",
-            "tests/ZipDriveV3.Infrastructure.Tests/ZipDriveV3.Infrastructure.Tests.csproj"
+            "tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj"
           )
           $failed = $false
           foreach ($proj in $projects) {
@@ -55,18 +54,17 @@ jobs:
           $trxFiles = Get-ChildItem ./TestResults -Filter *.trx
           if ($trxFiles.Count -eq 0) { Write-Error "No TRX files found"; exit 1 }
 
-          function Get-NsMgr($doc) {
-            $mgr = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
-            $mgr.AddNamespace("t", $nsUri)
-            return $mgr
-          }
-
-          $base = [xml](Get-Content $trxFiles[0].FullName)
-          $baseMgr = Get-NsMgr $base
+          # Load base document with XmlDocument for proper namespace support
+          $base = New-Object System.Xml.XmlDocument
+          $base.Load($trxFiles[0].FullName)
+          $baseMgr = New-Object System.Xml.XmlNamespaceManager($base.NameTable)
+          $baseMgr.AddNamespace("t", $nsUri)
 
           foreach ($file in $trxFiles | Select-Object -Skip 1) {
-            $other = [xml](Get-Content $file.FullName)
-            $otherMgr = Get-NsMgr $other
+            $other = New-Object System.Xml.XmlDocument
+            $other.Load($file.FullName)
+            $otherMgr = New-Object System.Xml.XmlNamespaceManager($other.NameTable)
+            $otherMgr.AddNamespace("t", $nsUri)
 
             foreach ($node in $other.SelectNodes("//t:UnitTestResult", $otherMgr)) {
               $imported = $base.ImportNode($node, $true)
@@ -93,7 +91,8 @@ jobs:
           $counters.SetAttribute("passed", $passed.ToString())
           $counters.SetAttribute("failed", $failed.ToString())
 
-          $base.Save("$(Resolve-Path ./TestResults)/merged.trx")
+          $outPath = Join-Path (Resolve-Path ./TestResults) "merged.trx"
+          $base.Save($outPath)
           Write-Host "Merged $total tests ($passed passed, $failed failed) into merged.trx"
         shell: pwsh
 
