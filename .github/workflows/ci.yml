@@ -55,3 +55,17 @@ jobs:
           reporter: dotnet-trx
           fail-on-error: true
           use-actions-summary: 'true'
+
+      - name: Merge coverage reports
+        if: always()
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool
+          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub"
+        shell: pwsh
+
+      - name: Post coverage summary
+        if: always()
+        run: |
+          $report = Get-Content TestResults/CoverageReport/SummaryGithub.md -Raw
+          echo $report >> $env:GITHUB_STEP_SUMMARY
+        shell: pwsh
