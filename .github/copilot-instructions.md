@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-ZipDrive V3 is a clean-architecture Windows application that mounts ZIP archives as virtual drives using DokanNet. It targets .NET 10.0 / C# 13 and runs on Windows x64 only.
+ZipDrive is a clean-architecture Windows application that mounts ZIP archives as virtual drives using DokanNet. It targets .NET 10.0 / C# 13 and runs on Windows x64 only.
 
 ## Architecture
 
 The solution follows Clean Architecture (Onion Architecture) with strict dependency rules:
 
-- **Domain** (`src/ZipDriveV3.Domain`): Interfaces, models, exceptions. Zero external dependencies.
-- **Application** (`src/ZipDriveV3.Application`): Path resolution, archive discovery, VFS orchestration.
+- **Domain** (`src/ZipDrive.Domain`): Interfaces, models, exceptions. Zero external dependencies.
+- **Application** (`src/ZipDrive.Application`): Path resolution, archive discovery, VFS orchestration.
 - **Infrastructure**: Caching (`Infrastructure.Caching`), ZIP reader (`Infrastructure.Archives.Zip`), DokanNet adapter (`Infrastructure.FileSystem`).
-- **Presentation** (`src/ZipDriveV3.Cli`): Entry point, DI, OpenTelemetry wiring.
+- **Presentation** (`src/ZipDrive.Cli`): Entry point, DI, OpenTelemetry wiring.
 
 Dependencies flow inward: Presentation -> Application -> Domain <- Infrastructure. Infrastructure implements Domain interfaces but never depends on Application or Presentation.
 
@@ -57,7 +57,7 @@ The caching subsystem (`Infrastructure.Caching`) is the most sensitive component
 ### Build and Validation
 
 ```bash
-dotnet build ZipDriveV3.slnx
+dotnet build ZipDrive.slnx
 dotnet test
 ```
 

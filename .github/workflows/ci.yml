@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -22,18 +24,18 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Restore dependencies
-        run: dotnet restore ZipDriveV3.slnx
+        run: dotnet restore ZipDrive.slnx
 
       - name: Build
-        run: dotnet build ZipDriveV3.slnx -c Release --no-restore
+        run: dotnet build ZipDrive.slnx -c Release --no-restore
 
       - name: Test
         run: |
           $projects = @(
-            "tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj",
-            "tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj",
-            "tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj",
-            "tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj"
+            "tests/ZipDrive.Domain.Tests/ZipDrive.Domain.Tests.csproj",
+            "tests/ZipDrive.Infrastructure.Caching.Tests/ZipDrive.Infrastructure.Caching.Tests.csproj",
+            "tests/ZipDrive.Infrastructure.Archives.Zip.Tests/ZipDrive.Infrastructure.Archives.Zip.Tests.csproj",
+            "tests/ZipDrive.IntegrationTests/ZipDrive.IntegrationTests.csproj"
           )
           $failed = $false
           foreach ($proj in $projects) {
@@ -79,7 +81,7 @@ jobs:
             $t = [int]$counters.GetAttribute("total")
             $s = $t - $p - $f
             $totalPassed += $p; $totalFailed += $f; $totalSkipped += $s
-            $name = $file.BaseName -replace '\.Tests$','' -replace 'ZipDriveV3\.',''
+            $name = $file.BaseName -replace '\.Tests$','' -replace 'ZipDrive\.',''
             $icon = if ($f -gt 0) { ":x:" } else { ":white_check_mark:" }
             $lines += "| $icon $name | $p | $f | $s | $t |"
           }

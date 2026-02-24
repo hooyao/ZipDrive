@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Tests" />
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Caching.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="KTrie" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZipDrive.Domain\ZipDrive.Domain.csproj" />
+    <ProjectReference Include="..\ZipDrive.Infrastructure.Archives.Zip\ZipDrive.Infrastructure.Archives.Zip.csproj" />
+  </ItemGroup>
+
+</Project>

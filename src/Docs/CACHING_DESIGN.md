@@ -1,4 +1,4 @@
-# ZipDrive V3 - File Content Cache Design Document
+# ZipDrive - File Content Cache Design Document
 
 **Version:** 2.0
 **Last Updated:** 2026-02-23
@@ -444,7 +444,7 @@ Note: Entries with RefCount > 0 are NEVER evicted.
 ### 4.1 Generic Cache Interface
 
 ```csharp
-namespace ZipDriveV3.Infrastructure.Caching;
+namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
 /// Result from cache factory, containing the cached value and metadata.
@@ -553,7 +553,7 @@ public interface IFileCache : ICache<Stream>
 The storage strategy abstracts how cached data is stored, retrieved, and cleaned up. The internal storage representation is hidden from cache users via the opaque `StoredEntry` wrapper.
 
 ```csharp
-namespace ZipDriveV3.Infrastructure.Caching;
+namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
 /// Opaque wrapper for internally stored data.
@@ -1466,7 +1466,7 @@ if (Interlocked.Read(ref _currentSizeBytes) > _capacityBytes)
 #### 4.8.1 IEvictionPolicy Interface
 
 ```csharp
-namespace ZipDriveV3.Infrastructure.Caching;
+namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
 /// Pluggable eviction policy for selecting victims when capacity exceeded.
@@ -1898,7 +1898,7 @@ public interface ICache<T>
 ### 5.1 Options Class
 
 ```csharp
-namespace ZipDriveV3.Infrastructure.Caching;
+namespace ZipDrive.Infrastructure.Caching;
 
 public class CacheOptions
 {

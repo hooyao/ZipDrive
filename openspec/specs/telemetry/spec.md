@@ -1,12 +1,12 @@
 # telemetry Specification
 
 ## Purpose
-OpenTelemetry instrumentation layer for ZipDrive V3. Defines metrics instruments, activity sources, and size bucket classification for cache, ZIP extraction, and Dokan read operations.
+OpenTelemetry instrumentation layer for ZipDrive. Defines metrics instruments, activity sources, and size bucket classification for cache, ZIP extraction, and Dokan read operations.
 
 ## Requirements
 ### Requirement: Cache metrics via System.Diagnostics.Metrics
 
-The caching subsystem SHALL emit metrics using `System.Diagnostics.Metrics` with a `Meter` named `"ZipDriveV3.Caching"`. All counter and histogram recordings SHALL include a `tier` tag identifying the cache instance (e.g., `"memory"`, `"disk"`, `"structure"`).
+The caching subsystem SHALL emit metrics using `System.Diagnostics.Metrics` with a `Meter` named `"ZipDrive.Caching"`. All counter and histogram recordings SHALL include a `tier` tag identifying the cache instance (e.g., `"memory"`, `"disk"`, `"structure"`).
 
 #### Scenario: Cache hit increments counter
 
@@ -60,7 +60,7 @@ The caching subsystem SHALL expose observable gauges via `System.Diagnostics.Met
 
 ### Requirement: ZIP extraction metrics
 
-The ZIP reader subsystem SHALL emit metrics using a `Meter` named `"ZipDriveV3.Zip"`.
+The ZIP reader subsystem SHALL emit metrics using a `Meter` named `"ZipDrive.Zip"`.
 
 #### Scenario: Extraction duration recorded with size bucket
 
@@ -79,7 +79,7 @@ The ZIP reader subsystem SHALL emit metrics using a `Meter` named `"ZipDriveV3.Z
 
 ### Requirement: Dokan read latency metric
 
-The Dokan file system adapter SHALL emit a read latency metric using a `Meter` named `"ZipDriveV3.Dokan"`.
+The Dokan file system adapter SHALL emit a read latency metric using a `Meter` named `"ZipDrive.Dokan"`.
 
 #### Scenario: Read latency recorded
 
@@ -91,7 +91,7 @@ The Dokan file system adapter SHALL emit a read latency metric using a `Meter` n
 
 ### Requirement: Cache tracing via ActivitySource
 
-The caching subsystem SHALL create trace spans using an `ActivitySource` named `"ZipDriveV3.Caching"`.
+The caching subsystem SHALL create trace spans using an `ActivitySource` named `"ZipDrive.Caching"`.
 
 #### Scenario: Borrow operation creates span
 
@@ -120,19 +120,19 @@ Each infrastructure project SHALL define an `internal static` telemetry class co
 #### Scenario: CacheTelemetry class in Caching project
 
 - **WHEN** the Caching infrastructure project is compiled
-- **THEN** it SHALL contain a `CacheTelemetry` class with a `Meter` named `"ZipDriveV3.Caching"` and an `ActivitySource` named `"ZipDriveV3.Caching"`
+- **THEN** it SHALL contain a `CacheTelemetry` class with a `Meter` named `"ZipDrive.Caching"` and an `ActivitySource` named `"ZipDrive.Caching"`
 - **AND** all cache metric instruments SHALL be defined as static fields on this class
 
 #### Scenario: ZipTelemetry class in Archives.Zip project
 
 - **WHEN** the Archives.Zip infrastructure project is compiled
-- **THEN** it SHALL contain a `ZipTelemetry` class with a `Meter` named `"ZipDriveV3.Zip"`
+- **THEN** it SHALL contain a `ZipTelemetry` class with a `Meter` named `"ZipDrive.Zip"`
 - **AND** all ZIP extraction instruments SHALL be defined as static fields on this class
 
 #### Scenario: DokanTelemetry class in FileSystem project
 
 - **WHEN** the FileSystem infrastructure project is compiled
-- **THEN** it SHALL contain a `DokanTelemetry` class with a `Meter` named `"ZipDriveV3.Dokan"`
+- **THEN** it SHALL contain a `DokanTelemetry` class with a `Meter` named `"ZipDrive.Dokan"`
 - **AND** the Dokan read latency instrument SHALL be defined as a static field on this class
 
 ---

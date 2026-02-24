@@ -23,7 +23,7 @@ A high-performance virtual file system that mounts ZIP archives as accessible Wi
 ### Using the Published Executable
 
 ```bash
-ZipDriveV3.Cli.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
+ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
 This mounts all ZIP files found under `D:\my-zips` as the `R:\` drive.
@@ -32,24 +32,24 @@ This mounts all ZIP files found under `D:\my-zips` as the `R:\` drive.
 
 ```bash
 # Build
-dotnet build ZipDriveV3.slnx
+dotnet build ZipDrive.slnx
 
 # Run
-dotnet run --project src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj -- \
+dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- \
   --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
 ### Publishing a Single-File Executable
 
 ```bash
-dotnet publish src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj \
+dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
   -c Release -r win-x64 --self-contained false \
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -o ./publish
 ```
 
-Output: `publish/ZipDriveV3.Cli.exe` (~74 MB) + `publish/appsettings.json`
+Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
 
 ## Configuration
 
@@ -83,7 +83,7 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 OpenTelemetry is **opt-in**. To enable metrics and tracing, set the endpoint:
 
 ```bash
-ZipDriveV3.Cli.exe --OpenTelemetry:Endpoint="http://localhost:18889" ...
+ZipDrive.exe --OpenTelemetry:Endpoint="http://localhost:18889" ...
 ```
 
 To visualize metrics and traces locally, run the [Aspire Dashboard](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/overview):
@@ -127,22 +127,22 @@ Stream: seek + read -> return to DokanNet
 
 ```
 src/
-  ZipDriveV3.Domain/                        Core interfaces and models (zero dependencies)
-  ZipDriveV3.Application/                   Path resolution, archive discovery, VFS orchestration
-  ZipDriveV3.Infrastructure.Archives.Zip/   Streaming ZIP reader with ZIP64 support
-  ZipDriveV3.Infrastructure.Caching/        Generic cache, dual-tier routing, LRU eviction
-  ZipDriveV3.Infrastructure.FileSystem/     DokanNet adapter and mount lifecycle
-  ZipDriveV3.Cli/                           Entry point, DI, OpenTelemetry wiring
+  ZipDrive.Domain/                        Core interfaces and models (zero dependencies)
+  ZipDrive.Application/                   Path resolution, archive discovery, VFS orchestration
+  ZipDrive.Infrastructure.Archives.Zip/   Streaming ZIP reader with ZIP64 support
+  ZipDrive.Infrastructure.Caching/        Generic cache, dual-tier routing, LRU eviction
+  ZipDrive.Infrastructure.FileSystem/     DokanNet adapter and mount lifecycle
+  ZipDrive.Cli/                           Entry point, DI, OpenTelemetry wiring
 
 tests/
-  ZipDriveV3.Domain.Tests/                  Domain layer unit tests
-  ZipDriveV3.Infrastructure.Caching.Tests/  Cache behavior tests
-  ZipDriveV3.Infrastructure.Archives.Zip.Tests/  ZIP reader tests
-  ZipDriveV3.Infrastructure.Tests/          Infrastructure tests
-  ZipDriveV3.IntegrationTests/              Integration scenarios
-  ZipDriveV3.EnduranceTests/                Long-running soak tests
-  ZipDriveV3.Benchmarks/                    Performance benchmarks
-  ZipDriveV3.TestHelpers/                   Shared test utilities
+  ZipDrive.Domain.Tests/                  Domain layer unit tests
+  ZipDrive.Infrastructure.Caching.Tests/  Cache behavior tests
+  ZipDrive.Infrastructure.Archives.Zip.Tests/  ZIP reader tests
+  ZipDrive.Infrastructure.Tests/          Infrastructure tests
+  ZipDrive.IntegrationTests/              Integration scenarios
+  ZipDrive.EnduranceTests/                Long-running soak tests
+  ZipDrive.Benchmarks/                    Performance benchmarks
+  ZipDrive.TestHelpers/                   Shared test utilities
 
 src/Docs/                                   Design documents
 openspec/                                   Specification-driven development artifacts
@@ -155,16 +155,16 @@ openspec/                                   Specification-driven development art
 dotnet test
 
 # Run specific test project
-dotnet test tests/ZipDriveV3.Infrastructure.Caching.Tests
+dotnet test tests/ZipDrive.Infrastructure.Caching.Tests
 
 # Run tests matching a filter
 dotnet test --filter "FullyQualifiedName~ThunderingHerd"
 
 # Run endurance test (default: ~72 seconds)
-dotnet test tests/ZipDriveV3.EnduranceTests
+dotnet test tests/ZipDrive.EnduranceTests
 
 # Run extended endurance test (e.g., 8 hours)
-ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDriveV3.EnduranceTests
+ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDrive.EnduranceTests
 ```
 
 **Test coverage**: 196 tests across unit, integration, concurrency, and endurance suites. 8-hour soak test validated with zero errors and zero handle leaks.

@@ -1,4 +1,4 @@
-# Streaming ZIP Reader Design for ZipDrive V3
+# Streaming ZIP Reader Design for ZipDrive
 
 **Status:** ✅ Implemented
 **Date:** 2026-01-18
@@ -581,20 +581,20 @@ public class EncryptedEntryException : ZipException
 
 | File | Purpose |
 |------|---------|
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/Formats/ZipEocd.cs` | EOCD structure |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/Formats/ZipCentralDirectoryEntry.cs` | CD entry structure |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/Formats/ZipLocalHeader.cs` | Local header structure |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/Formats/ZipConstants.cs` | Signatures and constants |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/IZipReader.cs` | Reader interface |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/ZipReader.cs` | Reader implementation |
-| `src/ZipDriveV3.Infrastructure.Archives.Zip/SubStream.cs` | Bounded stream wrapper |
-| `src/ZipDriveV3.Domain/Models/ZipEntryInfo.cs` | Entry info struct |
-| `src/ZipDriveV3.Domain/Models/ArchiveStructure.cs` | Structure container |
-| `src/ZipDriveV3.Domain/Models/DirectoryNode.cs` | Tree node for directory listing |
-| `src/ZipDriveV3.Domain/Abstractions/IArchiveStructureCache.cs` | Cache interface |
-| `src/ZipDriveV3.Domain/Exceptions/ZipExceptions.cs` | Exception hierarchy |
-| `src/ZipDriveV3.Infrastructure.Caching/ArchiveStructureCache.cs` | Cache implementation |
-| `tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/` | Test project |
+| `src/ZipDrive.Infrastructure.Archives.Zip/Formats/ZipEocd.cs` | EOCD structure |
+| `src/ZipDrive.Infrastructure.Archives.Zip/Formats/ZipCentralDirectoryEntry.cs` | CD entry structure |
+| `src/ZipDrive.Infrastructure.Archives.Zip/Formats/ZipLocalHeader.cs` | Local header structure |
+| `src/ZipDrive.Infrastructure.Archives.Zip/Formats/ZipConstants.cs` | Signatures and constants |
+| `src/ZipDrive.Infrastructure.Archives.Zip/IZipReader.cs` | Reader interface |
+| `src/ZipDrive.Infrastructure.Archives.Zip/ZipReader.cs` | Reader implementation |
+| `src/ZipDrive.Infrastructure.Archives.Zip/SubStream.cs` | Bounded stream wrapper |
+| `src/ZipDrive.Domain/Models/ZipEntryInfo.cs` | Entry info struct |
+| `src/ZipDrive.Domain/Models/ArchiveStructure.cs` | Structure container |
+| `src/ZipDrive.Domain/Models/DirectoryNode.cs` | Tree node for directory listing |
+| `src/ZipDrive.Domain/Abstractions/IArchiveStructureCache.cs` | Cache interface |
+| `src/ZipDrive.Domain/Exceptions/ZipExceptions.cs` | Exception hierarchy |
+| `src/ZipDrive.Infrastructure.Caching/ArchiveStructureCache.cs` | Cache implementation |
+| `tests/ZipDrive.Infrastructure.Archives.Zip.Tests/` | Test project |
 
 ---
 

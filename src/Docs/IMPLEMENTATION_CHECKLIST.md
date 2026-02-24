@@ -1,4 +1,4 @@
-# ZipDrive V3 - Implementation Checklist
+# ZipDrive - Implementation Checklist
 
 **Design Status:** ✅ Complete
 **Implementation Status:** ✅ Core Complete (Caching + ZIP Reader + Dual-Tier + Observability)
@@ -257,9 +257,9 @@ The caching layer uses a **generic cache with pluggable storage strategies**:
 
 ### 7.1 Metrics Integration (System.Diagnostics.Metrics)
 
-- [x] `CacheTelemetry.cs` — `Meter("ZipDriveV3.Caching")` with counters, histograms, observable gauges
-- [x] `ZipTelemetry.cs` — `Meter("ZipDriveV3.Zip")` with extraction duration and bytes extracted
-- [x] `DokanTelemetry.cs` — `Meter("ZipDriveV3.Dokan")` with read latency histogram
+- [x] `CacheTelemetry.cs` — `Meter("ZipDrive.Caching")` with counters, histograms, observable gauges
+- [x] `ZipTelemetry.cs` — `Meter("ZipDrive.Zip")` with extraction duration and bytes extracted
+- [x] `DokanTelemetry.cs` — `Meter("ZipDrive.Dokan")` with read latency histogram
 - [x] `SizeBucketClassifier.cs` — Maps file sizes to 6 buckets (tiny→huge), 18 boundary tests
 - [x] `GenericCache<T>` emits `cache.hits`, `cache.misses`, `cache.evictions` counters with `tier` tag
 - [x] `GenericCache<T>` emits `cache.materialization.duration` histogram with `tier` and `size_bucket` tags
@@ -412,7 +412,7 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives:
 
 ### Phase 6: Testing ✅ COMPLETE
 
-- [x] Test project: `ZipDriveV3.Infrastructure.Archives.Zip.Tests`
+- [x] Test project: `ZipDrive.Infrastructure.Archives.Zip.Tests`
 - [x] EOCD Tests (4 tests)
   - [x] `ReadEocdAsync_ValidZip_ReturnsCorrectEntryCount`
   - [x] `ReadEocdAsync_EmptyZip_ReturnsZeroEntries`
@@ -464,7 +464,7 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives:
 ## Next Steps
 
 1. ⏳ Implement `ZipArchiveProvider` (IArchiveProvider implementation)
-2. ⏳ Implement DokanNet file system adapter
-3. ⏳ Create dual-tier cache coordinator
+2. ✅ Implement DokanNet file system adapter — Complete (`DokanFileSystemAdapter` + `DokanHostedService`)
+3. ✅ Create dual-tier cache coordinator — Complete (`DualTierFileCache` with size-hint routing)
 4. ⏳ Add performance benchmarks
-5. ⏳ Add observability/metrics
+5. ✅ Add observability/metrics — Complete (OpenTelemetry metrics, tracing, Aspire Dashboard)

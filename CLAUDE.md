@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZipDrive V3** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The V3 project has the **core caching layer and streaming ZIP reader implemented and tested**.
+**ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
 **Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, DokanNet adapter, and background cache maintenance implemented. 196 total tests passing. 8-hour soak test validated.
 
@@ -43,28 +43,28 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 
 ```bash
 # Build the entire solution
-dotnet build ZipDriveV3.slnx
+dotnet build ZipDrive.slnx
 
 # Build in Release mode
-dotnet build ZipDriveV3.slnx -c Release
+dotnet build ZipDrive.slnx -c Release
 
 # Run all tests
 dotnet test
 
 # Run tests in specific project
-dotnet test tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj
+dotnet test tests/ZipDrive.Domain.Tests/ZipDrive.Domain.Tests.csproj
 
 # Run specific test
 dotnet test --filter "FullyQualifiedName~ThunderingHerd"
 
 # Run CLI
-dotnet run --project src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj
+dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj
 
 # Run endurance test (default: ~72 seconds for CI)
-dotnet test tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj
+dotnet test tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj
 
 # Run endurance test for extended duration (e.g., 8 hours)
-ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj
+ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj
 ```
 
 ## Publishing a Release
@@ -72,25 +72,25 @@ ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDriveV3.EnduranceTests/ZipDriveV
 Build a single-file executable (requires .NET 10 runtime on target machine):
 
 ```bash
-dotnet publish src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj \
+dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
   -c Release -r win-x64 --self-contained false \
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -o ./publish
 ```
 
-Output: `publish/ZipDriveV3.Cli.exe` (~74MB) + `publish/appsettings.json`.
+Output: `publish/ZipDrive.exe` (~74MB) + `publish/appsettings.json`.
 
 Run with:
 ```bash
-ZipDriveV3.Cli.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
+ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
 **Single-file note**: Serilog cannot auto-discover sink assemblies in single-file mode. The CLI explicitly passes `ConfigurationReaderOptions` with the Console sink assembly. If adding new Serilog sinks, register their assemblies in `Program.cs`.
 
 ## Architecture
 
-ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict dependency rules.
+ZipDrive follows **Clean Architecture** (Onion Architecture) with strict dependency rules.
 
 ### High-Level Data Flow
 
@@ -154,17 +154,17 @@ ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict depe
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Presentation (ZipDriveV3.Cli)              │
+│  Presentation (ZipDrive.Cli)              │
 │  ↓ depends on                               │
-│  Application (ZipDriveV3.Application)       │
+│  Application (ZipDrive.Application)       │
 │  ↓ depends on                               │
-│  Domain (ZipDriveV3.Domain) ← Core          │
+│  Domain (ZipDrive.Domain) ← Core          │
 │  ↑ implemented by                           │
-│  Infrastructure (ZipDriveV3.Infrastructure.*) │
+│  Infrastructure (ZipDrive.Infrastructure.*) │
 └─────────────────────────────────────────────┘
 ```
 
-### Domain Layer (`src/ZipDriveV3.Domain`)
+### Domain Layer (`src/ZipDrive.Domain`)
 
 **Purpose**: Contains enterprise logic, entities, and interfaces. Zero external dependencies.
 
@@ -179,7 +179,7 @@ ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict depe
 
 **Models**: Immutable records (`ArchiveDescriptor`, `ArchiveInfo`, `ZipEntryInfo`, `ArchiveStructure`, etc.)
 
-### Application Layer (`src/ZipDriveV3.Application`)
+### Application Layer (`src/ZipDrive.Application`)
 
 **Purpose**: Orchestrates use cases, implements domain logic.
 
@@ -188,7 +188,7 @@ ZipDrive V3 follows **Clean Architecture** (Onion Architecture) with strict depe
 
 ### Infrastructure Layer
 
-#### **Caching (`src/ZipDriveV3.Infrastructure.Caching`) - CRITICAL COMPONENT**
+#### **Caching (`src/ZipDrive.Infrastructure.Caching`) - CRITICAL COMPONENT**
 
 This is the **most important** subsystem. It solves the core problem: ZIP provides sequential-only access (compressed streams), but Windows file system requires random access at arbitrary offsets.
 
@@ -231,7 +231,7 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - [`CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md) - Multi-layer locking details
 - [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) - Implementation steps
 
-#### **ZIP Structure Cache (`src/ZipDriveV3.Infrastructure.Caching`) - NEW**
+#### **ZIP Structure Cache (`src/ZipDrive.Infrastructure.Caching`) - NEW**
 
 The **Structure Cache** stores parsed ZIP metadata (Central Directory) to enable fast lookups and streaming extraction without re-parsing archives.
 
@@ -270,7 +270,7 @@ Single seek, linear read. Local Header overhead is ~100 bytes (negligible).
 
 **Documentation**: [`ZIP_STRUCTURE_CACHE_DESIGN.md`](src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md)
 
-#### **Archives (`src/ZipDriveV3.Infrastructure.Archives.Zip`) - STREAMING ZIP READER**
+#### **Archives (`src/ZipDrive.Infrastructure.Archives.Zip`) - STREAMING ZIP READER**
 
 The streaming ZIP reader provides memory-efficient parsing of ZIP archives using `IAsyncEnumerable`.
 
@@ -306,16 +306,16 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives using
 
 **Documentation**: [`STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
 
-#### **FileSystem (`src/ZipDriveV3.Infrastructure.FileSystem`)**
+#### **FileSystem (`src/ZipDrive.Infrastructure.FileSystem`)**
 
 DokanNet integration for Windows file system mounting.
 
 **Key Components**:
 - `DokanFileSystemAdapter`: Implements `IDokanOperations2`, translates Dokan calls to `IVirtualFileSystem`
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
-- `DokanTelemetry`: Static `Meter("ZipDriveV3.Dokan")` with read latency histogram
+- `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
 
-### Presentation Layer (`src/ZipDriveV3.Cli`)
+### Presentation Layer (`src/ZipDrive.Cli`)
 
 Command-line interface entry point with OpenTelemetry SDK wiring.
 
@@ -367,7 +367,7 @@ When working with the caching layer:
 - **Parallel Materialization**: 20 concurrent reads of different files should not block each other
 - **Eviction Under Load**: Capacity exceeded with concurrent requests
 
-### Endurance Tests (`tests/ZipDriveV3.EnduranceTests`)
+### Endurance Tests (`tests/ZipDrive.EnduranceTests`)
 - **Duration**: Configurable via `ENDURANCE_DURATION_HOURS` env var (default: 0.02 = ~72s for CI)
 - **Concurrency**: 23 tasks (8 browsers, 5 sequential readers, 4 path stress, 3 same-file thundering herd, 2 different-file parallel, 1 maintenance loop)
 - **Cache config**: Tight limits (2MB memory, 20MB disk, 5MB cutoff, 1min TTL, 2s maintenance interval) to force eviction
@@ -436,7 +436,7 @@ This solution uses **Central Package Management**. All package versions are defi
 
 ### Adding Support for New Archive Format (e.g., TAR)
 
-1. Create new project: `ZipDriveV3.Infrastructure.Archives.Tar`
+1. Create new project: `ZipDrive.Infrastructure.Archives.Tar`
 2. Implement `IArchiveProvider` with `CanOpen()` and `OpenAsync()`
 3. Implement `IArchiveSession` for TAR-specific operations
 4. Register provider in DI container
@@ -448,7 +448,7 @@ This solution uses **Central Package Management**. All package versions are defi
 2. Check cache hit/miss metrics in dashboard (`cache.hits`, `cache.misses` counters by tier)
 3. Monitor materialization duration histogram (`cache.materialization.duration`) by size bucket
 4. Review eviction events in logs (now at Information level with `{Tier}` and `{Reason}` tags)
-5. Use `dotnet-counters monitor --counters ZipDriveV3.Caching` for quick CLI metrics
+5. Use `dotnet-counters monitor --counters ZipDrive.Caching` for quick CLI metrics
 6. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
 
 ## Important Architectural Decisions
@@ -566,7 +566,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 
 ## Success Criteria
 
-V3 is considered complete when:
+ZipDrive is considered complete when:
 - [x] Caching layer fully implemented with 80%+ test coverage (66 tests)
 - [x] ZIP reader implemented and tested (15 tests)
 - [x] DokanNet adapter functional (mount/unmount works)
