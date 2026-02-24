@@ -49,9 +49,60 @@ jobs:
 
       - name: Test report
         uses: dorny/test-reporter@v1
+        id: test-report
         if: always()
         with:
           name: Test Results
           path: TestResults/*.trx
           reporter: dotnet-trx
           fail-on-error: true
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          $nsUri = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+          $totalPassed = 0; $totalFailed = 0; $totalSkipped = 0
+          $rows = @()
+
+          foreach ($file in Get-ChildItem ./TestResults -Filter *.trx) {
+            $doc = New-Object System.Xml.XmlDocument
+            $doc.Load($file.FullName)
+            $mgr = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+            $mgr.AddNamespace("t", $nsUri)
+
+            $counters = $doc.SelectSingleNode("//t:Counters", $mgr)
+            $passed  = [int]$counters.GetAttribute("passed")
+            $failed  = [int]$counters.GetAttribute("failed")
+            $total   = [int]$counters.GetAttribute("total")
+            $skipped = $total - $passed - $failed
+
+            $totalPassed  += $passed
+            $totalFailed  += $failed
+            $totalSkipped += $skipped
+
+            $name = $file.BaseName -replace '\.Tests$','' -replace 'ZipDriveV3\.',''
+            $icon = if ($failed -gt 0) { ":x:" } else { ":white_check_mark:" }
+            $rows += "| $icon $name | $passed | $failed | $skipped | $total |"
+          }
+
+          $grandTotal = $totalPassed + $totalFailed + $totalSkipped
+          $icon = if ($totalFailed -gt 0) { ":x: **FAILED**" } else { ":white_check_mark: **PASSED**" }
+
+          $body = @"
+          ## Test Results $icon
+
+          | Suite | Passed | Failed | Skipped | Total |
+          |-------|-------:|-------:|--------:|------:|
+          $($rows -join "`n")
+          | **Total** | **$totalPassed** | **$totalFailed** | **$totalSkipped** | **$grandTotal** |
+          "@
+
+          $body | Out-File -FilePath test-summary.md -Encoding utf8
+          Write-Host $body
+        shell: pwsh
+
+      - name: Post test summary to PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request' && always()
+        with:
+          path: test-summary.md
