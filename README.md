@@ -53,7 +53,17 @@ Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
 
 ## Configuration
 
-Configuration is loaded from `appsettings.json` and can be overridden via command-line arguments.
+All settings are read from `appsettings.json` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
+
+```bash
+ZipDrive.exe
+```
+
+Command-line arguments **override** `appsettings.json` values using the `--Section:Key=Value` syntax:
+
+```bash
+ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\"
+```
 
 ### Mount Options
 
@@ -71,7 +81,7 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 | `Cache:MemoryCacheSizeMb` | `2048` | Memory tier capacity (MB) |
 | `Cache:DiskCacheSizeMb` | `10240` | Disk tier capacity (MB) |
 | `Cache:SmallFileCutoffMb` | `50` | Files smaller than this go to memory; larger go to disk |
-| `Cache:TempDirectory` | System temp | Directory for disk-cached temp files |
+| `Cache:TempDirectory` | System temp | Directory for disk-tier cache files. Set this to a fast SSD path to improve large-file read performance. When `null`, defaults to the OS temp directory |
 | `Cache:DefaultTtlMinutes` | `30` | Cache entry time-to-live |
 | `Cache:EvictionCheckIntervalSeconds` | `10` | Background maintenance sweep interval |
 
