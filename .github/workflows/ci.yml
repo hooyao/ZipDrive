@@ -61,36 +61,38 @@ jobs:
 
       - name: Post test and coverage summary
         if: always()
-        shell: bash
+        shell: pwsh
         run: |
-          # Test summary
-          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Suite | Passed | Failed | Skipped | Total |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------:|-------:|--------:|------:|" >> $GITHUB_STEP_SUMMARY
+          $nsUri = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+          $totalPassed = 0; $totalFailed = 0; $totalSkipped = 0
+          $lines = @("## Test Results", "", "| Suite | Passed | Failed | Skipped | Total |", "|-------|-------:|-------:|--------:|------:|")
 
-          total_passed=0
-          total_failed=0
-          total_skipped=0
+          foreach ($file in Get-ChildItem ./TestResults -Filter *.trx) {
+            $doc = New-Object System.Xml.XmlDocument
+            $doc.Load($file.FullName)
+            $mgr = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+            $mgr.AddNamespace("t", $nsUri)
+            $counters = $doc.SelectSingleNode("//t:Counters", $mgr)
+            $p = [int]$counters.GetAttribute("passed")
+            $f = [int]$counters.GetAttribute("failed")
+            $t = [int]$counters.GetAttribute("total")
+            $s = $t - $p - $f
+            $totalPassed += $p; $totalFailed += $f; $totalSkipped += $s
+            $name = $file.BaseName -replace '\.Tests$','' -replace 'ZipDriveV3\.',''
+            $icon = if ($f -gt 0) { ":x:" } else { ":white_check_mark:" }
+            $lines += "| $icon $name | $p | $f | $s | $t |"
+          }
 
-          for trx in TestResults/*.trx; do
-            name=$(basename "$trx" .trx | sed 's/ZipDriveV3\.//' | sed 's/\.Tests$//')
-            passed=$(grep -oP 'passed="\K[0-9]+' "$trx" | tail -1)
-            failed=$(grep -oP 'failed="\K[0-9]+' "$trx" | tail -1)
-            total=$(grep -oP ' total="\K[0-9]+' "$trx" | tail -1)
-            skipped=$((total - passed - failed))
-            total_passed=$((total_passed + passed))
-            total_failed=$((total_failed + failed))
-            total_skipped=$((total_skipped + skipped))
-            if [ "$failed" -gt 0 ]; then icon=":x:"; else icon=":white_check_mark:"; fi
-            echo "| $icon $name | $passed | $failed | $skipped | $total |" >> $GITHUB_STEP_SUMMARY
-          done
+          $grand = $totalPassed + $totalFailed + $totalSkipped
+          $lines += "| **Total** | **$totalPassed** | **$totalFailed** | **$totalSkipped** | **$grand** |"
+          $lines += ""
 
-          grand_total=$((total_passed + total_failed + total_skipped))
-          echo "| **Total** | **$total_passed** | **$total_failed** | **$total_skipped** | **$grand_total** |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Coverage
+          dotnet tool install -g dotnet-reportgenerator-globaltool --verbosity quiet 2>$null
+          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub" 2>$null
+          if (Test-Path TestResults/CoverageReport/SummaryGithub.md) {
+            $lines += (Get-Content TestResults/CoverageReport/SummaryGithub.md)
+          }
 
-          # Coverage summary
-          dotnet tool install -g dotnet-reportgenerator-globaltool --verbosity quiet
-          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub"
-          cat TestResults/CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+          # Write to GITHUB_STEP_SUMMARY
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
