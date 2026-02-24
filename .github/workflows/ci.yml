@@ -55,6 +55,9 @@ jobs:
           reporter: dotnet-trx
           fail-on-error: true
           use-actions-summary: 'true'
+          only-summary: 'false'
+          list-suites: all
+          list-tests: failed
 
       - name: Merge coverage reports
         if: always()
