@@ -5,6 +5,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Concurrent file system workload: per-core heaps, parallel collection -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- Keep de-committed segments; avoids re-alloc churn in cache grow/shrink cycles -->
+    <RetainVMGarbageCollection>true</RetainVMGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,6 +17,7 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Process" Version="1.15.0-beta.1" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
+    <PackageReference Include="Serilog.Expressions" Version="5.0.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Serilog.Settings.Configuration" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />

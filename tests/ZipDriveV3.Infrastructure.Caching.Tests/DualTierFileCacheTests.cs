@@ -145,4 +145,39 @@ public class DualTierFileCacheTests
             cache.DiskTier.EntryCount.Should().Be(0);
         }
     }
+
+    [Fact]
+    public async Task Clear_RemovesAllEntriesAndDeletesTempFiles()
+    {
+        var options = DefaultOptions(cutoffMb: 1);
+        var cache = CreateCache(options);
+        int largeSize = 2 * 1024 * 1024; // 2 MB - goes to disk tier
+
+        // Add entries to both tiers
+        using (var h = await cache.BorrowAsync("small", TimeSpan.FromMinutes(5),
+            sizeHintBytes: 100, CreateFactory(100))) { }
+        using (var h = await cache.BorrowAsync("large", TimeSpan.FromMinutes(5),
+            sizeHintBytes: largeSize, CreateFactory(largeSize))) { }
+
+        cache.EntryCount.Should().Be(2);
+
+        // Verify temp files exist for disk tier
+        var tempFiles = Directory.Exists(options.TempDirectory)
+            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache")
+            : [];
+        tempFiles.Should().NotBeEmpty("disk tier should have created temp files");
+
+        // Act
+        cache.Clear();
+
+        // Assert
+        cache.EntryCount.Should().Be(0);
+        cache.CurrentSizeBytes.Should().Be(0);
+
+        // Temp files should be deleted
+        var remainingFiles = Directory.Exists(options.TempDirectory)
+            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache")
+            : [];
+        remainingFiles.Should().BeEmpty("Clear() should delete all disk tier temp files");
+    }
 }

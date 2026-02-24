@@ -64,6 +64,17 @@ public sealed class CacheMaintenanceService : BackgroundService
             }
         }
 
+        // Final cleanup: clear all cache entries (deletes disk tier temp files)
+        try
+        {
+            _fileCache.Clear();
+            _logger.LogInformation("Final cache cleanup completed");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error during final cache cleanup");
+        }
+
         _logger.LogInformation("CacheMaintenanceService stopped");
     }
 }
