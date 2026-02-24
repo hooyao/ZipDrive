@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   checks: write
+  pull-requests: write
 
 jobs:
   build-and-test:
@@ -94,5 +95,13 @@ jobs:
             $lines += (Get-Content TestResults/CoverageReport/SummaryGithub.md)
           }
 
-          # Write to GITHUB_STEP_SUMMARY
-          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          # Write to file for reuse, then append to GITHUB_STEP_SUMMARY
+          $lines | Out-File -FilePath TestResults/summary.md -Encoding utf8
+          Get-Content TestResults/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: test-report
+          path: TestResults/summary.md
