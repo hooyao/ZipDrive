@@ -399,3 +399,7 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
+# ZipDrive project-specific
+test-archives/
+*.zip2vd.cache
+

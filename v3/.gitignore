@@ -1,8 +1,0 @@
-# Test-generated ZIP archives (created by test fixtures)
-test-archives/
-
-# Disk cache temp files
-*.zip2vd.cache
-
-# BenchmarkDotNet results
-BenchmarkDotNet.Artifacts/
