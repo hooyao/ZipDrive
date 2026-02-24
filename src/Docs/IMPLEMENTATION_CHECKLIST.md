@@ -283,7 +283,7 @@ The caching layer uses a **generic cache with pluggable storage strategies**:
 
 - [x] `OpenTelemetry.Extensions.Hosting`, `.Exporter.OpenTelemetryProtocol`, `.Instrumentation.Runtime`, `.Instrumentation.Process`
 - [x] `AddOpenTelemetry()` wiring in `Program.cs` (metrics + tracing + OTLP export)
-- [x] `appsettings.json` includes `"OpenTelemetry"` section with default endpoint `http://localhost:18889`
+- [x] `appsettings.json` includes `"OpenTelemetry"` section with `Endpoint` defaulting to empty string (opt-in; disabled by default)
 - [x] Aspire Dashboard for local visualization
 
 **Phase 7 Checkpoint:** ✅ Full observability implemented with OpenTelemetry
