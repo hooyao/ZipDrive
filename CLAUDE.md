@@ -459,6 +459,22 @@ This solution uses **Central Package Management**. All package versions are defi
 5. Use `dotnet-counters monitor --counters ZipDrive.Caching` for quick CLI metrics
 6. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
 
+### Addressing GitHub Copilot PR Review Comments
+
+After creating a PR, GitHub Copilot may leave review comments. Follow this workflow:
+
+1. **Check comments**: `gh api repos/{owner}/{repo}/pulls/{pr}/comments` or use `pull_request_read` with `get_review_comments`
+2. **Analyze each comment**: Determine if the feedback is valid and actionable
+3. **Fix valid issues**: Make code changes, add tests, commit and push to the PR branch
+4. **Reply to each comment**: Use `gh api repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body="..."` to explain what was done (or why a comment was declined)
+5. **Resolve conversations**: Query thread IDs via GraphQL, then resolve each with `resolveReviewThread` mutation:
+   ```bash
+   # Get thread IDs
+   gh api graphql -f query='{ repository(owner: "...", name: "...") { pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved } } } } }'
+   # Resolve a thread
+   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+   ```
+
 ## Important Architectural Decisions
 
 ### Why NOT use built-in MemoryCache?
