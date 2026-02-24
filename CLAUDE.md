@@ -314,6 +314,12 @@ DokanNet integration for Windows file system mounting.
 - `DokanFileSystemAdapter`: Implements `IDokanOperations2`, translates Dokan calls to `IVirtualFileSystem`
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
 - `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
+- `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
+- `MountOptions`: Configuration POCO with `ShortCircuitShellMetadata` toggle (default: `true`)
+
+**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.json`.
+
+**Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
 ### Presentation Layer (`src/ZipDrive.Cli`)
 

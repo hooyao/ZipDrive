@@ -4,6 +4,7 @@ using System.Security.AccessControl;
 using DokanNet;
 using LTRData.Extensions.Native.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
@@ -19,11 +20,13 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
 {
     private readonly IVirtualFileSystem _vfs;
     private readonly ILogger<DokanFileSystemAdapter> _logger;
+    private readonly bool _shortCircuitShellMetadata;
 
-    public DokanFileSystemAdapter(IVirtualFileSystem vfs, ILogger<DokanFileSystemAdapter> logger)
+    public DokanFileSystemAdapter(IVirtualFileSystem vfs, ILogger<DokanFileSystemAdapter> logger, IOptions<MountOptions> mountOptions)
     {
         _vfs = vfs;
         _logger = logger;
+        _shortCircuitShellMetadata = mountOptions.Value.ShortCircuitShellMetadata;
     }
 
     public int DirectoryListingTimeoutResetIntervalMs => 0;
@@ -32,7 +35,15 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, DokanNet.FileAccess access, FileShare share,
         FileMode mode, FileOptions options, FileAttributes attributes, ref DokanFileInfo info)
     {
+        // Short-circuit Windows shell metadata probes before allocating a string
+        if (_shortCircuitShellMetadata && ShellMetadataFilter.IsShellMetadataPath(fileName.Span))
+        {
+            _logger.LogDebug("CreateFile: short-circuit shell metadata: {Path}", fileName.Span.ToString());
+            return DokanResult.FileNotFound;
+        }
+
         string path = fileName.Span.ToString();
+        _logger.LogDebug("CreateFile: {Path} mode={Mode} access={Access}", path, mode, access);
 
         // Reject any create/write modes
         if (mode is FileMode.CreateNew or FileMode.Create or FileMode.Append)
@@ -71,6 +82,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         out int bytesRead, long offset, ref DokanFileInfo info)
     {
         string path = fileName.Span.ToString();
+        _logger.LogDebug("ReadFile: {Path} offset={Offset} length={Length}", path, offset, buffer.Span.Length);
         bytesRead = 0;
         long startTimestamp = Stopwatch.GetTimestamp();
 
@@ -111,6 +123,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ref DokanFileInfo info)
     {
         string path = fileName.Span.ToString();
+        _logger.LogDebug("FindFiles: {Path}", path);
 
         try
         {
@@ -137,7 +150,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
     {
         string path = fileName.Span.ToString();
         string pattern = searchPattern.Span.ToString();
-
+        _logger.LogDebug("FindFilesWithPattern: {Path} pattern={Pattern}", path, pattern);
         try
         {
             IReadOnlyList<VfsFileInfo> entries = _vfs.ListDirectoryAsync(path).GetAwaiter().GetResult();
@@ -164,6 +177,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ref DokanFileInfo info)
     {
         string path = fileName.Span.ToString();
+        _logger.LogDebug("GetFileInformation: {Path}", path);
         fileInfo = default;
 
         try
@@ -199,6 +213,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         NativeMemory<char> fileSystemName, out uint maximumComponentLength,
         ref uint volumeSerialNumber, ref DokanFileInfo info)
     {
+        _logger.LogDebug("GetVolumeInformation");
         volumeLabel.SetString("ZipDrive");
         fileSystemName.SetString("ZipDriveFS");
         maximumComponentLength = 256;
@@ -212,6 +227,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         out long freeBytesAvailable, out long totalNumberOfBytes,
         out long totalNumberOfFreeBytes, ref DokanFileInfo info)
     {
+        _logger.LogDebug("GetDiskFreeSpace");
         freeBytesAvailable = 0;
         totalNumberOfFreeBytes = 0;
         totalNumberOfBytes = 0; // Read-only, no meaningful total
@@ -222,6 +238,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, out FileSystemSecurity? security,
         AccessControlSections sections, ref DokanFileInfo info)
     {
+        _logger.LogDebug("GetFileSecurity: {Path}", fileName.Span.ToString());
         security = null;
         return DokanResult.NotImplemented;
     }
@@ -240,56 +257,103 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
 
     // === No-op lifecycle methods ===
 
-    public void Cleanup(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info) { }
+    public void Cleanup(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
+    {
+        _logger.LogDebug("Cleanup: {Path}", fileName.Span.ToString());
+    }
 
-    public void CloseFile(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info) { }
+    public void CloseFile(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
+    {
+        _logger.LogDebug("CloseFile: {Path}", fileName.Span.ToString());
+    }
 
     // === Read-only: all write ops return AccessDenied ===
 
     public NtStatus WriteFile(ReadOnlyNativeMemory<char> fileName, ReadOnlyNativeMemory<byte> buffer,
         out int bytesWritten, long offset, ref DokanFileInfo info)
-    { bytesWritten = 0; return DokanResult.AccessDenied; }
+    {
+        _logger.LogDebug("WriteFile: {Path}", fileName.Span.ToString());
+        bytesWritten = 0;
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus DeleteFile(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("DeleteFile: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus DeleteDirectory(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("DeleteDirectory: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus MoveFile(ReadOnlyNativeMemory<char> oldName, ReadOnlyNativeMemory<char> newName,
         bool replace, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("MoveFile: {OldPath} -> {NewPath}", oldName.Span.ToString(), newName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus SetFileAttributes(ReadOnlyNativeMemory<char> fileName,
         FileAttributes attributes, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("SetFileAttributes: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus SetFileTime(ReadOnlyNativeMemory<char> fileName,
         DateTime? creationTime, DateTime? lastAccessTime, DateTime? lastWriteTime, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("SetFileTime: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus SetEndOfFile(ReadOnlyNativeMemory<char> fileName, long length, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("SetEndOfFile: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus SetAllocationSize(ReadOnlyNativeMemory<char> fileName, long length, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("SetAllocationSize: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus SetFileSecurity(ReadOnlyNativeMemory<char> fileName,
         FileSystemSecurity security, AccessControlSections sections, ref DokanFileInfo info)
-        => DokanResult.AccessDenied;
+    {
+        _logger.LogDebug("SetFileSecurity: {Path}", fileName.Span.ToString());
+        return DokanResult.AccessDenied;
+    }
 
     public NtStatus FlushFileBuffers(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
-        => DokanResult.Success;
+    {
+        _logger.LogDebug("FlushFileBuffers: {Path}", fileName.Span.ToString());
+        return DokanResult.Success;
+    }
 
     public NtStatus LockFile(ReadOnlyNativeMemory<char> fileName, long offset, long length, ref DokanFileInfo info)
-        => DokanResult.NotImplemented;
+    {
+        _logger.LogDebug("LockFile: {Path} offset={Offset} length={Length}", fileName.Span.ToString(), offset, length);
+        return DokanResult.NotImplemented;
+    }
 
     public NtStatus UnlockFile(ReadOnlyNativeMemory<char> fileName, long offset, long length, ref DokanFileInfo info)
-        => DokanResult.NotImplemented;
+    {
+        _logger.LogDebug("UnlockFile: {Path} offset={Offset} length={Length}", fileName.Span.ToString(), offset, length);
+        return DokanResult.NotImplemented;
+    }
 
     public NtStatus FindStreams(ReadOnlyNativeMemory<char> fileName,
         out IEnumerable<FindFileInformation> streams, ref DokanFileInfo info)
-    { streams = []; return DokanResult.NotImplemented; }
+    {
+        _logger.LogDebug("FindStreams: {Path}", fileName.Span.ToString());
+        streams = [];
+        return DokanResult.NotImplemented;
+    }
 
     // === Helpers ===
 

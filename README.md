@@ -62,6 +62,7 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 | `Mount:MountPoint` | `R:\` | Drive letter to mount |
 | `Mount:ArchiveDirectory` | (required) | Root directory containing ZIP archives |
 | `Mount:MaxDiscoveryDepth` | `6` | Maximum directory depth for archive discovery |
+| `Mount:ShortCircuitShellMetadata` | `true` | Skip Windows shell metadata probes (desktop.ini, thumbs.db, etc.) to avoid unnecessary ZIP parsing |
 
 ### Cache Options
 
