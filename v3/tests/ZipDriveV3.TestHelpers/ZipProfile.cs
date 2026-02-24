@@ -28,5 +28,11 @@ public enum ZipProfile
     VideoSimulation,
 
     /// <summary>Edge cases: unicode names, empty files, single-byte, cutoff boundary.</summary>
-    EdgeCases
+    EdgeCases,
+
+    /// <summary>
+    /// 15 small files (100KB-4MB) + 3 medium files (5-6MB).
+    /// Designed for endurance tests with SmallFileCutoffMb=5 to exercise both cache tiers.
+    /// </summary>
+    EnduranceMixed
 }

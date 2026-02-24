@@ -109,6 +109,30 @@ public static class TestZipGenerator
     }
 
     /// <summary>
+    /// Generates a test fixture from a custom folder/profile specification.
+    /// </summary>
+    public static async Task GenerateTestFixtureAsync(
+        string rootDir,
+        List<(string folder, int count, ZipProfile profile)> fixture)
+    {
+        Directory.CreateDirectory(rootDir);
+
+        int globalSeed = 0;
+        foreach ((string folder, int count, ZipProfile profile) in fixture)
+        {
+            string folderPath = Path.Combine(rootDir, folder.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(folderPath);
+
+            for (int i = 0; i < count; i++)
+            {
+                string zipName = $"archive{i + 1:D2}.zip";
+                string zipPath = Path.Combine(folderPath, zipName);
+                await GenerateZipAsync(zipPath, profile, seed: globalSeed++);
+            }
+        }
+    }
+
+    /// <summary>
     /// Generates deterministic pseudo-random content seeded by file path.
     /// </summary>
     public static byte[] GenerateDeterministicContent(string filePath, long size)
@@ -176,6 +200,7 @@ public static class TestZipGenerator
             ZipProfile.FlatStructure => GenerateFlatStructure(rng),
             ZipProfile.VideoSimulation => GenerateVideoSimulation(rng),
             ZipProfile.EdgeCases => GenerateEdgeCases(rng),
+            ZipProfile.EnduranceMixed => GenerateEnduranceMixed(rng),
             _ => throw new ArgumentOutOfRangeException(nameof(profile))
         };
     }
@@ -293,6 +318,25 @@ public static class TestZipGenerator
         };
     }
 
+    private static List<(string, long)> GenerateEnduranceMixed(Random rng)
+    {
+        List<(string, long)> files = new();
+        // 15 small files (100KB-4MB) → memory tier at 5MB cutoff
+        for (int i = 0; i < 15; i++)
+        {
+            string dir = i % 3 == 0 ? "assets" : i % 3 == 1 ? "data" : "config";
+            long size = rng.Next(100 * 1024, 4 * 1024 * 1024);
+            files.Add(($"{dir}/small{i:D2}.bin", size));
+        }
+        // 3 medium files (5-6MB) → disk tier at 5MB cutoff
+        for (int i = 0; i < 3; i++)
+        {
+            long size = rng.Next(5 * 1024 * 1024, 6 * 1024 * 1024);
+            files.Add(($"large/medium{i:D2}.bin", size));
+        }
+        return files;
+    }
+
     private static void EnsureDirectoryEntries(
         ZipArchive archive, string filePath, HashSet<string> created, ZipManifest manifest)
     {
@@ -338,5 +382,16 @@ public static class TestZipGenerator
         ("docs/manuals", 2, ZipProfile.TinyFiles),
         ("", 1, ZipProfile.EdgeCases),
         ("edge", 2, ZipProfile.EdgeCases),
+    ];
+
+    /// <summary>
+    /// Endurance-optimized fixture: small + medium files for dual-tier cache testing.
+    /// Total ~50MB. Designed for SmallFileCutoffMb=5.
+    /// </summary>
+    public static List<(string folder, int count, ZipProfile profile)> GetEnduranceFixture() =>
+    [
+        ("small", 3, ZipProfile.TinyFiles),          // Many small files → memory tier
+        ("mixed", 2, ZipProfile.EnduranceMixed),      // Files spanning both tiers
+        ("edge", 1, ZipProfile.EdgeCases),            // Edge cases (0-byte, 1-byte, boundary)
     ];
 }
