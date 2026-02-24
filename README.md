@@ -189,6 +189,7 @@ Detailed design documents are available in `src/Docs/`:
 - **System.IO.MemoryMappedFiles** — Disk-tier cache storage
 - **XUnit + FluentAssertions** — Testing
 - **BenchmarkDotNet** — Performance benchmarks
+- **NuGet Central Package Management** — All package versions defined in [`Directory.Packages.props`](Directory.Packages.props)
 
 ## License
 

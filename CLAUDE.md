@@ -30,6 +30,7 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 - **Language**: C# 13/14 (implied by .NET 10)
 - **SDK Version**: 10.0.100
 - **Project Structure**: Clean Architecture / Onion Architecture
+- **Package Management**: NuGet Central Package Management (`Directory.Packages.props` at repo root)
 - **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`
 
 ## Prerequisites
@@ -423,6 +424,15 @@ Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889`
 2. Implement `SelectVictims()` method with your algorithm (LRU, LFU, Size-First, etc.)
 3. Register in DI container
 4. Add unit tests verifying eviction order
+
+### Adding a New NuGet Package
+
+This solution uses **Central Package Management**. All package versions are defined in `Directory.Packages.props` at the repo root.
+
+1. Add `<PackageVersion Include="PackageName" Version="x.y.z" />` to `Directory.Packages.props`
+2. Add `<PackageReference Include="PackageName" />` (no `Version` attribute) to the consuming `.csproj` file(s)
+
+**Never** add a `Version` attribute to `<PackageReference>` in `.csproj` files — all versions are centrally managed.
 
 ### Adding Support for New Archive Format (e.g., TAR)
 
