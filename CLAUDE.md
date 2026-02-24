@@ -86,6 +86,8 @@ Run with:
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
+**Versioning**: `Directory.Build.props` sets `<Version>1.0.0-dev</Version>` as the default. The startup log displays the version with the `+commit-hash` metadata stripped (e.g., `ZipDrive 1.0.0-dev starting`). For release builds, the CI pipeline overrides this via `-p:Version=1.0.0` on the `dotnet publish` command line (see `.github/workflows/release.yml`), producing `ZipDrive 1.0.0 starting`.
+
 **Single-file note**: Serilog cannot auto-discover sink assemblies in single-file mode. The CLI explicitly passes `ConfigurationReaderOptions` with the Console sink assembly. If adding new Serilog sinks, register their assemblies in `Program.cs`.
 
 ## Architecture
@@ -314,6 +316,12 @@ DokanNet integration for Windows file system mounting.
 - `DokanFileSystemAdapter`: Implements `IDokanOperations2`, translates Dokan calls to `IVirtualFileSystem`
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
 - `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
+- `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
+- `MountOptions`: Configuration POCO with `ShortCircuitShellMetadata` toggle (default: `true`)
+
+**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.json`.
+
+**Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
 ### Presentation Layer (`src/ZipDrive.Cli`)
 
@@ -450,6 +458,22 @@ This solution uses **Central Package Management**. All package versions are defi
 4. Review eviction events in logs (now at Information level with `{Tier}` and `{Reason}` tags)
 5. Use `dotnet-counters monitor --counters ZipDrive.Caching` for quick CLI metrics
 6. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
+
+### Addressing GitHub Copilot PR Review Comments
+
+After creating a PR, GitHub Copilot may leave review comments. Follow this workflow:
+
+1. **Check comments**: `gh api repos/{owner}/{repo}/pulls/{pr}/comments` or use `pull_request_read` with `get_review_comments`
+2. **Analyze each comment**: Determine if the feedback is valid and actionable
+3. **Fix valid issues**: Make code changes, add tests, commit and push to the PR branch
+4. **Reply to each comment**: Use `gh api repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body="..."` to explain what was done (or why a comment was declined)
+5. **Resolve conversations**: Query thread IDs via GraphQL, then resolve each with `resolveReviewThread` mutation:
+   ```bash
+   # Get thread IDs
+   gh api graphql -f query='{ repository(owner: "...", name: "...") { pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved } } } } }'
+   # Resolve a thread
+   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+   ```
 
 ## Important Architectural Decisions
 

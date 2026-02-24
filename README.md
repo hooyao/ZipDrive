@@ -30,30 +30,35 @@ This mounts all ZIP files found under `D:\my-zips` as the `R:\` drive.
 
 ### Building from Source
 
-```bash
+```powershell
 # Build
 dotnet build ZipDrive.slnx
 
 # Run
-dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- \
-  --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
+dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
 ### Publishing a Single-File Executable
 
-```bash
-dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
-  -c Release -r win-x64 --self-contained false \
-  -p:PublishSingleFile=true \
-  -p:IncludeNativeLibrariesForSelfExtract=true \
-  -o ./publish
+```powershell
+dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
 ```
 
 Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
 
 ## Configuration
 
-Configuration is loaded from `appsettings.json` and can be overridden via command-line arguments.
+All settings are read from `appsettings.json` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
+
+```bash
+ZipDrive.exe
+```
+
+Command-line arguments **override** `appsettings.json` values using the `--Section:Key=Value` syntax:
+
+```powershell
+ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Cache:TempDirectory="D:\zipdrive-cache"
+```
 
 ### Mount Options
 
@@ -62,6 +67,7 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 | `Mount:MountPoint` | `R:\` | Drive letter to mount |
 | `Mount:ArchiveDirectory` | (required) | Root directory containing ZIP archives |
 | `Mount:MaxDiscoveryDepth` | `6` | Maximum directory depth for archive discovery |
+| `Mount:ShortCircuitShellMetadata` | `true` | Skip Windows shell metadata probes (desktop.ini, thumbs.db, etc.) to avoid unnecessary ZIP parsing |
 
 ### Cache Options
 
@@ -70,9 +76,9 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 | `Cache:MemoryCacheSizeMb` | `2048` | Memory tier capacity (MB) |
 | `Cache:DiskCacheSizeMb` | `10240` | Disk tier capacity (MB) |
 | `Cache:SmallFileCutoffMb` | `50` | Files smaller than this go to memory; larger go to disk |
-| `Cache:TempDirectory` | System temp | Directory for disk-cached temp files |
+| `Cache:TempDirectory` | System temp | Directory for disk-tier cache files. Set this to a fast SSD path to improve large-file read performance. When `null`, defaults to the OS temp directory |
 | `Cache:DefaultTtlMinutes` | `30` | Cache entry time-to-live |
-| `Cache:EvictionCheckIntervalSeconds` | `60` | Background maintenance sweep interval |
+| `Cache:EvictionCheckIntervalSeconds` | `10` | Background maintenance sweep interval |
 
 ### OpenTelemetry
 

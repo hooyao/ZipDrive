@@ -22,9 +22,13 @@ using MountOptions = ZipDrive.Infrastructure.FileSystem.MountOptions;
 // Required for ZIP entry name encoding
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-var version = Assembly.GetExecutingAssembly()
+var informationalVersion = Assembly.GetExecutingAssembly()
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
     ?.InformationalVersion ?? "unknown";
+
+// Strip the +commit-hash metadata suffix for cleaner display (e.g. "1.0.0-dev+abc123" → "1.0.0-dev")
+var plusIndex = informationalVersion.IndexOf('+');
+var version = plusIndex >= 0 ? informationalVersion[..plusIndex] : informationalVersion;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
