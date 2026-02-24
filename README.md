@@ -30,23 +30,18 @@ This mounts all ZIP files found under `D:\my-zips` as the `R:\` drive.
 
 ### Building from Source
 
-```bash
+```powershell
 # Build
 dotnet build ZipDrive.slnx
 
 # Run
-dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- \
-  --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
+dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
 
 ### Publishing a Single-File Executable
 
-```bash
-dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
-  -c Release -r win-x64 --self-contained false \
-  -p:PublishSingleFile=true \
-  -p:IncludeNativeLibrariesForSelfExtract=true \
-  -o ./publish
+```powershell
+dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
 ```
 
 Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
@@ -61,8 +56,8 @@ ZipDrive.exe
 
 Command-line arguments **override** `appsettings.json` values using the `--Section:Key=Value` syntax:
 
-```bash
-ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\"
+```powershell
+ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Cache:TempDirectory="D:\zipdrive-cache"
 ```
 
 ### Mount Options
