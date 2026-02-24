@@ -56,7 +56,7 @@ The CLI application SHALL support configurable OTLP export for sending telemetry
 #### Scenario: Default OTLP endpoint
 
 - **WHEN** no custom OpenTelemetry endpoint is configured
-- **THEN** the OTLP exporter SHALL default to `http://localhost:4317` (gRPC protocol)
+- **THEN** the OTLP exporter SHALL default to `http://localhost:18889` (gRPC protocol, Aspire Dashboard default)
 
 #### Scenario: Custom OTLP endpoint from configuration
 
@@ -103,4 +103,4 @@ The `appsettings.json` SHALL include an `"OpenTelemetry"` configuration section.
 #### Scenario: OpenTelemetry section in appsettings.json
 
 - **WHEN** the default `appsettings.json` is deployed
-- **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `"http://localhost:4317"`
+- **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `"http://localhost:18889"`

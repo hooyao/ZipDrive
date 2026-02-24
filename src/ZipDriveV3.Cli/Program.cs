@@ -37,7 +37,7 @@ builder.ConfigureServices((context, services) =>
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
 
     // OpenTelemetry
-    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:18889";
 
     services.AddOpenTelemetry()
         .ConfigureResource(r => r.AddService("ZipDriveV3"))

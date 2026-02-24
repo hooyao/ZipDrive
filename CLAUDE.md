@@ -404,12 +404,12 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 ```json
 {
   "OpenTelemetry": {
-    "Endpoint": "http://localhost:4317"
+    "Endpoint": "http://localhost:18889"
   }
 }
 ```
 
-**Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
+**Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
 
 ## Common Development Tasks
 
@@ -430,7 +430,7 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 
 ### Debugging Cache Behavior
 
-1. Start Aspire Dashboard for live metrics/traces: `docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`
+1. Start Aspire Dashboard for live metrics/traces: `docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`
 2. Check cache hit/miss metrics in dashboard (`cache.hits`, `cache.misses` counters by tier)
 3. Monitor materialization duration histogram (`cache.materialization.duration`) by size bucket
 4. Review eviction events in logs (now at Information level with `{Tier}` and `{Reason}` tags)

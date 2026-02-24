@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore ZipDriveV3.slnx
+
+      - name: Build
+        run: dotnet build ZipDriveV3.slnx -c Release --no-restore
+
+      - name: Test
+        uses: zyborg/dotnet-tests-report@v1
+        with:
+          project_path: ZipDriveV3.slnx
+          no_build: true
+          msbuild_configuration: Release
+          msbuild_verbosity: normal
+          extra_test_parameters: >-
+            --filter "FullyQualifiedName!~EnduranceTests&FullyQualifiedName!~Benchmarks"
+            --collect:"XPlat Code Coverage"
+          report_name: Test Results
+          report_title: ZipDrive V3 Test Results
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          set_check_status_from_test_outcome: true
+          fail_build_on_failed_tests: true

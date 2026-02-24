@@ -78,12 +78,12 @@ Configuration is loaded from `appsettings.json` and can be overridden via comman
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `OpenTelemetry:Endpoint` | `http://localhost:4317` | OTLP exporter endpoint |
+| `OpenTelemetry:Endpoint` | `http://localhost:18889` | OTLP gRPC exporter endpoint |
 
 To visualize metrics and traces locally, run the [Aspire Dashboard](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/overview):
 
 ```bash
-docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard
+docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard
 ```
 
 Then open `http://localhost:18888`.
