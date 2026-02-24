@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using DokanNet;
 using LTRData.Extensions.Native.Memory;
@@ -13,6 +14,7 @@ namespace ZipDriveV3.Infrastructure.FileSystem;
 /// Thin adapter translating DokanNet IDokanOperations2 calls to IVirtualFileSystem.
 /// Read-only: all write operations return AccessDenied.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public sealed class DokanFileSystemAdapter : IDokanOperations2
 {
     private readonly IVirtualFileSystem _vfs;

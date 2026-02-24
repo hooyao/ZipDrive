@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore ZipDriveV3.slnx
+
+      - name: Build
+        run: dotnet build ZipDriveV3.slnx -c Release --no-restore
+
+      - name: Test
+        run: |
+          $projects = @(
+            "tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj",
+            "tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj",
+            "tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj",
+            "tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj"
+          )
+          $failed = $false
+          foreach ($proj in $projects) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($proj)
+            dotnet test $proj -c Release --no-build --verbosity normal `
+              --logger "trx;LogFileName=$name.trx" `
+              --results-directory ./TestResults `
+              --collect:"XPlat Code Coverage"
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
+        shell: pwsh
+
+      - name: Test report
+        uses: dorny/test-reporter@v2
+        if: always()
+        with:
+          name: Test Results
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
+          use-actions-summary: 'true'
+          only-summary: 'false'
+          list-suites: all
+          list-tests: failed
+
+      - name: Post test and coverage summary
+        if: always()
+        shell: pwsh
+        run: |
+          $nsUri = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+          $totalPassed = 0; $totalFailed = 0; $totalSkipped = 0
+          $lines = @("## Test Results", "", "| Suite | Passed | Failed | Skipped | Total |", "|-------|-------:|-------:|--------:|------:|")
+
+          foreach ($file in Get-ChildItem ./TestResults -Filter *.trx) {
+            $doc = New-Object System.Xml.XmlDocument
+            $doc.Load($file.FullName)
+            $mgr = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+            $mgr.AddNamespace("t", $nsUri)
+            $counters = $doc.SelectSingleNode("//t:Counters", $mgr)
+            $p = [int]$counters.GetAttribute("passed")
+            $f = [int]$counters.GetAttribute("failed")
+            $t = [int]$counters.GetAttribute("total")
+            $s = $t - $p - $f
+            $totalPassed += $p; $totalFailed += $f; $totalSkipped += $s
+            $name = $file.BaseName -replace '\.Tests$','' -replace 'ZipDriveV3\.',''
+            $icon = if ($f -gt 0) { ":x:" } else { ":white_check_mark:" }
+            $lines += "| $icon $name | $p | $f | $s | $t |"
+          }
+
+          $grand = $totalPassed + $totalFailed + $totalSkipped
+          $lines += "| **Total** | **$totalPassed** | **$totalFailed** | **$totalSkipped** | **$grand** |"
+          $lines += ""
+
+          # Coverage
+          dotnet tool install -g dotnet-reportgenerator-globaltool --verbosity quiet 2>$null
+          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub" 2>$null
+          if (Test-Path TestResults/CoverageReport/SummaryGithub.md) {
+            $lines += (Get-Content TestResults/CoverageReport/SummaryGithub.md)
+          }
+
+          # Write to file for reuse, then append to GITHUB_STEP_SUMMARY
+          $lines | Out-File -FilePath TestResults/summary.md -Encoding utf8
+          Get-Content TestResults/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: test-report
+          path: TestResults/summary.md

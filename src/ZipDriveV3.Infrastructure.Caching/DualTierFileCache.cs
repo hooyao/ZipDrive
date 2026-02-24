@@ -151,4 +151,16 @@ public sealed class DualTierFileCache : ICache<Stream>
     {
         return _memoryCache.ProcessPendingCleanup(maxItems) + _diskCache.ProcessPendingCleanup(maxItems);
     }
+
+    /// <summary>
+    /// Clears all entries from both tiers, disposing their storage (including temp files).
+    /// Use for cleanup/shutdown scenarios only.
+    /// </summary>
+    public void Clear()
+    {
+        _logger.LogInformation("Clearing both cache tiers...");
+        _memoryCache.Clear();
+        _diskCache.Clear();
+        _logger.LogInformation("Both cache tiers cleared");
+    }
 }

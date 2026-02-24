@@ -551,7 +551,8 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         }
 
         _logger.LogInformation(
-            "Cache cleared: removed {Count} entries ({SizeMb:F2} MB)",
+            "Cache cleared({CacheName}): removed {Count} entries ({SizeMb:F2} MB)",
+            _name,
             clearedCount,
             clearedBytes / (1024.0 * 1024.0));
     }
@@ -620,7 +621,8 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         }
 
         _logger.LogInformation(
-            "Cache cleared: removed {Count} entries ({SizeMb:F2} MB)",
+            "Cache({CacheName}) cleared: removed {Count} entries ({SizeMb:F2} MB)",
+            _name,
             clearedCount,
             clearedBytes / (1024.0 * 1024.0));
     }

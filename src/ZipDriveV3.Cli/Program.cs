@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -5,7 +6,8 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
-using Serilog.Settings.Configuration;
+using Serilog.Templates;
+using Serilog.Templates.Themes;
 using ZipDriveV3.Application.Services;
 using ZipDriveV3.Domain;
 using ZipDriveV3.Domain.Abstractions;
@@ -13,6 +15,8 @@ using ZipDriveV3.Infrastructure.Archives.Zip;
 using ZipDriveV3.Infrastructure.Caching;
 using ZipDriveV3.Infrastructure.FileSystem;
 using MountOptions = ZipDriveV3.Infrastructure.FileSystem.MountOptions;
+
+[assembly: SupportedOSPlatform("windows")]
 
 // Required for ZIP entry name encoding
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -23,11 +27,29 @@ var builder = Host.CreateDefaultBuilder(args);
 
 builder.UseSerilog((context, config) =>
 {
-    // Explicit assembly list required for single-file publish (assembly discovery is disabled)
-    var readerOptions = new ConfigurationReaderOptions(
-        typeof(Serilog.ConsoleLoggerConfigurationExtensions).Assembly);
+    var logTheme = new TemplateTheme(new Dictionary<TemplateThemeStyle, string>
+    {
+        // Value types from Literate theme (colored arguments in log messages)
+        [TemplateThemeStyle.String] = "\x1b[38;5;0045m",
+        [TemplateThemeStyle.Number] = "\x1b[38;5;0200m",
+        [TemplateThemeStyle.Boolean] = "\x1b[38;5;0027m",
+        [TemplateThemeStyle.Scalar] = "\x1b[38;5;0085m",
+        [TemplateThemeStyle.Null] = "\x1b[38;5;0027m",
+        [TemplateThemeStyle.Name] = "\x1b[38;5;0007m",
+        [TemplateThemeStyle.Invalid] = "\x1b[38;5;0011m",
+        // Custom level colors
+        [TemplateThemeStyle.LevelVerbose] = "\x1b[90m",
+        [TemplateThemeStyle.LevelDebug] = "\x1b[90m",
+        [TemplateThemeStyle.LevelInformation] = "\x1b[32m",
+        [TemplateThemeStyle.LevelWarning] = "\x1b[33m",
+        [TemplateThemeStyle.LevelError] = "\x1b[31m",
+        [TemplateThemeStyle.LevelFatal] = "\x1b[1;31m",
+    });
 
-    config.ReadFrom.Configuration(context.Configuration, readerOptions);
+    config.ReadFrom.Configuration(context.Configuration)
+          .WriteTo.Console(new ExpressionTemplate(
+              "[{@t:HH:mm:ss} {@l:u3}][\x1b[90m{Substring(SourceContext, LastIndexOf(SourceContext, '.') + 1)}\x1b[0m] {@m}\n{#if @x is not null}{@x}\n{#end}",
+              theme: logTheme));
 });
 
 builder.ConfigureServices((context, services) =>
@@ -36,23 +58,30 @@ builder.ConfigureServices((context, services) =>
     services.Configure<MountOptions>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
 
-    // OpenTelemetry
-    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+    // OpenTelemetry (opt-in: only when Endpoint is configured)
+    var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"];
 
-    services.AddOpenTelemetry()
-        .ConfigureResource(r => r.AddService("ZipDriveV3"))
-        .WithMetrics(m => m
-            .AddMeter("ZipDriveV3.Caching")
-            .AddMeter("ZipDriveV3.Zip")
-            .AddMeter("ZipDriveV3.Dokan")
-            .AddRuntimeInstrumentation()
-            .AddProcessInstrumentation()
-            .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
-        .WithTracing(t => t
-            .AddSource("ZipDriveV3.Caching")
-            .AddSource("ZipDriveV3.Zip")
-            .AddSource("ZipDriveV3.Dokan")
-            .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+    if (!string.IsNullOrEmpty(otlpEndpoint))
+    {
+        services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddService("ZipDriveV3"))
+            .WithMetrics(m => m
+                .AddMeter("ZipDriveV3.Caching")
+                .AddMeter("ZipDriveV3.Zip")
+                .AddMeter("ZipDriveV3.Dokan")
+                .AddRuntimeInstrumentation()
+                .AddProcessInstrumentation()
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
+            .WithTracing(t => t
+                .AddSource("ZipDriveV3.Caching")
+                .AddSource("ZipDriveV3.Zip")
+                .AddSource("ZipDriveV3.Dokan")
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+    }
+    else
+    {
+        Log.Information("OpenTelemetry disabled (no OpenTelemetry:Endpoint configured)");
+    }
 
     // Shared infrastructure
     services.AddSingleton(TimeProvider.System);

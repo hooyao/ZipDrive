@@ -53,10 +53,10 @@ The application SHALL handle Ctrl+C gracefully, unmounting the drive and clearin
 
 The CLI application SHALL support configurable OTLP export for sending telemetry to an OpenTelemetry collector or Aspire Dashboard.
 
-#### Scenario: Default OTLP endpoint
+#### Scenario: OpenTelemetry disabled by default
 
-- **WHEN** no custom OpenTelemetry endpoint is configured
-- **THEN** the OTLP exporter SHALL default to `http://localhost:4317` (gRPC protocol)
+- **WHEN** no custom OpenTelemetry endpoint is configured (empty or absent `Endpoint`)
+- **THEN** the OpenTelemetry SDK SHALL NOT be registered (zero overhead, opt-in)
 
 #### Scenario: Custom OTLP endpoint from configuration
 
@@ -103,4 +103,4 @@ The `appsettings.json` SHALL include an `"OpenTelemetry"` configuration section.
 #### Scenario: OpenTelemetry section in appsettings.json
 
 - **WHEN** the default `appsettings.json` is deployed
-- **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `"http://localhost:4317"`
+- **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `""` (disabled; user must set endpoint to enable)

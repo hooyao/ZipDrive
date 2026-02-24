@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="KTrie" Version="3.0.1" />
+    <PackageReference Include="KTrie" />
   </ItemGroup>
 
 </Project>

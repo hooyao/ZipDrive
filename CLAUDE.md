@@ -30,6 +30,7 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 - **Language**: C# 13/14 (implied by .NET 10)
 - **SDK Version**: 10.0.100
 - **Project Structure**: Clean Architecture / Onion Architecture
+- **Package Management**: NuGet Central Package Management (`Directory.Packages.props` at repo root)
 - **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`
 
 ## Prerequisites
@@ -320,7 +321,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 
 **Key Responsibilities**:
 - DI registration for all services (including `DualTierFileCache`)
-- OpenTelemetry SDK configuration (OTLP export to Aspire Dashboard)
+- OpenTelemetry SDK configuration (opt-in; OTLP export to Aspire Dashboard when endpoint configured)
 - Serilog structured logging
 - Configuration binding (`Mount`, `Cache`, `OpenTelemetry` sections)
 
@@ -401,15 +402,19 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 
 ### OpenTelemetry (`appsettings.json` → "OpenTelemetry" section)
 
+OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is registered (zero overhead). Set the endpoint to enable metrics and tracing export.
+
 ```json
 {
   "OpenTelemetry": {
-    "Endpoint": "http://localhost:4317"
+    "Endpoint": "http://localhost:18889"
   }
 }
 ```
 
-**Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
+Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889`
+
+**Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
 
 ## Common Development Tasks
 
@@ -419,6 +424,15 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 2. Implement `SelectVictims()` method with your algorithm (LRU, LFU, Size-First, etc.)
 3. Register in DI container
 4. Add unit tests verifying eviction order
+
+### Adding a New NuGet Package
+
+This solution uses **Central Package Management**. All package versions are defined in `Directory.Packages.props` at the repo root.
+
+1. Add `<PackageVersion Include="PackageName" Version="x.y.z" />` to `Directory.Packages.props`
+2. Add `<PackageReference Include="PackageName" />` (no `Version` attribute) to the consuming `.csproj` file(s)
+
+**Never** add a `Version` attribute to `<PackageReference>` in `.csproj` files — all versions are centrally managed.
 
 ### Adding Support for New Archive Format (e.g., TAR)
 
@@ -430,7 +444,7 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 
 ### Debugging Cache Behavior
 
-1. Start Aspire Dashboard for live metrics/traces: `docker run -p 18888:18888 -p 4317:4317 mcr.microsoft.com/dotnet/aspire-dashboard`
+1. Start Aspire Dashboard for live metrics/traces: `docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`
 2. Check cache hit/miss metrics in dashboard (`cache.hits`, `cache.misses` counters by tier)
 3. Monitor materialization duration histogram (`cache.materialization.duration`) by size bucket
 4. Review eviction events in logs (now at Information level with `{Tier}` and `{Reason}` tags)
