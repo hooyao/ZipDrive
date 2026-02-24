@@ -59,16 +59,38 @@ jobs:
           list-suites: all
           list-tests: failed
 
-      - name: Merge coverage reports
+      - name: Post test and coverage summary
         if: always()
+        shell: bash
         run: |
-          dotnet tool install -g dotnet-reportgenerator-globaltool
-          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub"
-        shell: pwsh
+          # Test summary
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Suite | Passed | Failed | Skipped | Total |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------:|-------:|--------:|------:|" >> $GITHUB_STEP_SUMMARY
 
-      - name: Post coverage summary
-        if: always()
-        run: |
-          $report = Get-Content TestResults/CoverageReport/SummaryGithub.md -Raw
-          echo $report >> $env:GITHUB_STEP_SUMMARY
-        shell: pwsh
+          total_passed=0
+          total_failed=0
+          total_skipped=0
+
+          for trx in TestResults/*.trx; do
+            name=$(basename "$trx" .trx | sed 's/ZipDriveV3\.//' | sed 's/\.Tests$//')
+            passed=$(grep -oP 'passed="\K[0-9]+' "$trx" | tail -1)
+            failed=$(grep -oP 'failed="\K[0-9]+' "$trx" | tail -1)
+            total=$(grep -oP ' total="\K[0-9]+' "$trx" | tail -1)
+            skipped=$((total - passed - failed))
+            total_passed=$((total_passed + passed))
+            total_failed=$((total_failed + failed))
+            total_skipped=$((total_skipped + skipped))
+            if [ "$failed" -gt 0 ]; then icon=":x:"; else icon=":white_check_mark:"; fi
+            echo "| $icon $name | $passed | $failed | $skipped | $total |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          grand_total=$((total_passed + total_failed + total_skipped))
+          echo "| **Total** | **$total_passed** | **$total_failed** | **$total_skipped** | **$grand_total** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Coverage summary
+          dotnet tool install -g dotnet-reportgenerator-globaltool --verbosity quiet
+          reportgenerator "-reports:TestResults/**/coverage.cobertura.xml" "-targetdir:TestResults/CoverageReport" "-reporttypes:MarkdownSummaryGithub"
+          cat TestResults/CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
