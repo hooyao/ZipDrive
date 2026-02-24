@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ZipDriveV3.Application/ZipDriveV3.Application.csproj" />
+    <Project Path="src/ZipDriveV3.Cli/ZipDriveV3.Cli.csproj" />
+    <Project Path="src/ZipDriveV3.Domain/ZipDriveV3.Domain.csproj" />
+    <Project Path="src/ZipDriveV3.Infrastructure.Archives.Zip/ZipDriveV3.Infrastructure.Archives.Zip.csproj" />
+    <Project Path="src/ZipDriveV3.Infrastructure.Caching/ZipDriveV3.Infrastructure.Caching.csproj" />
+    <Project Path="src/ZipDriveV3.Infrastructure.FileSystem/ZipDriveV3.Infrastructure.FileSystem.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ZipDriveV3.Domain.Tests/ZipDriveV3.Domain.Tests.csproj" />
+    <Project Path="tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests/ZipDriveV3.Infrastructure.Archives.Zip.Tests.csproj" />
+    <Project Path="tests/ZipDriveV3.Infrastructure.Caching.Tests/ZipDriveV3.Infrastructure.Caching.Tests.csproj" />
+    <Project Path="tests/ZipDriveV3.TestHelpers/ZipDriveV3.TestHelpers.csproj" />
+    <Project Path="tests/ZipDriveV3.IntegrationTests/ZipDriveV3.IntegrationTests.csproj" />
+    <Project Path="tests/ZipDriveV3.Benchmarks/ZipDriveV3.Benchmarks.csproj" />
+    <Project Path="tests/ZipDriveV3.EnduranceTests/ZipDriveV3.EnduranceTests.csproj" />
+  </Folder>
+</Solution>
