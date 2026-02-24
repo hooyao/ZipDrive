@@ -2,7 +2,7 @@
 
 ## Purpose
 
-**ZipDrive V3** is a Windows virtual file system that mounts ZIP archives (and potentially TAR, 7Z) as accessible Windows drives using DokanNet. Users can browse and read files inside ZIP archives as if they were regular folders in Windows Explorer, without extracting them to disk.
+**ZipDrive** is a Windows virtual file system that mounts ZIP archives (and potentially TAR, 7Z) as accessible Windows drives using DokanNet. Users can browse and read files inside ZIP archives as if they were regular folders in Windows Explorer, without extracting them to disk.
 
 **Problem Solved**: Traditional workflow (Extract → Use → Delete) wastes storage and time. ZipDrive enables Mount → Use directly → Unmount.
 
@@ -48,10 +48,10 @@ Presentation (CLI) → Application → Domain ← Infrastructure
 | Async Cleanup | `DiskStorageStrategy` | Non-blocking eviction |
 
 **Layer Structure**:
-- `ZipDriveV3.Domain` - Core interfaces and models (zero external dependencies)
-- `ZipDriveV3.Application` - Use cases and orchestration
-- `ZipDriveV3.Infrastructure.*` - Implementations (Caching, Archives.Zip, FileSystem)
-- `ZipDriveV3.Cli` - Command-line entry point
+- `ZipDrive.Domain` - Core interfaces and models (zero external dependencies)
+- `ZipDrive.Application` - Use cases and orchestration
+- `ZipDrive.Infrastructure.*` - Implementations (Caching, Archives.Zip, FileSystem)
+- `ZipDrive.Cli` - Command-line entry point
 
 ### Testing Strategy
 

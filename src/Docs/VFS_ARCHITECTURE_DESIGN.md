@@ -1,14 +1,14 @@
-# ZipDrive V3 Architecture Redesign: Abstract Virtual File System
+# ZipDrive Architecture Redesign: Abstract Virtual File System
 
 **Version:** 1.0
 **Created:** 2025-01-25
-**Status:** Proposed
+**Status:** Implemented
 
 ---
 
 ## Executive Summary
 
-This document describes the architectural redesign of ZipDrive V3 to separate DokanNet integration from core file system logic. The key change is introducing a **platform-independent `IVirtualFileSystem` abstraction** that handles all business logic, with DokanNet serving only as a thin adapter layer.
+This document describes the architectural redesign of ZipDrive to separate DokanNet integration from core file system logic. The key change is introducing a **platform-independent `IVirtualFileSystem` abstraction** that handles all business logic, with DokanNet serving only as a thin adapter layer.
 
 **Key Benefits:**
 - Clean separation of concerns (DokanNet adapter ~200 lines, no business logic)
@@ -24,7 +24,7 @@ This document describes the architectural redesign of ZipDrive V3 to separate Do
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                              PRESENTATION LAYER                                  │
 │  ┌─────────────────────────────────────────────────────────────────────────┐    │
-│  │  ZipDriveV3.Cli (Program.cs, FsHostedService)                           │    │
+│  │  ZipDrive.Cli (Program.cs, FsHostedService)                           │    │
 │  └───────────────────────────────────┬─────────────────────────────────────┘    │
 └──────────────────────────────────────┼──────────────────────────────────────────┘
                                        │ mounts via
@@ -32,7 +32,7 @@ This document describes the architectural redesign of ZipDrive V3 to separate Do
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                         PLATFORM ADAPTER LAYER (Windows)                         │
 │  ┌─────────────────────────────────────────────────────────────────────────┐    │
-│  │  ZipDriveV3.Infrastructure.FileSystem.Dokan                             │    │
+│  │  ZipDrive.Infrastructure.FileSystem.Dokan                             │    │
 │  │  ┌───────────────────────────────────────────────────────────────────┐  │    │
 │  │  │  DokanFileSystemAdapter : IDokanOperations2                       │  │    │
 │  │  │  ─────────────────────────────────────────────────────────────────│  │    │
@@ -93,7 +93,7 @@ This document describes the architectural redesign of ZipDrive V3 to separate Do
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                           INFRASTRUCTURE LAYER (Unchanged)                       │
 │  ┌────────────────────────────────┐  ┌──────────────────────────────────────┐   │
-│  │  ZipDriveV3.Infrastructure.    │  │  ZipDriveV3.Infrastructure.         │   │
+│  │  ZipDrive.Infrastructure.    │  │  ZipDrive.Infrastructure.         │   │
 │  │  Caching                       │  │  Archives.Zip                        │   │
 │  │  ────────────────────────────  │  │  ─────────────────────────────────── │   │
 │  │  • GenericCache<T>             │  │  • ZipReader : IZipReader            │   │
@@ -246,7 +246,7 @@ This document describes the architectural redesign of ZipDrive V3 to separate Do
 ### IVirtualFileSystem (Domain Layer)
 
 ```csharp
-namespace ZipDriveV3.Domain.Abstractions;
+namespace ZipDrive.Domain.Abstractions;
 
 /// <summary>
 /// Platform-independent virtual file system abstraction.
@@ -371,7 +371,7 @@ public interface IVirtualFileSystem : IAsyncDisposable
 ### VFS Models (Domain Layer)
 
 ```csharp
-namespace ZipDriveV3.Domain.Models;
+namespace ZipDrive.Domain.Models;
 
 /// <summary>
 /// File or directory information in the virtual file system.
@@ -470,7 +470,7 @@ public class VfsMountStateChangedEventArgs : EventArgs
 ### VFS Exceptions (Domain Layer)
 
 ```csharp
-namespace ZipDriveV3.Domain.Exceptions;
+namespace ZipDrive.Domain.Exceptions;
 
 /// <summary>
 /// Base exception for VFS operations.
@@ -549,7 +549,7 @@ public class VfsAccessDeniedException : VfsException
 ### Files That Remain Unchanged
 
 ```
-src/ZipDriveV3.Infrastructure.Caching/
+src/ZipDrive.Infrastructure.Caching/
 ├── GenericCache.cs              # ✓ Unchanged
 ├── ArchiveStructureCache.cs     # ✓ Unchanged
 ├── MemoryStorageStrategy.cs     # ✓ Unchanged
@@ -558,12 +558,12 @@ src/ZipDriveV3.Infrastructure.Caching/
 ├── LruEvictionPolicy.cs         # ✓ Unchanged
 └── ...                          # ✓ All unchanged
 
-src/ZipDriveV3.Infrastructure.Archives.Zip/
+src/ZipDrive.Infrastructure.Archives.Zip/
 ├── ZipReader.cs                 # ✓ Unchanged
 ├── IZipReader.cs                # ✓ Unchanged
 └── ...                          # ✓ All unchanged
 
-src/ZipDriveV3.Domain/
+src/ZipDrive.Domain/
 ├── Abstractions/
 │   ├── IArchiveStructureCache.cs  # ✓ Unchanged
 │   ├── IPathResolver.cs           # ✓ Unchanged

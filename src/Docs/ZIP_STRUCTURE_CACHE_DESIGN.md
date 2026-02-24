@@ -21,7 +21,7 @@ This document describes the **ZIP Structure Cache** - a memory-efficient caching
 - ✅ `ArchiveStructureCache` implementation complete
 - ✅ Integration with `GenericCache<ArchiveStructure>` via `ObjectStorageStrategy`
 - ✅ Streaming Central Directory parsing via `IZipReader.StreamCentralDirectoryAsync()`
-- ⏳ `IArchivePrefixTree` (pending - for multi-archive support)
+- ✅ `IArchivePrefixTree` implemented as `ArchiveTrie` (multi-archive support)
 
 ---
 

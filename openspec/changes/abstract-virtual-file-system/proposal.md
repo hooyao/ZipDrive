@@ -1,6 +1,6 @@
 ## Why
 
-ZipDrive V3 has the core caching layer and streaming ZIP reader implemented, but no way to actually serve file system operations. The project needs a platform-independent **Abstract Virtual File System** layer that bridges the gap between the existing infrastructure (caching, ZIP parsing) and the platform adapter (DokanNet). This layer must be fully async, cross-platform as a .NET library, and decoupled from any specific file system driver. Without it, none of the existing infrastructure can be used to serve file operations.
+ZipDrive has the core caching layer and streaming ZIP reader implemented, but no way to actually serve file system operations. The project needs a platform-independent **Abstract Virtual File System** layer that bridges the gap between the existing infrastructure (caching, ZIP parsing) and the platform adapter (DokanNet). This layer must be fully async, cross-platform as a .NET library, and decoupled from any specific file system driver. Without it, none of the existing infrastructure can be used to serve file operations.
 
 ## What Changes
 

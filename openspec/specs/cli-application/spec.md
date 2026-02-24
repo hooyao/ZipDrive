@@ -18,8 +18,8 @@ The CLI application SHALL use `Host.CreateDefaultBuilder(args)` for configuratio
 
 - **WHEN** the host builds
 - **THEN** `AddOpenTelemetry()` SHALL be called with metrics and tracing configured
-- **AND** metrics SHALL subscribe to Meters: `"ZipDriveV3.Caching"`, `"ZipDriveV3.Zip"`, `"ZipDriveV3.Dokan"`
-- **AND** tracing SHALL subscribe to ActivitySources: `"ZipDriveV3.Caching"`, `"ZipDriveV3.Zip"`, `"ZipDriveV3.Dokan"`
+- **AND** metrics SHALL subscribe to Meters: `"ZipDrive.Caching"`, `"ZipDrive.Zip"`, `"ZipDrive.Dokan"`
+- **AND** tracing SHALL subscribe to ActivitySources: `"ZipDrive.Caching"`, `"ZipDrive.Zip"`, `"ZipDrive.Dokan"`
 - **AND** runtime instrumentation SHALL be enabled for GC, threadpool, and process metrics
 - **AND** OTLP exporter SHALL be configured
 

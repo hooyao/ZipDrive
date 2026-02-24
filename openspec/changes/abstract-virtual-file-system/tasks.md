@@ -1,8 +1,8 @@
 ## 1. Dependencies and Project Setup
 
-- [x] 1.1 Add KTrie NuGet package (v3.0.1+) to `ZipDriveV3.Domain` project
-- [x] 1.2 Add KTrie NuGet package to `ZipDriveV3.Infrastructure.Caching` project
-- [x] 1.3 Verify solution builds with new dependency (`dotnet build ZipDriveV3.slnx`)
+- [x] 1.1 Add KTrie NuGet package (v3.0.1+) to `ZipDrive.Domain` project
+- [x] 1.2 Add KTrie NuGet package to `ZipDrive.Infrastructure.Caching` project
+- [x] 1.3 Verify solution builds with new dependency (`dotnet build ZipDrive.slnx`)
 
 ## 2. Domain Models
 
@@ -102,7 +102,7 @@
 
 ## 10. Test ZIP File Generator
 
-- [x] 10.1 Create `TestZipGenerator` utility class in a shared test helpers project (e.g., `tests/ZipDriveV3.TestHelpers/`)
+- [x] 10.1 Create `TestZipGenerator` utility class in a shared test helpers project (e.g., `tests/ZipDrive.TestHelpers/`)
 - [x] 10.2 Define `ZipManifest` model: JSON-serializable record containing list of `ManifestEntry { FileName, UncompressedSize, CompressedSize, Crc32, Sha256, IsDirectory, CompressionMethod }`
 - [x] 10.3 Implement `GenerateZipAsync(string outputPath, ZipProfile profile)` that creates a real ZIP file with embedded `__manifest__.json` at the root containing all file metadata
 - [x] 10.4 Define `ZipProfile` presets for test coverage:
@@ -207,7 +207,7 @@
 
 ## 12. Performance Benchmarks (BenchmarkDotNet)
 
-- [x] 12.1 Add `BenchmarkDotNet` NuGet package to a new `tests/ZipDriveV3.Benchmarks/` project
+- [x] 12.1 Add `BenchmarkDotNet` NuGet package to a new `tests/ZipDrive.Benchmarks/` project
 - [x] 12.2 Benchmark: `ArchiveTrie.Resolve` - path resolution latency (target: < 1μs per call)
   - Params: 10, 100, 1000 registered archives
   - Paths: virtual root, virtual folder, archive root, inside archive (4 path depths)
@@ -233,7 +233,7 @@
 
 ## 13. Endurance Test (12-Hour Stress Test)
 
-- [x] 13.1 Create `EnduranceTestRunner` in `tests/ZipDriveV3.EnduranceTests/` project
+- [x] 13.1 Create `EnduranceTestRunner` in `tests/ZipDrive.EnduranceTests/` project
 - [x] 13.2 Setup: generate test fixture (100 ZIPs, multi-folder), mount VFS
 - [x] 13.3 Implement workload profiles for 20 concurrent tasks:
   - **4 tasks: Sequential Video Reader** - pick random large ZIP, read a large file linearly in 64KB chunks from offset 0 to EOF, verify SHA-256 on completion, repeat with next random file
@@ -252,10 +252,10 @@
 
 ## 14. Test Infrastructure
 
-- [x] 14.1 Create `tests/ZipDriveV3.TestHelpers/` shared project for `TestZipGenerator`, `ZipManifest`, `ZipProfile`, verification helpers
-- [x] 14.2 Create `tests/ZipDriveV3.IntegrationTests/` project for correctness integration tests (sections 11.1-11.6)
-- [x] 14.3 Create `tests/ZipDriveV3.Benchmarks/` project with BenchmarkDotNet
-- [x] 14.4 Create `tests/ZipDriveV3.EnduranceTests/` project for 12-hour stress test
+- [x] 14.1 Create `tests/ZipDrive.TestHelpers/` shared project for `TestZipGenerator`, `ZipManifest`, `ZipProfile`, verification helpers
+- [x] 14.2 Create `tests/ZipDrive.IntegrationTests/` project for correctness integration tests (sections 11.1-11.6)
+- [x] 14.3 Create `tests/ZipDrive.Benchmarks/` project with BenchmarkDotNet
+- [x] 14.4 Create `tests/ZipDrive.EnduranceTests/` project for 12-hour stress test
 - [x] 14.5 Add xunit `[Collection]` attributes to integration tests that share the generated test fixture (avoid regenerating 100 ZIPs per test class)
 - [x] 14.6 Implement `IAsyncLifetime` fixture that generates test ZIPs once for the entire test collection and cleans up after
 - [x] 14.7 Verify all existing tests still pass (`dotnet test`)
