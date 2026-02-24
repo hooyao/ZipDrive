@@ -28,15 +28,21 @@ jobs:
         run: dotnet build ZipDriveV3.slnx -c Release --no-restore
 
       - name: Test
+        run: >-
+          dotnet test ZipDriveV3.slnx
+          -c Release
+          --no-build
+          --verbosity normal
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./TestResults
+          --collect:"XPlat Code Coverage"
+          --filter "FullyQualifiedName!~EnduranceTests&FullyQualifiedName!~Benchmarks"
+
+      - name: Test report
         uses: zyborg/dotnet-tests-report@v1
+        if: always()
         with:
-          project_path: ZipDriveV3.slnx
-          no_build: true
-          msbuild_configuration: Release
-          msbuild_verbosity: normal
-          extra_test_parameters: >-
-            --filter "FullyQualifiedName!~EnduranceTests&FullyQualifiedName!~Benchmarks"
-            --collect:"XPlat Code Coverage"
+          test_results_path: TestResults/test-results.trx
           report_name: Test Results
           report_title: ZipDrive V3 Test Results
           github_token: ${{ secrets.GITHUB_TOKEN }}
