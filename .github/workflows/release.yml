@@ -64,6 +64,12 @@ jobs:
           -p:Version=${{ steps.version.outputs.VERSION }}
           -o ./publish
 
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          Compress-Archive -Path publish/ZipDrive.exe, publish/appsettings.json -DestinationPath "ZipDrive-$version.zip"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,8 +81,7 @@ jobs:
             "release", "create", "v$version",
             "--title", "ZipDrive $version",
             "--generate-notes",
-            "publish/ZipDrive.exe",
-            "publish/appsettings.json"
+            "ZipDrive-$version.zip"
           )
           if ($prerelease -eq "true") {
             $args += "--prerelease"
