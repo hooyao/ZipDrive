@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Models;
 
 namespace ZipDrive.Infrastructure.FileSystem;
@@ -17,7 +18,7 @@ public sealed class DokanHostedService : BackgroundService
 {
     private readonly IVirtualFileSystem _vfs;
     private readonly DokanFileSystemAdapter _adapter;
-    private readonly MountOptions _mountOptions;
+    private readonly MountSettings _mountSettings;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<DokanHostedService> _logger;
 
@@ -27,13 +28,13 @@ public sealed class DokanHostedService : BackgroundService
     public DokanHostedService(
         IVirtualFileSystem vfs,
         DokanFileSystemAdapter adapter,
-        IOptions<MountOptions> mountOptions,
+        IOptions<MountSettings> mountSettings,
         IHostApplicationLifetime lifetime,
         ILogger<DokanHostedService> logger)
     {
         _vfs = vfs;
         _adapter = adapter;
-        _mountOptions = mountOptions.Value;
+        _mountSettings = mountSettings.Value;
         _lifetime = lifetime;
         _logger = logger;
     }
@@ -43,10 +44,10 @@ public sealed class DokanHostedService : BackgroundService
         try
         {
             _logger.LogInformation("Starting ZipDrive VFS...");
-            _logger.LogInformation("Archive directory: {Dir}", _mountOptions.ArchiveDirectory);
-            _logger.LogInformation("Mount point: {Mount}", _mountOptions.MountPoint);
+            _logger.LogInformation("Archive directory: {Dir}", _mountSettings.ArchiveDirectory);
+            _logger.LogInformation("Mount point: {Mount}", _mountSettings.MountPoint);
 
-            if (string.IsNullOrWhiteSpace(_mountOptions.ArchiveDirectory))
+            if (string.IsNullOrWhiteSpace(_mountSettings.ArchiveDirectory))
             {
                 _logger.LogError("Mount:ArchiveDirectory is required. Set it in appsettings.json or via command line: Mount:ArchiveDirectory=<path>");
                 _lifetime.StopApplication();
@@ -56,8 +57,8 @@ public sealed class DokanHostedService : BackgroundService
             // Step 1: Mount VFS (discover ZIPs, build archive trie)
             await _vfs.MountAsync(new VfsMountOptions
             {
-                RootPath = _mountOptions.ArchiveDirectory,
-                MaxDiscoveryDepth = _mountOptions.MaxDiscoveryDepth
+                RootPath = _mountSettings.ArchiveDirectory,
+                MaxDiscoveryDepth = _mountSettings.MaxDiscoveryDepth
             }, stoppingToken);
 
             _logger.LogInformation("VFS mounted: archives discovered");
@@ -69,12 +70,12 @@ public sealed class DokanHostedService : BackgroundService
                 .ConfigureOptions(options =>
                 {
                     options.Options = DokanOptions.WriteProtection | DokanOptions.FixedDrive;
-                    options.MountPoint = _mountOptions.MountPoint;
+                    options.MountPoint = _mountSettings.MountPoint;
                 });
 
             _dokanInstance = dokanBuilder.Build(_adapter);
 
-            _logger.LogInformation("Drive mounted at {MountPoint}. Press Ctrl+C to unmount.", _mountOptions.MountPoint);
+            _logger.LogInformation("Drive mounted at {MountPoint}. Press Ctrl+C to unmount.", _mountSettings.MountPoint);
 
             // Step 3: Block until Dokan file system is closed
             await _dokanInstance.WaitForFileSystemClosedAsync(uint.MaxValue);
@@ -103,7 +104,7 @@ public sealed class DokanHostedService : BackgroundService
         {
             if (_dokan != null)
             {
-                _dokan.RemoveMountPoint(_mountOptions.MountPoint);
+                _dokan.RemoveMountPoint(_mountSettings.MountPoint);
             }
         }
         catch (Exception ex)

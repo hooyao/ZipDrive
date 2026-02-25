@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using UtfUnknown;
+using ZipDrive.Domain.Configuration;
 
 namespace ZipDrive.Infrastructure.Archives.Zip;
 
@@ -19,22 +20,22 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
     private readonly ILogger<FilenameEncodingDetector> _logger;
 
     public FilenameEncodingDetector(
-        IOptions<EncodingDetectionOptions> options,
+        IOptions<MountSettings> mountSettings,
         ILogger<FilenameEncodingDetector> logger)
     {
-        var opts = options.Value;
-        _confidenceThreshold = opts.EncodingConfidenceThreshold;
+        var settings = mountSettings.Value;
+        _confidenceThreshold = settings.EncodingConfidenceThreshold;
         _logger = logger;
 
         try
         {
-            _fallbackEncoding = Encoding.GetEncoding(opts.FallbackEncoding);
+            _fallbackEncoding = Encoding.GetEncoding(settings.FallbackEncoding);
         }
         catch (ArgumentException)
         {
             _logger.LogWarning(
                 "Invalid FallbackEncoding '{Encoding}', defaulting to UTF-8",
-                opts.FallbackEncoding);
+                settings.FallbackEncoding);
             _fallbackEncoding = Encoding.UTF8;
         }
 

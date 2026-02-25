@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
@@ -74,7 +75,7 @@ public class EnduranceTest : IAsyncLifetime
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var encodingDetector = new FilenameEncodingDetector(
-            Microsoft.Extensions.Options.Options.Create(new EncodingDetectionOptions()),
+            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<FilenameEncodingDetector>.Instance);
         _structureCache = new ArchiveStructureCache(structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);

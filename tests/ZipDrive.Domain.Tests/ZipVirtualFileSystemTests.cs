@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip;
@@ -59,7 +60,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(
             new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
         var encodingDetector = new FilenameEncodingDetector(
-            Microsoft.Extensions.Options.Options.Create(new EncodingDetectionOptions()),
+            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
             NullLogger<FilenameEncodingDetector>.Instance);
         var structureCache = new ArchiveStructureCache(
             structureStore, readerFactory,
@@ -170,7 +171,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
         var cacheOpts2 = Microsoft.Extensions.Options.Options.Create(
             new CacheOptions { MemoryCacheSizeMb = 64, DiskCacheSizeMb = 64 });
         var detector2 = new FilenameEncodingDetector(
-            Microsoft.Extensions.Options.Options.Create(new EncodingDetectionOptions()),
+            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
             NullLogger<FilenameEncodingDetector>.Instance);
         var structCache = new ArchiveStructureCache(structStore, factory,
             TimeProvider.System, cacheOpts2, NullLogger<ArchiveStructureCache>.Instance, detector2);

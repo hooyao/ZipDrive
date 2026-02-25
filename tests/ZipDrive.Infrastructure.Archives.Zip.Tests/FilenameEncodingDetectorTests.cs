@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 
 namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
@@ -11,7 +12,7 @@ public class FilenameEncodingDetectorTests
 {
     private static FilenameEncodingDetector CreateDetector(float threshold = 0.5f, string fallback = "utf-8")
     {
-        var options = Options.Create(new EncodingDetectionOptions
+        var options = Options.Create(new MountSettings
         {
             EncodingConfidenceThreshold = threshold,
             FallbackEncoding = fallback

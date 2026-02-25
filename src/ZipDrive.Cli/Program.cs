@@ -13,10 +13,10 @@ using Serilog.Templates.Themes;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.Infrastructure.FileSystem;
-using MountOptions = ZipDrive.Infrastructure.FileSystem.MountOptions;
 
 [assembly: SupportedOSPlatform("windows")]
 
@@ -69,7 +69,7 @@ builder.UseSerilog((context, config) =>
 builder.ConfigureServices((context, services) =>
 {
     // Bind configuration sections
-    services.Configure<MountOptions>(context.Configuration.GetSection("Mount"));
+    services.Configure<MountSettings>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
 
     // OpenTelemetry (opt-in: only when Endpoint is configured)
@@ -106,8 +106,7 @@ builder.ConfigureServices((context, services) =>
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
 
-    // Encoding detection (detector self-configures from EncodingDetectionOptions)
-    services.Configure<EncodingDetectionOptions>(context.Configuration.GetSection("Mount"));
+    // Encoding detection (detector self-configures from MountSettings)
     services.AddSingleton<IFilenameEncodingDetector, FilenameEncodingDetector>();
 
     // Application services

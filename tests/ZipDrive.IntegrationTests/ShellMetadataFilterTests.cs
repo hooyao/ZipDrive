@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.FileSystem;
 
 namespace ZipDrive.IntegrationTests;
@@ -61,7 +62,7 @@ public class ShellMetadataFilterTests
     [Fact]
     public void MountOptions_ShortCircuitShellMetadata_DefaultsToTrue()
     {
-        var opts = new MountOptions();
+        var opts = new MountSettings();
         opts.ShortCircuitShellMetadata.Should().BeTrue();
     }
 }

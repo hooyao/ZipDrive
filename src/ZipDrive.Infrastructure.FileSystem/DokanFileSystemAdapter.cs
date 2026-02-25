@@ -6,6 +6,7 @@ using LTRData.Extensions.Native.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
 
@@ -22,11 +23,11 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
     private readonly ILogger<DokanFileSystemAdapter> _logger;
     private readonly bool _shortCircuitShellMetadata;
 
-    public DokanFileSystemAdapter(IVirtualFileSystem vfs, ILogger<DokanFileSystemAdapter> logger, IOptions<MountOptions> mountOptions)
+    public DokanFileSystemAdapter(IVirtualFileSystem vfs, IOptions<MountSettings> mountSettings, ILogger<DokanFileSystemAdapter> logger)
     {
         _vfs = vfs;
         _logger = logger;
-        _shortCircuitShellMetadata = mountOptions.Value.ShortCircuitShellMetadata;
+        _shortCircuitShellMetadata = mountSettings.Value.ShortCircuitShellMetadata;
     }
 
     public int DirectoryListingTimeoutResetIntervalMs => 0;

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 using ZipDrive.Domain.Models;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 
@@ -208,7 +209,7 @@ public class EncodingIntegrationTests : IDisposable
         IFilenameEncodingDetector? detector = null)
     {
         detector ??= new FilenameEncodingDetector(
-            Options.Create(new EncodingDetectionOptions()),
+            Options.Create(new MountSettings()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<FilenameEncodingDetector>.Instance);
 
         var readerFactory = new ZipReaderFactory();
