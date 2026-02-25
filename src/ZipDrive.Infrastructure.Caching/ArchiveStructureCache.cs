@@ -260,7 +260,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
 
         if (archiveResult != null)
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Archive-level encoding detected: {Encoding} (confidence={Confidence:F2})",
                 archiveResult.Encoding.WebName, archiveResult.Confidence);
 

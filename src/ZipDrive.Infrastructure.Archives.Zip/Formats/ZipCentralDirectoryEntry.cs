@@ -190,9 +190,11 @@ public readonly record struct ZipCentralDirectoryEntry
     /// otherwise Code Page 437 (DOS).
     /// </param>
     /// <returns>The decoded filename string.</returns>
+    private static readonly Encoding Cp437 = Encoding.GetEncoding(437);
+
     public string DecodeFileName(Encoding? encoding = null)
     {
-        encoding ??= IsUtf8 ? Encoding.UTF8 : Encoding.GetEncoding(437);
+        encoding ??= IsUtf8 ? Encoding.UTF8 : Cp437;
         return encoding.GetString(FileNameBytes);
     }
 

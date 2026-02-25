@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Caching" />
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Archives.Zip.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ZipDrive.Domain\ZipDrive.Domain.csproj" />
   </ItemGroup>
 

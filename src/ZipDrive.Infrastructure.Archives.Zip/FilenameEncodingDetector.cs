@@ -123,13 +123,21 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
                 return null;
 
             Encoding oemEncoding = Encoding.GetEncoding(oemCodePage);
-            string decoded = oemEncoding.GetString(bytes);
 
-            // Reject if decoding produces replacement characters
-            if (decoded.Contains('\uFFFD'))
+            // Use strict decoder to reject invalid byte sequences
+            Encoding strictOem = Encoding.GetEncoding(
+                oemCodePage,
+                EncoderFallback.ReplacementFallback,
+                DecoderFallback.ExceptionFallback);
+
+            try
+            {
+                strictOem.GetString(bytes); // Throws on invalid sequences
+            }
+            catch (DecoderFallbackException)
             {
                 _logger?.LogDebug(
-                    "System OEM code page {CodePage} produced replacement characters, rejecting",
+                    "System OEM code page {CodePage} produced invalid sequences, rejecting",
                     oemCodePage);
                 return null;
             }
