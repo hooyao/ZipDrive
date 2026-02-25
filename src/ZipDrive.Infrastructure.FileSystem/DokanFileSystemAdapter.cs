@@ -369,28 +369,4 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         Length = entry.SizeBytes
     };
 
-    private NtStatus WrapException(string path, Func<NtStatus> action)
-    {
-        try
-        {
-            return action();
-        }
-        catch (VfsFileNotFoundException)
-        {
-            return DokanResult.FileNotFound;
-        }
-        catch (VfsDirectoryNotFoundException)
-        {
-            return DokanResult.PathNotFound;
-        }
-        catch (VfsAccessDeniedException)
-        {
-            return DokanResult.AccessDenied;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error for path: {Path}", path);
-            return DokanResult.InternalError;
-        }
-    }
 }

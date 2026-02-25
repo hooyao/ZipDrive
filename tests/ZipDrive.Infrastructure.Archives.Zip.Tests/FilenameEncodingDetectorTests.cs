@@ -10,6 +10,11 @@ namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
 
 public class FilenameEncodingDetectorTests
 {
+    static FilenameEncodingDetectorTests()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
     private static FilenameEncodingDetector CreateDetector(float threshold = 0.5f, string fallback = "utf-8")
     {
         var options = Options.Create(new MountSettings
@@ -24,7 +29,6 @@ public class FilenameEncodingDetectorTests
 
     private static byte[] EncodeString(string text, int codePage)
     {
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         return Encoding.GetEncoding(codePage).GetBytes(text);
     }
 
@@ -154,17 +158,20 @@ public class FilenameEncodingDetectorTests
     public void DetectArchiveEncoding_HighThreshold_RejectsLowConfidence()
     {
         // Arrange — detector with very high threshold
+        // Use Cyrillic (CP1251) bytes which are unlikely to match the system OEM code page,
+        // ensuring only the UtfUnknown tier is relevant (and its confidence is below 0.99).
         var strictDetector = CreateDetector(threshold: 0.99f);
         var filenames = new List<byte[]>
         {
-            EncodeString("テスト.txt", 932),
-            EncodeString("データ.doc", 932),
+            EncodeString("тест.txt", 1251),
+            EncodeString("файл.doc", 1251),
         };
 
         // Act
         Encoding? result = strictDetector.DetectArchiveEncoding(filenames);
 
-        // Assert — with 0.99 threshold, most detections will be rejected
+        // Assert — with 0.99 threshold, detection should be rejected
+        result.Should().BeNull("confidence from 2 short Cyrillic filenames should be below 0.99 threshold");
     }
 
     [Fact]

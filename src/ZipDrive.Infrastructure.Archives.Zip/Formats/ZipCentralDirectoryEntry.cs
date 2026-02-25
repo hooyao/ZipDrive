@@ -43,6 +43,8 @@ namespace ZipDrive.Infrastructure.Archives.Zip.Formats;
 /// </remarks>
 public readonly record struct ZipCentralDirectoryEntry
 {
+    private static readonly Encoding Cp437 = Encoding.GetEncoding(437);
+
     #region Core Fields
 
     /// <summary>
@@ -190,8 +192,6 @@ public readonly record struct ZipCentralDirectoryEntry
     /// otherwise Code Page 437 (DOS).
     /// </param>
     /// <returns>The decoded filename string.</returns>
-    private static readonly Encoding Cp437 = Encoding.GetEncoding(437);
-
     public string DecodeFileName(Encoding? encoding = null)
     {
         encoding ??= IsUtf8 ? Encoding.UTF8 : Cp437;

@@ -40,6 +40,9 @@ Log.Information("ZipDrive {Version} starting", version);
 var builder = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((_, config) =>
     {
+        // Note: CreateDefaultBuilder auto-adds appsettings.json (optional: true).
+        // Our JSONC file layers on top and overrides any values from a .json file.
+        // We ship only appsettings.jsonc; no appsettings.json exists in output.
         config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
     });
 

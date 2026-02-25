@@ -16,6 +16,11 @@ namespace ZipDrive.Infrastructure.Archives.Zip;
 /// </summary>
 public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
 {
+    private static readonly KeyValuePair<string, object?> TagResultArchiveDetected = new("result", "archive_detected");
+    private static readonly KeyValuePair<string, object?> TagResultEntryDetected = new("result", "entry_detected");
+    private static readonly KeyValuePair<string, object?> TagResultFallback = new("result", "fallback");
+    private static readonly KeyValuePair<string, object?> TagResultSystemOem = new("result", "system_oem");
+
     private readonly float _confidenceThreshold;
     private readonly Encoding _fallbackEncoding;
     private readonly Encoding? _oemEncoding;
@@ -27,7 +32,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         ILogger<FilenameEncodingDetector> logger)
     {
         var settings = mountSettings.Value;
-        _confidenceThreshold = settings.EncodingConfidenceThreshold;
+        _confidenceThreshold = Math.Clamp(settings.EncodingConfidenceThreshold, 0.0f, 1.0f);
         _logger = logger;
 
         try
@@ -107,7 +112,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
                     detected.WebName);
 
                 ZipTelemetry.EncodingDetections.Add(1,
-                    new KeyValuePair<string, object?>("result", "archive_detected"),
+                    TagResultArchiveDetected,
                     new KeyValuePair<string, object?>("encoding", detected.WebName));
             }
 
@@ -125,7 +130,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         if (filenameBytes.Length == 0)
         {
             ZipTelemetry.EncodingDetections.Add(1,
-                new KeyValuePair<string, object?>("result", "fallback"),
+                TagResultFallback,
                 new KeyValuePair<string, object?>("encoding", _fallbackEncoding.WebName));
             return _fallbackEncoding;
         }
@@ -134,7 +139,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         if (detected != null)
         {
             ZipTelemetry.EncodingDetections.Add(1,
-                new KeyValuePair<string, object?>("result", "entry_detected"),
+                TagResultEntryDetected,
                 new KeyValuePair<string, object?>("encoding", detected.WebName));
             return detected;
         }
@@ -144,7 +149,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             _fallbackEncoding.WebName);
 
         ZipTelemetry.EncodingDetections.Add(1,
-            new KeyValuePair<string, object?>("result", "fallback"),
+            TagResultFallback,
             new KeyValuePair<string, object?>("encoding", _fallbackEncoding.WebName));
         return _fallbackEncoding;
     }
@@ -221,7 +226,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             _oemEncoding.CodePage, _oemEncoding.WebName);
 
         ZipTelemetry.EncodingDetections.Add(1,
-            new KeyValuePair<string, object?>("result", "system_oem"),
+            TagResultSystemOem,
             new KeyValuePair<string, object?>("encoding", _oemEncoding.WebName));
 
         return _oemEncoding;

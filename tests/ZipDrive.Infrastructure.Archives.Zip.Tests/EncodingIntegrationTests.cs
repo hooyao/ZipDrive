@@ -289,11 +289,12 @@ public class EncodingIntegrationTests : IDisposable
         // the filenames were decoded (not garbled CP437).
         structure.EntryCount.Should().BeGreaterThanOrEqualTo(5);
 
-        // At least some entries should contain CJK characters (not mojibake)
+        // At least some entries should contain Japanese and Chinese characters (not mojibake)
         var allKeys = structure.Entries.Keys.ToList();
         bool hasJapanese = allKeys.Any(k => k.Any(c => c >= '\u3040' && c <= '\u9FFF'));
         bool hasChinese = allKeys.Any(k => k.Any(c => c >= '\u4E00' && c <= '\u9FFF'));
-        (hasJapanese || hasChinese).Should().BeTrue("decoded keys should contain CJK characters, not CP437 mojibake");
+        hasJapanese.Should().BeTrue("decoded keys should contain Japanese characters, not CP437 mojibake");
+        hasChinese.Should().BeTrue("decoded keys should contain Chinese characters, not CP437 mojibake");
     }
 
     [Fact]
@@ -312,13 +313,14 @@ public class EncodingIntegrationTests : IDisposable
         // Act
         ArchiveStructure structure = await BuildStructureAsync(zipPath);
 
-        // Assert — verify entries contain Korean hangul or Cyrillic characters
+        // Assert — verify entries contain Korean hangul and Cyrillic characters
         structure.EntryCount.Should().BeGreaterThanOrEqualTo(5);
 
         var allKeys = structure.Entries.Keys.ToList();
         bool hasKorean = allKeys.Any(k => k.Any(c => c >= '\uAC00' && c <= '\uD7AF'));
         bool hasCyrillic = allKeys.Any(k => k.Any(c => c >= '\u0400' && c <= '\u04FF'));
-        (hasKorean || hasCyrillic).Should().BeTrue("decoded keys should contain Korean or Cyrillic characters");
+        hasKorean.Should().BeTrue("decoded keys should contain Korean characters");
+        hasCyrillic.Should().BeTrue("decoded keys should contain Cyrillic characters");
     }
 
     [Fact]

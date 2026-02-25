@@ -38,5 +38,5 @@ public class MountSettings
     /// Minimum confidence threshold (0.0 to 1.0) for automatic charset detection.
     /// Detection results below this threshold are rejected. Default is 0.5.
     /// </summary>
-    public float EncodingConfidenceThreshold { get; set; } = 0.5f;
+    public float EncodingConfidenceThreshold { get; set; } = 0.3f;
 }

@@ -135,7 +135,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
                 {
                     // UTF-8 entries: encoding is known, insert immediately
                     string normalizedPath = NormalizePath(cdEntry.DecodeFileName());
-                    InsertEntry(trie, directoriesSeen, entryInfo, normalizedPath);
+                    InsertEntry(trie, directoriesSeen, entryInfo, normalizedPath, _timeProvider);
                 }
                 else
                 {
@@ -211,7 +211,8 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         TrieDictionary<ZipEntryInfo> trie,
         HashSet<string> directoriesSeen,
         ZipEntryInfo entryInfo,
-        string normalizedPath)
+        string normalizedPath,
+        TimeProvider timeProvider)
     {
         if (entryInfo.IsDirectory)
         {
@@ -223,7 +224,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         {
             string filePath = normalizedPath.TrimEnd('/');
             trie[filePath] = entryInfo;
-            EnsureParentDirectories(trie, filePath, directoriesSeen);
+            EnsureParentDirectories(trie, filePath, directoriesSeen, timeProvider);
         }
     }
 
@@ -247,7 +248,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             foreach ((ZipCentralDirectoryEntry cdEntry, ZipEntryInfo info) in buffer)
             {
                 string path = NormalizePath(cdEntry.DecodeFileName(archiveEncoding));
-                InsertEntry(trie, directoriesSeen, info, path);
+                InsertEntry(trie, directoriesSeen, info, path, _timeProvider);
             }
         }
         else
@@ -261,7 +262,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             {
                 Encoding encoding = _encodingDetector.ResolveEntryEncoding(cdEntry.FileNameBytes);
                 string path = NormalizePath(cdEntry.DecodeFileName(encoding));
-                InsertEntry(trie, directoriesSeen, info, path);
+                InsertEntry(trie, directoriesSeen, info, path, _timeProvider);
             }
         }
     }
@@ -273,7 +274,8 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     private static void EnsureParentDirectories(
         TrieDictionary<ZipEntryInfo> trie,
         string filePath,
-        HashSet<string> seen)
+        HashSet<string> seen,
+        TimeProvider timeProvider)
     {
         int lastSlash = filePath.LastIndexOf('/');
         while (lastSlash > 0)
@@ -292,7 +294,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
                     UncompressedSize = 0,
                     CompressionMethod = 0,
                     IsDirectory = true,
-                    LastModified = DateTime.UtcNow,
+                    LastModified = timeProvider.GetUtcNow().UtcDateTime,
                     Attributes = FileAttributes.Directory,
                     Crc32 = 0
                 };
