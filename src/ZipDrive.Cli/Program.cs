@@ -44,6 +44,7 @@ var builder = Host.CreateDefaultBuilder(args)
         // Our JSONC file layers on top and overrides any values from a .json file.
         // We ship only appsettings.jsonc; no appsettings.json exists in output.
         config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
+        config.AddJsonFile("appsettings.dev.jsonc", optional: true, reloadOnChange: false);
     });
 
 builder.UseSerilog((context, config) =>

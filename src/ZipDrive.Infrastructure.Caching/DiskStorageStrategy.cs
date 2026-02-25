@@ -16,18 +16,23 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiskStorageStrategy"/> class.
+    /// Creates a per-process subdirectory (ZipDrive-{pid}) under the base temp directory,
+    /// ensuring multiple concurrent ZipDrive processes have isolated disk caches.
     /// </summary>
-    /// <param name="tempDirectory">The directory for temporary cache files. If null, uses system temp.</param>
     /// <param name="logger">Logger instance.</param>
+    /// <param name="tempDirectory">The base directory for temporary cache files. If null, uses system temp.</param>
     public DiskStorageStrategy(ILogger<DiskStorageStrategy> logger, string? tempDirectory = null)
     {
-        _tempDirectory = tempDirectory ?? Path.GetTempPath();
         _logger = logger;
 
-        // Ensure temp directory exists
+        string baseDir = tempDirectory ?? Path.GetTempPath();
+        _tempDirectory = Path.Combine(baseDir, $"ZipDrive-{Environment.ProcessId}");
+
+        // Ensure temp directory exists (creates base + subdirectory as needed)
         if (!Directory.Exists(_tempDirectory))
         {
             Directory.CreateDirectory(_tempDirectory);
+            _logger.LogInformation("Created cache directory: {Path}", _tempDirectory);
         }
     }
 
@@ -102,6 +107,26 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to delete temp file: {Path}", entry.TempFilePath);
+        }
+    }
+
+    /// <summary>
+    /// Deletes the entire cache directory (including any remaining files).
+    /// Call after <see cref="GenericCache{T}.Clear"/> on shutdown.
+    /// </summary>
+    public void DeleteCacheDirectory()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDirectory))
+            {
+                Directory.Delete(_tempDirectory, recursive: true);
+                _logger.LogInformation("Deleted cache directory: {Path}", _tempDirectory);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete cache directory: {Path}", _tempDirectory);
         }
     }
 

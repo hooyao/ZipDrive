@@ -36,6 +36,9 @@
     <None Update="appsettings.jsonc">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="appsettings.dev.jsonc" Condition="Exists('appsettings.dev.jsonc')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
