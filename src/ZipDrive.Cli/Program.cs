@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using OpenTelemetry.Metrics;
@@ -12,10 +13,10 @@ using Serilog.Templates.Themes;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.Infrastructure.FileSystem;
-using MountOptions = ZipDrive.Infrastructure.FileSystem.MountOptions;
 
 [assembly: SupportedOSPlatform("windows")]
 
@@ -36,7 +37,14 @@ Log.Logger = new LoggerConfiguration()
 
 Log.Information("ZipDrive {Version} starting", version);
 
-var builder = Host.CreateDefaultBuilder(args);
+var builder = Host.CreateDefaultBuilder(args)
+    .ConfigureAppConfiguration((_, config) =>
+    {
+        // Note: CreateDefaultBuilder auto-adds appsettings.json (optional: true).
+        // Our JSONC file layers on top and overrides any values from a .json file.
+        // We ship only appsettings.jsonc; no appsettings.json exists in output.
+        config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
+    });
 
 builder.UseSerilog((context, config) =>
 {
@@ -68,7 +76,7 @@ builder.UseSerilog((context, config) =>
 builder.ConfigureServices((context, services) =>
 {
     // Bind configuration sections
-    services.Configure<MountOptions>(context.Configuration.GetSection("Mount"));
+    services.Configure<MountSettings>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
 
     // OpenTelemetry (opt-in: only when Endpoint is configured)
@@ -104,6 +112,9 @@ builder.ConfigureServices((context, services) =>
         ? CaseInsensitiveCharComparer.Instance
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
+
+    // Encoding detection (detector self-configures from MountSettings)
+    services.AddSingleton<IFilenameEncodingDetector, FilenameEncodingDetector>();
 
     // Application services
     services.AddSingleton<IPathResolver, PathResolver>();

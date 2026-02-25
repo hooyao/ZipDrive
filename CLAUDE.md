@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, DokanNet adapter, and background cache maintenance implemented. 196 total tests passing. 8-hour soak test validated.
+**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 242 total tests passing. 8-hour soak test validated.
 
 ## Development Workflow Requirements
 
@@ -31,7 +31,7 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 - **SDK Version**: 10.0.100
 - **Project Structure**: Clean Architecture / Onion Architecture
 - **Package Management**: NuGet Central Package Management (`Directory.Packages.props` at repo root)
-- **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`
+- **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`, `UTF.Unknown`
 
 ## Prerequisites
 
@@ -79,7 +79,7 @@ dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
   -o ./publish
 ```
 
-Output: `publish/ZipDrive.exe` (~74MB) + `publish/appsettings.json`.
+Output: `publish/ZipDrive.exe` (~74MB) + `publish/appsettings.jsonc`.
 
 Run with:
 ```bash
@@ -293,6 +293,13 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives using
 - **Compression**: Store (0) and Deflate (8) methods supported
 - **Memory efficient**: ~114 bytes per entry (struct + filename + dictionary overhead)
 - **Single-seek extraction**: Read Local Header + compressed data in one linear read
+- **Automatic charset detection**: `FilenameEncodingDetector` uses UtfUnknown (Mozilla's Universal Charset Detector) with a three-tier chain: statistical detection → system OEM code page → configurable fallback. Supports per-archive detection (fast path) and per-entry detection (fallback for mixed-encoding archives)
+
+**Filename Encoding**:
+- `ZipCentralDirectoryEntry` stores raw `FileNameBytes` (not decoded strings). Filenames are decoded on demand via `DecodeFileName(Encoding?)`.
+- `IFilenameEncodingDetector` interface with `DetectArchiveEncoding()` (per-archive, returns `Encoding?`) and `ResolveEntryEncoding()` (per-entry, always returns non-null `Encoding`).
+- `ArchiveStructureCache.BuildStructureAsync` partitions entries by UTF-8 flag: UTF-8 entries insert immediately, non-UTF8 entries are buffered for batch detection then decoded once.
+- Configuration via `MountSettings.FallbackEncoding` and `MountSettings.EncodingConfidenceThreshold`.
 
 **Extraction Flow**:
 ```
@@ -317,9 +324,9 @@ DokanNet integration for Windows file system mounting.
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
 - `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
-- `MountOptions`: Configuration POCO with `ShortCircuitShellMetadata` toggle (default: `true`)
+- `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, and `EncodingConfidenceThreshold`
 
-**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.json`.
+**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.jsonc`.
 
 **Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
@@ -345,6 +352,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 | **Dual-Tier Routing** | `DualTierFileCache` | Size-based memory/disk routing |
 | **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
+| **Bytes-First Decoding** | `ZipCentralDirectoryEntry.FileNameBytes` | Defer string decode until encoding is known |
 
 ## Critical Concurrency Rules
 
@@ -386,7 +394,24 @@ When working with the caching layer:
 
 ## Configuration Schema
 
-### CacheOptions (`appsettings.json` → "Cache" section)
+### MountSettings (`appsettings.jsonc` → "Mount" section)
+
+```json
+{
+  "Mount": {
+    "MountPoint": "R:\\",
+    "ArchiveDirectory": "",
+    "MaxDiscoveryDepth": 6,
+    "ShortCircuitShellMetadata": true,
+    "FallbackEncoding": "utf-8",
+    "EncodingConfidenceThreshold": 0.5
+  }
+}
+```
+
+`MountSettings` is a pure DTO in `Domain.Configuration` (no framework dependencies). The `FallbackEncoding` accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`, `euc-kr`). The `EncodingConfidenceThreshold` controls how confident the charset detector must be before accepting a result (0.0-1.0).
+
+### CacheOptions (`appsettings.jsonc` → "Cache" section)
 
 ```json
 {
@@ -408,7 +433,7 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 - High memory systems: Increase both memory capacity and cutoff
 - Fast SSD: Aggressive disk caching with larger `DiskCacheSizeMb`
 
-### OpenTelemetry (`appsettings.json` → "OpenTelemetry" section)
+### OpenTelemetry (`appsettings.jsonc` → "OpenTelemetry" section)
 
 OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is registered (zero overhead). Set the endpoint to enable metrics and tracing export.
 
@@ -538,6 +563,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Dual-tier Cache | ✅ Complete | `DualTierFileCache` with size-hint routing |
 | Cache Maintenance | ✅ Complete | `CacheMaintenanceService` background eviction + cleanup |
 | Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 23 concurrent tasks |
+| Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
 
 ## Known Limitations / Future Work
 
@@ -591,8 +617,8 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ## Success Criteria
 
 ZipDrive is considered complete when:
-- [x] Caching layer fully implemented with 80%+ test coverage (66 tests)
-- [x] ZIP reader implemented and tested (15 tests)
+- [x] Caching layer fully implemented with 80%+ test coverage (67 tests)
+- [x] ZIP reader implemented and tested (33 tests, including encoding detection)
 - [x] DokanNet adapter functional (mount/unmount works)
 - [x] CLI accepts arguments and mounts drives
 - [x] Dual-tier cache coordinator implemented and tested (6 tests)

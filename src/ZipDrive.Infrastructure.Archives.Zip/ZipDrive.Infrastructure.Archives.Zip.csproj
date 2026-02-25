@@ -8,6 +8,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="UTF.Unknown" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Caching" />
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.Archives.Zip.Tests" />
   </ItemGroup>
 
   <ItemGroup>

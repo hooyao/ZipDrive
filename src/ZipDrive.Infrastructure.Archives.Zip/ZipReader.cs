@@ -35,7 +35,6 @@ public sealed class ZipReader : IZipReader
     private readonly Stream _stream;
     private readonly bool _leaveOpen;
     private readonly ILogger<ZipReader>? _logger;
-    private readonly Encoding _fallbackEncoding;
 
     private bool _disposed;
 
@@ -45,17 +44,12 @@ public sealed class ZipReader : IZipReader
     /// <param name="stream">Stream to read from (must support seeking and reading).</param>
     /// <param name="leaveOpen">If true, the stream is not disposed when this reader is disposed.</param>
     /// <param name="logger">Optional logger for diagnostics.</param>
-    /// <param name="fallbackEncoding">
-    /// Encoding to use for filenames when UTF-8 flag is not set.
-    /// Defaults to Code Page 437 (DOS).
-    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentException">Stream does not support seeking or reading.</exception>
     public ZipReader(
         Stream stream,
         bool leaveOpen = false,
-        ILogger<ZipReader>? logger = null,
-        Encoding? fallbackEncoding = null)
+        ILogger<ZipReader>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -67,10 +61,6 @@ public sealed class ZipReader : IZipReader
         _stream = stream;
         _leaveOpen = leaveOpen;
         _logger = logger;
-
-        // Default to CP437 (DOS encoding) for non-UTF8 filenames
-        // Use 936 (Simplified Chinese) as a common alternative for Asian archives
-        _fallbackEncoding = fallbackEncoding ?? Encoding.GetEncoding(437);
 
         // Try to get file path from FileStream
         if (stream is FileStream fs)
@@ -364,10 +354,8 @@ public sealed class ZipReader : IZipReader
             byte[] fileNameBytes = new byte[fileNameLength];
             await _stream.ReadExactlyAsync(fileNameBytes, cancellationToken).ConfigureAwait(false);
 
-            // Decode filename
-            Encoding encoding = entry.IsUtf8 ? Encoding.UTF8 : _fallbackEncoding;
-            string fileName = encoding.GetString(fileNameBytes);
-            entry = entry with { FileName = fileName };
+            // Store raw bytes — decoding deferred to consumer (ArchiveStructureCache)
+            entry = entry with { FileNameBytes = fileNameBytes };
 
             // Read extra field (may contain ZIP64 info)
             if (extraFieldLength > 0)
@@ -417,7 +405,7 @@ public sealed class ZipReader : IZipReader
             // internalFileAttributes at 36 - ignored
             ExternalFileAttributes = BinaryPrimitives.ReadUInt32LittleEndian(data[38..]),
             LocalHeaderOffset = BinaryPrimitives.ReadUInt32LittleEndian(data[42..]),
-            FileName = "" // Will be set after reading variable-length fields
+            FileNameBytes = Array.Empty<byte>() // Will be set after reading variable-length fields
         };
     }
 

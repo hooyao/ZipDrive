@@ -68,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
-          Compress-Archive -Path publish/ZipDrive.exe, publish/appsettings.json -DestinationPath "ZipDrive-$version.zip"
+          Compress-Archive -Path publish/ZipDrive.exe, publish/appsettings.jsonc -DestinationPath "ZipDrive-$version.zip"
 
       - name: Create GitHub Release
         env:

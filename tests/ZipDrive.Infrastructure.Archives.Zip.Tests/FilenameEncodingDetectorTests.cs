@@ -1,0 +1,214 @@
+using System.Text;
+using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Xunit;
+using ZipDrive.Domain.Configuration;
+using ZipDrive.Infrastructure.Archives.Zip;
+
+namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
+
+public class FilenameEncodingDetectorTests
+{
+    static FilenameEncodingDetectorTests()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
+    private static FilenameEncodingDetector CreateDetector(float threshold = 0.5f, string fallback = "utf-8")
+    {
+        var options = Options.Create(new MountSettings
+        {
+            EncodingConfidenceThreshold = threshold,
+            FallbackEncoding = fallback
+        });
+        return new FilenameEncodingDetector(options, NullLogger<FilenameEncodingDetector>.Instance);
+    }
+
+    private readonly FilenameEncodingDetector _detector = CreateDetector();
+
+    private static byte[] EncodeString(string text, int codePage)
+    {
+        return Encoding.GetEncoding(codePage).GetBytes(text);
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_ShiftJisBytes_DetectsCP932()
+    {
+        // Arrange — generic Japanese test filenames
+        var filenames = new List<byte[]>
+        {
+            EncodeString("テスト文書/データ.txt", 932),
+            EncodeString("日本語/ファイル名.doc", 932),
+            EncodeString("設定/環境変数.cfg", 932),
+            EncodeString("画像/写真一覧.jpg", 932),
+            EncodeString("報告書/月次レポート.xlsx", 932),
+        };
+
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(filenames);
+
+        // Assert
+        result.Should().NotBeNull();
+        string decoded = result!.GetString(filenames[0]);
+        decoded.Should().Be("テスト文書/データ.txt");
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_GbkBytes_DetectsGbk()
+    {
+        // Arrange — generic Chinese test filenames
+        var filenames = new List<byte[]>
+        {
+            EncodeString("测试文件/报告.txt", 936),
+            EncodeString("文档/技术规范.doc", 936),
+            EncodeString("数据/配置信息.cfg", 936),
+            EncodeString("图片/产品目录.jpg", 936),
+            EncodeString("模板/项目计划书.xlsx", 936),
+        };
+
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(filenames);
+
+        // Assert
+        result.Should().NotBeNull();
+        string decoded = result!.GetString(filenames[0]);
+        decoded.Should().Be("测试文件/报告.txt");
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_EucKrBytes_DetectsEucKr()
+    {
+        // Arrange — generic Korean test filenames
+        var filenames = new List<byte[]>
+        {
+            EncodeString("테스트/보고서.txt", 949),
+            EncodeString("문서/기술사양.doc", 949),
+            EncodeString("데이터/설정파일.cfg", 949),
+            EncodeString("이미지/제품목록.jpg", 949),
+            EncodeString("서식/프로젝트계획.xlsx", 949),
+        };
+
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(filenames);
+
+        // Assert
+        result.Should().NotBeNull();
+        string decoded = result!.GetString(filenames[0]);
+        decoded.Should().Be("테스트/보고서.txt");
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_CyrillicBytes_DetectsWindows1251()
+    {
+        // Arrange — generic Cyrillic test filenames
+        var filenames = new List<byte[]>
+        {
+            EncodeString("Документы/отчёт.txt", 1251),
+            EncodeString("Настройки/конфигурация.cfg", 1251),
+            EncodeString("Шаблоны/техническое задание.doc", 1251),
+            EncodeString("Данные/результаты тестирования.xlsx", 1251),
+            EncodeString("Изображения/фотографии продуктов.jpg", 1251),
+        };
+
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(filenames);
+
+        // Assert
+        result.Should().NotBeNull();
+        string decoded = result!.GetString(filenames[0]);
+        decoded.Should().Be("Документы/отчёт.txt");
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_EmptyList_ReturnsNull()
+    {
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(new List<byte[]>());
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_AsciiOnly_ReturnsCompatibleResult()
+    {
+        // Arrange — pure ASCII filenames
+        var filenames = new List<byte[]>
+        {
+            Encoding.ASCII.GetBytes("docs/readme.txt"),
+            Encoding.ASCII.GetBytes("src/main.cs"),
+            Encoding.ASCII.GetBytes("tests/unit_test.cs"),
+            Encoding.ASCII.GetBytes("config/settings.json"),
+            Encoding.ASCII.GetBytes("build/output.dll"),
+        };
+
+        // Act
+        Encoding? result = _detector.DetectArchiveEncoding(filenames);
+
+        // Assert — any result (including null) is acceptable for ASCII
+        if (result != null)
+        {
+            string decoded = result.GetString(filenames[0]);
+            decoded.Should().Be("docs/readme.txt");
+        }
+    }
+
+    [Fact]
+    public void DetectArchiveEncoding_HighThreshold_RejectsLowConfidence()
+    {
+        // Arrange — detector with very high threshold
+        // Use Cyrillic (CP1251) bytes which are unlikely to match the system OEM code page,
+        // ensuring only the UtfUnknown tier is relevant (and its confidence is below 0.99).
+        var strictDetector = CreateDetector(threshold: 0.99f);
+        var filenames = new List<byte[]>
+        {
+            EncodeString("тест.txt", 1251),
+            EncodeString("файл.doc", 1251),
+        };
+
+        // Act
+        Encoding? result = strictDetector.DetectArchiveEncoding(filenames);
+
+        // Assert — with 0.99 threshold, detection should be rejected
+        result.Should().BeNull("confidence from 2 short Cyrillic filenames should be below 0.99 threshold");
+    }
+
+    [Fact]
+    public void ResolveEntryEncoding_SufficientJapaneseFilename_Detects()
+    {
+        // Arrange — a single filename with enough bytes for detection
+        byte[] filename = EncodeString("テスト文書/データファイル/設定情報.txt", 932);
+
+        // Act
+        Encoding result = _detector.ResolveEntryEncoding(filename);
+
+        // Assert — always returns non-null
+        result.Should().NotBeNull();
+        string decoded = result.GetString(filename);
+        decoded.Should().Be("テスト文書/データファイル/設定情報.txt");
+    }
+
+    [Fact]
+    public void ResolveEntryEncoding_EmptyBytes_ReturnsFallback()
+    {
+        // Act
+        Encoding result = _detector.ResolveEntryEncoding(Array.Empty<byte>());
+
+        // Assert — returns configured fallback (UTF-8)
+        result.Should().Be(Encoding.UTF8);
+    }
+
+    [Fact]
+    public void Constructor_InvalidFallbackEncoding_DefaultsToUtf8()
+    {
+        // Arrange — invalid encoding name
+        var detector = CreateDetector(fallback: "not-a-real-encoding");
+
+        // Act — should not throw, should fall back to UTF-8
+        Encoding result = detector.ResolveEntryEncoding(Array.Empty<byte>());
+
+        // Assert
+        result.Should().Be(Encoding.UTF8);
+    }
+}

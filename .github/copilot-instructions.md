@@ -44,7 +44,7 @@ The caching subsystem (`Infrastructure.Caching`) is the most sensitive component
 
 ### Security
 
-- No secrets or credentials in committed code (`appsettings.json` values should use placeholders or defaults only).
+- No secrets or credentials in committed code (`appsettings.jsonc` values should use placeholders or defaults only).
 - File paths from external input must be validated and normalized to prevent path traversal.
 
 ### Testing

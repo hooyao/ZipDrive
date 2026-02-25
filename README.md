@@ -12,6 +12,7 @@ A high-performance virtual file system that mounts ZIP archives as accessible Wi
 - **Two-Level Caching** — Structure cache (parsed ZIP metadata) + file content cache (decompressed data)
 - **Dual-Tier File Cache** — Small files in memory, large files on disk via memory-mapped files
 - **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support, no full extraction required
+- **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UtfUnknown)
 - **OpenTelemetry Observability** — Metrics, tracing, and structured logging with Aspire Dashboard support
 - **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup
 
@@ -47,17 +48,17 @@ dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- --Mount:ArchiveDire
 dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
 ```
 
-Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
+Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.jsonc`
 
 ## Configuration
 
-All settings are read from `appsettings.json` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
+All settings are read from `appsettings.jsonc` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
 
 ```bash
 ZipDrive.exe
 ```
 
-Command-line arguments **override** `appsettings.json` values using the `--Section:Key=Value` syntax:
+Command-line arguments **override** `appsettings.jsonc` values using the `--Section:Key=Value` syntax:
 
 ```powershell
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Cache:TempDirectory="D:\zipdrive-cache"
@@ -71,6 +72,8 @@ ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Ca
 | `Mount:ArchiveDirectory` | (required) | Root directory containing ZIP archives |
 | `Mount:MaxDiscoveryDepth` | `6` | Maximum directory depth for archive discovery |
 | `Mount:ShortCircuitShellMetadata` | `true` | Skip Windows shell metadata probes (desktop.ini, thumbs.db, etc.) to avoid unnecessary ZIP parsing |
+| `Mount:FallbackEncoding` | `utf-8` | Fallback encoding for non-UTF8 filenames when auto-detection fails. Accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`) |
+| `Mount:EncodingConfidenceThreshold` | `0.5` | Minimum confidence (0.0-1.0) for charset auto-detection. Lower values accept more guesses |
 
 ### Cache Options
 
@@ -176,7 +179,7 @@ dotnet test tests/ZipDrive.EnduranceTests
 ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDrive.EnduranceTests
 ```
 
-**Test coverage**: 196 tests across unit, integration, concurrency, and endurance suites. 8-hour soak test validated with zero errors and zero handle leaks.
+**Test coverage**: 242 tests across unit, integration, concurrency, and endurance suites. 8-hour soak test validated with zero errors and zero handle leaks.
 
 ## Design Documents
 
@@ -194,6 +197,7 @@ Detailed design documents are available in `src/Docs/`:
 - **.NET 10.0** / C# 13
 - **DokanNet** — Windows user-mode file system driver
 - **OpenTelemetry** — Metrics, tracing (OTLP export)
+- **UtfUnknown (UTF.Unknown)** — Statistical charset detection for non-UTF8 ZIP filenames
 - **Serilog** — Structured logging
 - **System.IO.MemoryMappedFiles** — Disk-tier cache storage
 - **XUnit + FluentAssertions** — Testing

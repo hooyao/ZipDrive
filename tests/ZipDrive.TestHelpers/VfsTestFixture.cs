@@ -5,6 +5,7 @@ using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 
@@ -43,8 +44,11 @@ public class VfsTestFixture : IAsyncLifetime
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(
             new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
+        var encodingDetector = new FilenameEncodingDetector(
+            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
+            NullLogger<FilenameEncodingDetector>.Instance);
         var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
-            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 
         var fileCache = new DualTierFileCache(
             cacheOpts,

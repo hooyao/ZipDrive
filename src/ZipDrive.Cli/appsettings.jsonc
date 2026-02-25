@@ -1,0 +1,70 @@
+{
+  // Serilog structured logging configuration.
+  // Override per-namespace log levels under "Override".
+  // Valid levels: Verbose, Debug, Information, Warning, Error, Fatal
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning"
+      }
+    }
+  },
+
+  // Virtual drive mount settings.
+  // All values can be overridden via CLI: --Mount:MountPoint="Z:\"
+  "Mount": {
+    // Windows drive letter where archives are mounted (e.g., "R:\\"). Only drive letters
+    // are supported; arbitrary paths are not.
+    "MountPoint": "R:\\",
+
+    // Root directory containing ZIP archives to mount. Required — the application will
+    // exit with an error if this is empty.
+    "ArchiveDirectory": "",
+
+    // How many subdirectory levels to scan for ZIP files (0 = top-level only).
+    "MaxDiscoveryDepth": 6,
+
+    // Return FileNotFound immediately for Windows shell metadata probes
+    // (desktop.ini, thumbs.db, etc.) to avoid unnecessary ZIP parsing.
+    "ShortCircuitShellMetadata": true,
+
+    // Encoding used when automatic charset detection fails for non-UTF8 ZIP filenames.
+    // Accepts any .NET encoding name: shift_jis, gb2312, euc-kr, windows-1252, etc.
+    // Full list: https://learn.microsoft.com/en-us/dotnet/api/system.text.encodinginfo.name?view=net-10.0#system-text-encodinginfo-name
+    "FallbackEncoding": "utf-8",
+
+    // Minimum confidence (0.0–1.0) the charset detector must reach before accepting
+    // its result. 0.3 is a sweet spot for most archives. If filenames still appear
+    // garbled, try lowering this value to accept less confident guesses.
+    "EncodingConfidenceThreshold": 0.3
+  },
+
+  // Two-tier cache: small files in memory, large files on disk (memory-mapped).
+  "Cache": {
+    // Maximum memory tier capacity in MB. Stores decompressed files smaller than SmallFileCutoffMb.
+    "MemoryCacheSizeMb": 2048,
+
+    // Maximum disk tier capacity in MB. Stores decompressed files >= SmallFileCutoffMb as temp files.
+    "DiskCacheSizeMb": 10240,
+
+    // Size threshold in MB that routes files to memory (< cutoff) or disk (>= cutoff).
+    "SmallFileCutoffMb": 50,
+
+    // Directory for disk-tier temp files. null = system temp directory.
+    "TempDirectory": null,
+
+    // Time-to-live in minutes for cached entries before they become eligible for eviction.
+    "DefaultTtlMinutes": 30,
+
+    // How often (in seconds) the background maintenance service sweeps for
+    // expired entries and processes pending cleanup of evicted disk files.
+    "EvictionCheckIntervalSeconds": 10
+  },
+
+  // OpenTelemetry is opt-in. Leave Endpoint empty to disable (zero overhead).
+  // Example: "http://localhost:18889" for Aspire Dashboard.
+  "OpenTelemetry": {
+    "Endpoint": ""
+  }
+}

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ZipDrive.Infrastructure.Archives.Zip.Formats;
 
 /// <summary>
@@ -41,6 +43,8 @@ namespace ZipDrive.Infrastructure.Archives.Zip.Formats;
 /// </remarks>
 public readonly record struct ZipCentralDirectoryEntry
 {
+    private static readonly Encoding Cp437 = Encoding.GetEncoding(437);
+
     #region Core Fields
 
     /// <summary>
@@ -125,19 +129,20 @@ public readonly record struct ZipCentralDirectoryEntry
     public required long UncompressedSize { get; init; }
 
     /// <summary>
-    /// File name (path within archive).
+    /// Raw filename bytes from the ZIP Central Directory.
+    /// Always populated. Use <see cref="DecodeFileName"/> to get a string.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Uses forward slashes as path separators per ZIP specification.
-    /// Directories end with a trailing slash.
+    /// Uses forward slashes (0x2F) as path separators per ZIP specification.
+    /// Directories end with a trailing slash byte.
     /// </para>
     /// <para>
-    /// Encoding: UTF-8 if bit 11 is set, otherwise Code Page 437 (DOS) or
-    /// system default.
+    /// Encoding depends on bit 11 of <see cref="GeneralPurposeBitFlag"/>:
+    /// UTF-8 if set, otherwise a legacy code page (CP437, Shift-JIS, GBK, etc.).
     /// </para>
     /// </remarks>
-    public required string FileName { get; init; }
+    public required byte[] FileNameBytes { get; init; }
 
     /// <summary>
     /// Byte offset to the Local File Header for this entry.
@@ -172,11 +177,26 @@ public readonly record struct ZipCentralDirectoryEntry
     /// True if this entry represents a directory.
     /// </summary>
     /// <remarks>
-    /// Determined by: filename ends with '/' OR DOS directory attribute is set.
+    /// Determined by: filename bytes end with 0x2F ('/') OR DOS directory attribute is set.
+    /// The '/' byte (0x2F) is encoding-agnostic — identical in CP437, Shift-JIS, GBK, EUC-KR, and UTF-8.
     /// </remarks>
     public bool IsDirectory =>
-        FileName.EndsWith('/') ||
+        (FileNameBytes.Length > 0 && FileNameBytes[^1] == (byte)'/') ||
         ((ExternalFileAttributes & ZipConstants.DosAttributeDirectory) != 0);
+
+    /// <summary>
+    /// Decodes the filename bytes using the specified encoding.
+    /// </summary>
+    /// <param name="encoding">
+    /// Encoding to use. If null, defaults to UTF-8 when the UTF-8 flag (bit 11) is set,
+    /// otherwise Code Page 437 (DOS).
+    /// </param>
+    /// <returns>The decoded filename string.</returns>
+    public string DecodeFileName(Encoding? encoding = null)
+    {
+        encoding ??= IsUtf8 ? Encoding.UTF8 : Cp437;
+        return encoding.GetString(FileNameBytes);
+    }
 
     /// <summary>
     /// Converts DOS date/time to DateTime.

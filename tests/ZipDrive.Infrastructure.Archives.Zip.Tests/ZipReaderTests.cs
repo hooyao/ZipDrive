@@ -150,10 +150,10 @@ public class ZipReaderTests : IDisposable
 
             // Assert
             entries.Should().HaveCount(4);
-            entries.Select(e => e.FileName).Should().Contain("file1.txt");
-            entries.Select(e => e.FileName).Should().Contain("file2.txt");
-            entries.Select(e => e.FileName).Should().Contain("folder/file3.txt");
-            entries.Select(e => e.FileName).Should().Contain("folder/subfolder/file4.txt");
+            entries.Select(e => e.DecodeFileName()).Should().Contain("file1.txt");
+            entries.Select(e => e.DecodeFileName()).Should().Contain("file2.txt");
+            entries.Select(e => e.DecodeFileName()).Should().Contain("folder/file3.txt");
+            entries.Select(e => e.DecodeFileName()).Should().Contain("folder/subfolder/file4.txt");
         }
     }
 
@@ -256,7 +256,7 @@ public class ZipReaderTests : IDisposable
             }
 
             // Assert
-            ZipCentralDirectoryEntry dirEntry = entries.FirstOrDefault(e => e.FileName.EndsWith("/"));
+            ZipCentralDirectoryEntry dirEntry = entries.FirstOrDefault(e => e.DecodeFileName().EndsWith("/"));
             dirEntry.IsDirectory.Should().BeTrue();
         }
     }

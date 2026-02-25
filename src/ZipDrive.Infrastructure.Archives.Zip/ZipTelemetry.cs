@@ -26,4 +26,8 @@ internal static class ZipTelemetry
     internal static readonly Counter<long> BytesExtracted =
         Meter.CreateCounter<long>("zip.bytes_extracted", unit: "By",
             description: "Total bytes extracted from ZIP archives");
+
+    internal static readonly Counter<long> EncodingDetections =
+        Meter.CreateCounter<long>("zip.encoding.detections",
+            description: "Encoding detection outcomes for ZIP filenames");
 }
