@@ -75,6 +75,16 @@ public sealed class CacheMaintenanceService : BackgroundService
             _logger.LogWarning(ex, "Error during final cache cleanup");
         }
 
+        // Delete the per-process disk cache directory
+        try
+        {
+            _fileCache.DeleteCacheDirectory();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error deleting cache directory");
+        }
+
         _logger.LogInformation("CacheMaintenanceService stopped");
     }
 }

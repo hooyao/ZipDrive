@@ -11,6 +11,7 @@ public sealed class DualTierFileCache : ICache<Stream>
 {
     private readonly GenericCache<Stream> _memoryCache;
     private readonly GenericCache<Stream> _diskCache;
+    private readonly DiskStorageStrategy _diskStorageStrategy;
     private readonly long _cutoffBytes;
     private readonly ILogger<DualTierFileCache> _logger;
 
@@ -36,9 +37,12 @@ public sealed class DualTierFileCache : ICache<Stream>
             loggerFactory.CreateLogger<GenericCache<Stream>>(),
             name: "memory");
 
+        _diskStorageStrategy = new DiskStorageStrategy(
+            loggerFactory.CreateLogger<DiskStorageStrategy>(),
+            opts.TempDirectory);
+
         _diskCache = new GenericCache<Stream>(
-            new DiskStorageStrategy(loggerFactory.CreateLogger<DiskStorageStrategy>(),
-                opts.TempDirectory),
+            _diskStorageStrategy,
             evictionPolicy,
             opts.DiskCacheSizeBytes,
             timeProvider,
@@ -162,5 +166,14 @@ public sealed class DualTierFileCache : ICache<Stream>
         _memoryCache.Clear();
         _diskCache.Clear();
         _logger.LogInformation("Both cache tiers cleared");
+    }
+
+    /// <summary>
+    /// Deletes the per-process disk cache directory after all entries have been cleared.
+    /// Call after <see cref="Clear"/> on shutdown.
+    /// </summary>
+    public void DeleteCacheDirectory()
+    {
+        _diskStorageStrategy.DeleteCacheDirectory();
     }
 }

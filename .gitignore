@@ -402,4 +402,5 @@ FodyWeavers.xsd
 # ZipDrive project-specific
 test-archives/
 *.zip2vd.cache
+appsettings.dev.jsonc
 

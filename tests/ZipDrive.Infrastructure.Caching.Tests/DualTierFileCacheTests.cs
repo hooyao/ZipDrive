@@ -163,7 +163,7 @@ public class DualTierFileCacheTests
 
         // Verify temp files exist for disk tier
         var tempFiles = Directory.Exists(options.TempDirectory)
-            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache")
+            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache", SearchOption.AllDirectories)
             : [];
         tempFiles.Should().NotBeEmpty("disk tier should have created temp files");
 
@@ -176,7 +176,7 @@ public class DualTierFileCacheTests
 
         // Temp files should be deleted
         var remainingFiles = Directory.Exists(options.TempDirectory)
-            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache")
+            ? Directory.GetFiles(options.TempDirectory, "*.zip2vd.cache", SearchOption.AllDirectories)
             : [];
         remainingFiles.Should().BeEmpty("Clear() should delete all disk tier temp files");
     }
