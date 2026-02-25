@@ -49,7 +49,7 @@ public sealed class DokanHostedService : BackgroundService
 
             if (string.IsNullOrWhiteSpace(_mountSettings.ArchiveDirectory))
             {
-                _logger.LogError("Mount:ArchiveDirectory is required. Set it in appsettings.json or via command line: Mount:ArchiveDirectory=<path>");
+                _logger.LogError("Mount:ArchiveDirectory is required. Set it in appsettings.jsonc or via command line: Mount:ArchiveDirectory=<path>");
                 _lifetime.StopApplication();
                 return;
             }

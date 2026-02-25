@@ -79,7 +79,7 @@ dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj \
   -o ./publish
 ```
 
-Output: `publish/ZipDrive.exe` (~74MB) + `publish/appsettings.json`.
+Output: `publish/ZipDrive.exe` (~74MB) + `publish/appsettings.jsonc`.
 
 Run with:
 ```bash
@@ -326,7 +326,7 @@ DokanNet integration for Windows file system mounting.
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
 - `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, and `EncodingConfidenceThreshold`
 
-**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.json`.
+**Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.jsonc`.
 
 **Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
@@ -394,7 +394,7 @@ When working with the caching layer:
 
 ## Configuration Schema
 
-### MountSettings (`appsettings.json` → "Mount" section)
+### MountSettings (`appsettings.jsonc` → "Mount" section)
 
 ```json
 {
@@ -411,7 +411,7 @@ When working with the caching layer:
 
 `MountSettings` is a pure DTO in `Domain.Configuration` (no framework dependencies). The `FallbackEncoding` accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`, `euc-kr`). The `EncodingConfidenceThreshold` controls how confident the charset detector must be before accepting a result (0.0-1.0).
 
-### CacheOptions (`appsettings.json` → "Cache" section)
+### CacheOptions (`appsettings.jsonc` → "Cache" section)
 
 ```json
 {
@@ -433,7 +433,7 @@ All six options are wired and active. `CacheOptions` exposes computed properties
 - High memory systems: Increase both memory capacity and cutoff
 - Fast SSD: Aggressive disk caching with larger `DiskCacheSizeMb`
 
-### OpenTelemetry (`appsettings.json` → "OpenTelemetry" section)
+### OpenTelemetry (`appsettings.jsonc` → "OpenTelemetry" section)
 
 OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is registered (zero overhead). Set the endpoint to enable metrics and tracing export.
 

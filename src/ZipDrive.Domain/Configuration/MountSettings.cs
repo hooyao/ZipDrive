@@ -1,7 +1,7 @@
 namespace ZipDrive.Domain.Configuration;
 
 /// <summary>
-/// Configuration settings for the mount system, bound from the "Mount" section of appsettings.json.
+/// Configuration settings for the mount system, bound from the "Mount" section of appsettings.jsonc.
 /// Pure DTO with no framework dependencies — lives in Domain so all layers can reference it.
 /// </summary>
 public class MountSettings

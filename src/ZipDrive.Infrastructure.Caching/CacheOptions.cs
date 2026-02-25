@@ -4,7 +4,7 @@ namespace ZipDrive.Infrastructure.Caching;
 /// Configuration options for the dual-tier file cache.
 /// </summary>
 /// <remarks>
-/// These options are typically bound from appsettings.json under the "Cache" section.
+/// These options are typically bound from appsettings.jsonc under the "Cache" section.
 /// All size values can be tuned based on available system resources.
 /// </remarks>
 public class CacheOptions

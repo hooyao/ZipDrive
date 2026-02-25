@@ -48,17 +48,17 @@ dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj -- --Mount:ArchiveDire
 dotnet publish src/ZipDrive.Cli/ZipDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
 ```
 
-Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.json`
+Output: `publish/ZipDrive.exe` (~74 MB) + `publish/appsettings.jsonc`
 
 ## Configuration
 
-All settings are read from `appsettings.json` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
+All settings are read from `appsettings.jsonc` (shipped alongside the executable). If everything is configured there, the executable can run without any command-line arguments:
 
 ```bash
 ZipDrive.exe
 ```
 
-Command-line arguments **override** `appsettings.json` values using the `--Section:Key=Value` syntax:
+Command-line arguments **override** `appsettings.jsonc` values using the `--Section:Key=Value` syntax:
 
 ```powershell
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Cache:TempDirectory="D:\zipdrive-cache"

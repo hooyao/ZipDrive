@@ -37,7 +37,11 @@ Log.Logger = new LoggerConfiguration()
 
 Log.Information("ZipDrive {Version} starting", version);
 
-var builder = Host.CreateDefaultBuilder(args);
+var builder = Host.CreateDefaultBuilder(args)
+    .ConfigureAppConfiguration((_, config) =>
+    {
+        config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
+    });
 
 builder.UseSerilog((context, config) =>
 {
