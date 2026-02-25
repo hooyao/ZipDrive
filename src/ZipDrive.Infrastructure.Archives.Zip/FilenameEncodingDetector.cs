@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,8 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
 {
     private readonly float _confidenceThreshold;
     private readonly Encoding _fallbackEncoding;
+    private readonly Encoding? _oemEncoding;
+    private readonly Encoding? _strictOemEncoding;
     private readonly ILogger<FilenameEncodingDetector> _logger;
 
     public FilenameEncodingDetector(
@@ -39,9 +42,29 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             _fallbackEncoding = Encoding.UTF8;
         }
 
+        // Pre-resolve OEM encodings once at construction (avoid per-call Encoding.GetEncoding)
+        int oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+        if (oemCodePage != 437)
+        {
+            try
+            {
+                _oemEncoding = Encoding.GetEncoding(oemCodePage);
+                _strictOemEncoding = Encoding.GetEncoding(
+                    oemCodePage,
+                    EncoderFallback.ReplacementFallback,
+                    DecoderFallback.ExceptionFallback);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+            {
+                _logger.LogWarning(ex, "System OEM code page {CodePage} is not supported", oemCodePage);
+                _oemEncoding = null;
+                _strictOemEncoding = null;
+            }
+        }
+
         _logger.LogInformation(
-            "FilenameEncodingDetector initialized: fallback={Fallback}, threshold={Threshold}",
-            _fallbackEncoding.WebName, _confidenceThreshold);
+            "FilenameEncodingDetector initialized: fallback={Fallback}, threshold={Threshold}, oem={Oem}",
+            _fallbackEncoding.WebName, _confidenceThreshold, _oemEncoding?.WebName ?? "none");
     }
 
     /// <inheritdoc />
@@ -50,22 +73,50 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         if (filenameByteArrays.Count == 0)
             return null;
 
-        // Concatenate all filename bytes with NUL separator for statistical accuracy
-        byte[] concatenated = ConcatenateBytes(filenameByteArrays);
-
-        Encoding? detected = TryDetectFromBytes(concatenated);
-        if (detected != null)
+        // Calculate total length for concatenation
+        int totalLength = 0;
+        for (int i = 0; i < filenameByteArrays.Count; i++)
         {
-            _logger?.LogDebug(
-                "Archive-level encoding detected: {Encoding}",
-                detected.WebName);
-
-            ZipTelemetry.EncodingDetections.Add(1,
-                new KeyValuePair<string, object?>("result", "archive_detected"),
-                new KeyValuePair<string, object?>("encoding", detected.WebName));
+            totalLength += filenameByteArrays[i].Length;
+            if (i < filenameByteArrays.Count - 1)
+                totalLength++; // NUL separator
         }
 
-        return detected;
+        // Rent pooled buffer to avoid GC pressure for large archives
+        byte[] rented = ArrayPool<byte>.Shared.Rent(totalLength);
+        try
+        {
+            int offset = 0;
+            for (int i = 0; i < filenameByteArrays.Count; i++)
+            {
+                filenameByteArrays[i].CopyTo(rented, offset);
+                offset += filenameByteArrays[i].Length;
+                if (i < filenameByteArrays.Count - 1)
+                {
+                    rented[offset] = 0; // NUL separator
+                    offset++;
+                }
+            }
+
+            // Use offset/length overload so extra rented bytes are ignored
+            Encoding? detected = TryDetectFromBytes(rented, totalLength);
+            if (detected != null)
+            {
+                _logger.LogDebug(
+                    "Archive-level encoding detected: {Encoding}",
+                    detected.WebName);
+
+                ZipTelemetry.EncodingDetections.Add(1,
+                    new KeyValuePair<string, object?>("result", "archive_detected"),
+                    new KeyValuePair<string, object?>("encoding", detected.WebName));
+            }
+
+            return detected;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <inheritdoc />
@@ -79,7 +130,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             return _fallbackEncoding;
         }
 
-        Encoding? detected = TryDetectFromBytes(filenameBytes);
+        Encoding? detected = TryDetectFromBytes(filenameBytes, filenameBytes.Length);
         if (detected != null)
         {
             ZipTelemetry.EncodingDetections.Add(1,
@@ -88,7 +139,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             return detected;
         }
 
-        _logger?.LogDebug(
+        _logger.LogDebug(
             "Per-entry detection failed, using fallback encoding {Encoding}",
             _fallbackEncoding.WebName);
 
@@ -98,52 +149,27 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         return _fallbackEncoding;
     }
 
-    private static byte[] ConcatenateBytes(IReadOnlyList<byte[]> arrays)
-    {
-        int totalLength = 0;
-        for (int i = 0; i < arrays.Count; i++)
-        {
-            totalLength += arrays[i].Length;
-            if (i < arrays.Count - 1)
-                totalLength++; // NUL separator
-        }
-
-        byte[] concatenated = new byte[totalLength];
-        int offset = 0;
-        for (int i = 0; i < arrays.Count; i++)
-        {
-            arrays[i].CopyTo(concatenated, offset);
-            offset += arrays[i].Length;
-            if (i < arrays.Count - 1)
-            {
-                concatenated[offset] = 0;
-                offset++;
-            }
-        }
-
-        return concatenated;
-    }
-
-    private Encoding? TryDetectFromBytes(byte[] bytes)
+    private Encoding? TryDetectFromBytes(byte[] bytes, int length)
     {
         // Tier 1: UtfUnknown statistical detection
-        Encoding? utfResult = TryUtfUnknown(bytes);
+        Encoding? utfResult = TryUtfUnknown(bytes, length);
         if (utfResult != null)
             return utfResult;
 
-        // Tier 2: System OEM code page
-        Encoding? oemResult = TrySystemOem(bytes);
+        // Tier 2: System OEM code page (pre-resolved at construction)
+        Encoding? oemResult = TrySystemOem(bytes.AsSpan(0, length));
         if (oemResult != null)
             return oemResult;
 
         return null;
     }
 
-    private Encoding? TryUtfUnknown(byte[] bytes)
+    private Encoding? TryUtfUnknown(byte[] bytes, int length)
     {
         try
         {
-            DetectionDetail? best = CharsetDetector.DetectFromBytes(bytes).Detected;
+            // Use offset/length overload — works with pooled arrays that may be oversized
+            DetectionDetail? best = CharsetDetector.DetectFromBytes(bytes, 0, length).Detected;
 
             if (best?.EncodingName == null)
                 return null;
@@ -151,7 +177,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
             float confidence = best.Confidence;
             if (confidence < _confidenceThreshold)
             {
-                _logger?.LogDebug(
+                _logger.LogDebug(
                     "UtfUnknown detected {Encoding} with confidence {Confidence} (below threshold {Threshold})",
                     best.EncodingName, confidence, _confidenceThreshold);
                 return null;
@@ -159,7 +185,7 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
 
             Encoding encoding = Encoding.GetEncoding(best.EncodingName);
 
-            _logger?.LogDebug(
+            _logger.LogDebug(
                 "UtfUnknown detected {Encoding} with confidence {Confidence}",
                 encoding.WebName, confidence);
 
@@ -167,53 +193,37 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {
-            _logger?.LogWarning(ex, "UtfUnknown returned unsupported encoding");
+            _logger.LogWarning(ex, "UtfUnknown returned unsupported encoding");
             return null;
         }
     }
 
-    private Encoding? TrySystemOem(byte[] bytes)
+    private Encoding? TrySystemOem(ReadOnlySpan<byte> bytes)
     {
+        if (_strictOemEncoding == null || _oemEncoding == null)
+            return null;
+
         try
         {
-            int oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
-
-            // Skip if OEM is CP437 (that's the existing default, no improvement)
-            if (oemCodePage == 437)
-                return null;
-
-            Encoding oemEncoding = Encoding.GetEncoding(oemCodePage);
-
-            // Use strict decoder to reject invalid byte sequences
-            Encoding strictOem = Encoding.GetEncoding(
-                oemCodePage,
-                EncoderFallback.ReplacementFallback,
-                DecoderFallback.ExceptionFallback);
-
-            try
-            {
-                strictOem.GetString(bytes); // Throws on invalid sequences
-            }
-            catch (DecoderFallbackException)
-            {
-                _logger?.LogDebug(
-                    "System OEM code page {CodePage} produced invalid sequences, rejecting",
-                    oemCodePage);
-                return null;
-            }
-
-            _logger?.LogDebug("System OEM code page {CodePage} ({Name}) accepted", oemCodePage, oemEncoding.WebName);
-
-            ZipTelemetry.EncodingDetections.Add(1,
-                new KeyValuePair<string, object?>("result", "system_oem"),
-                new KeyValuePair<string, object?>("encoding", oemEncoding.WebName));
-
-            return oemEncoding;
+            // GetCharCount validates byte sequences without allocating a string.
+            // With ExceptionFallback, it throws DecoderFallbackException on invalid sequences.
+            _strictOemEncoding.GetCharCount(bytes);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        catch (DecoderFallbackException)
         {
-            _logger?.LogWarning(ex, "Failed to use system OEM code page");
+            _logger.LogDebug(
+                "System OEM code page {CodePage} produced invalid sequences, rejecting",
+                _oemEncoding.CodePage);
             return null;
         }
+
+        _logger.LogDebug("System OEM code page {CodePage} ({Name}) accepted",
+            _oemEncoding.CodePage, _oemEncoding.WebName);
+
+        ZipTelemetry.EncodingDetections.Add(1,
+            new KeyValuePair<string, object?>("result", "system_oem"),
+            new KeyValuePair<string, object?>("encoding", _oemEncoding.WebName));
+
+        return _oemEncoding;
     }
 }
