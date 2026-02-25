@@ -7,9 +7,8 @@ When multiple ZipDrive processes mount different drive letters concurrently (e.g
 
 ## What Changes
 
-- **Per-process subdirectory**: `DiskStorageStrategy` creates a subdirectory `ZipDrive-{pid}-{mountLetter}` under the configured `TempDirectory` (or system temp). All disk cache files for that process are stored inside this subdirectory.
-- **Directory cleanup on shutdown**: When the process exits cleanly, the entire `ZipDrive-{pid}-{mountLetter}` directory is deleted recursively (after the existing `Clear()` deletes individual cache files).
-- **MountSettings dependency**: `DiskStorageStrategy` (or its caller) needs the mount point letter to construct the directory name.
+- **Per-process subdirectory**: `DiskStorageStrategy` always creates a subdirectory `ZipDrive-{pid}` under the configured `TempDirectory` (or system temp). All disk cache files for that process are stored inside this subdirectory.
+- **Directory cleanup on shutdown**: When the process exits cleanly, the entire `ZipDrive-{pid}` directory is deleted recursively (after the existing `Clear()` deletes individual cache files).
 
 ## Capabilities
 
@@ -19,7 +18,7 @@ When multiple ZipDrive processes mount different drive letters concurrently (e.g
 
 ## Impact
 
-- **Modified files**: `DiskStorageStrategy.cs`, `DualTierFileCache.cs`, `CacheMaintenanceService.cs`, `appsettings.jsonc` (documentation comment only)
+- **Modified files**: `DiskStorageStrategy.cs`, `DualTierFileCache.cs`, `CacheMaintenanceService.cs`
 - **No new NuGet dependencies**
-- **No breaking API changes** — `DiskStorageStrategy` constructor gains a `mountLetter` parameter, but this is internal infrastructure
-- **Test updates**: Existing `DiskStorageStrategy` tests in `GenericCacheIntegrationTests.cs` may need minor updates for the new subdirectory structure. New tests verify directory creation, cleanup on shutdown, and multi-instance isolation.
+- **No breaking API changes** — `DiskStorageStrategy` always creates the per-process subdirectory internally
+- **Test updates**: Existing `DiskStorageStrategy` tests in `GenericCacheIntegrationTests.cs` updated with `SearchOption.AllDirectories` for the new subdirectory structure. New tests verify directory creation, cleanup on shutdown, and null-tempDirectory fallback.
