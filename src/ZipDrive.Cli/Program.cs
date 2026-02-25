@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using OpenTelemetry.Metrics;
@@ -105,6 +106,23 @@ builder.ConfigureServices((context, services) =>
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
 
+    // Encoding detection
+    var mountOptions = context.Configuration.GetSection("Mount").Get<MountOptions>() ?? new MountOptions();
+    Encoding fallbackEncoding;
+    try
+    {
+        fallbackEncoding = Encoding.GetEncoding(mountOptions.FallbackEncoding);
+    }
+    catch (ArgumentException)
+    {
+        Log.Warning("Invalid FallbackEncoding '{Encoding}', defaulting to UTF-8", mountOptions.FallbackEncoding);
+        fallbackEncoding = Encoding.UTF8;
+    }
+    services.AddSingleton<IFilenameEncodingDetector>(
+        sp => new FilenameEncodingDetector(
+            mountOptions.EncodingConfidenceThreshold,
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<FilenameEncodingDetector>>()));
+
     // Application services
     services.AddSingleton<IPathResolver, PathResolver>();
     services.AddSingleton<IArchiveDiscovery, ArchiveDiscovery>();
@@ -113,7 +131,15 @@ builder.ConfigureServices((context, services) =>
     // Cache infrastructure
     services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
     services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
-    services.AddSingleton<IArchiveStructureCache, ArchiveStructureCache>();
+    services.AddSingleton<IArchiveStructureCache>(sp =>
+        new ArchiveStructureCache(
+            sp.GetRequiredService<IArchiveStructureStore>(),
+            sp.GetRequiredService<IZipReaderFactory>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CacheOptions>>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ArchiveStructureCache>>(),
+            sp.GetRequiredService<IFilenameEncodingDetector>(),
+            fallbackEncoding));
     services.AddSingleton<DualTierFileCache>();
 
     // Cache maintenance (periodic eviction + cleanup)

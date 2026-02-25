@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using KTrie;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31,6 +32,8 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     private readonly IZipReaderFactory _zipReaderFactory;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _defaultTtl;
+    private readonly IFilenameEncodingDetector? _encodingDetector;
+    private readonly Encoding _fallbackEncoding;
     private readonly ILogger<ArchiveStructureCache> _logger;
 
     private long _missCount;
@@ -40,17 +43,21 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
         IZipReaderFactory zipReaderFactory,
         TimeProvider timeProvider,
         IOptions<CacheOptions> cacheOptions,
-        ILogger<ArchiveStructureCache> logger)
+        ILogger<ArchiveStructureCache> logger,
+        IFilenameEncodingDetector? encodingDetector = null,
+        Encoding? fallbackEncoding = null)
     {
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _zipReaderFactory = zipReaderFactory ?? throw new ArgumentNullException(nameof(zipReaderFactory));
         _timeProvider = timeProvider;
         _defaultTtl = cacheOptions.Value.DefaultTtl;
+        _encodingDetector = encodingDetector;
+        _fallbackEncoding = fallbackEncoding ?? Encoding.UTF8;
         _logger = logger;
 
         _logger.LogInformation(
-            "ArchiveStructureCache initialized with TTL={TtlMinutes} minutes",
-            _defaultTtl.TotalMinutes);
+            "ArchiveStructureCache initialized with TTL={TtlMinutes} minutes, fallbackEncoding={Encoding}",
+            _defaultTtl.TotalMinutes, _fallbackEncoding.WebName);
     }
 
     /// <inheritdoc />
@@ -110,7 +117,7 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
                 "EOCD: {EntryCount} entries, CD at {Offset}, size {Size}, ZIP64={IsZip64}",
                 eocd.EntryCount, eocd.CentralDirectoryOffset, eocd.CentralDirectorySize, eocd.IsZip64);
 
-            // Phase 2: Build trie from Central Directory entries
+            // Phase 1: Stream Central Directory, partition by UTF-8 flag
             TrieDictionary<ZipEntryInfo> trie = new();
             HashSet<string> directoriesSeen = new(StringComparer.Ordinal);
 
@@ -118,27 +125,32 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
             long totalCompressedSize = 0;
             int entryCount = 0;
 
+            // Buffer for non-UTF8 entries (deferred until encoding detection)
+            List<(ZipCentralDirectoryEntry CdEntry, ZipEntryInfo Info)>? nonUtf8Buffer = null;
+
             await foreach (ZipCentralDirectoryEntry cdEntry in reader
                                .StreamCentralDirectoryAsync(eocd, cancellationToken)
                                .ConfigureAwait(false))
             {
                 ZipEntryInfo entryInfo = ConvertToZipEntryInfo(cdEntry);
-                string normalizedPath = NormalizePath(cdEntry.FileName);
 
-                if (entryInfo.IsDirectory)
+                if (cdEntry.IsUtf8)
                 {
-                    string dirPath = normalizedPath.EndsWith('/') ? normalizedPath : normalizedPath + "/";
-                    trie[dirPath] = entryInfo;
-                    directoriesSeen.Add(dirPath);
+                    // UTF-8 entries: encoding is known, insert immediately
+                    string normalizedPath = NormalizePath(cdEntry.DecodeFileName());
+                    InsertEntry(trie, directoriesSeen, entryInfo, normalizedPath);
                 }
                 else
                 {
-                    string filePath = normalizedPath.TrimEnd('/');
-                    trie[filePath] = entryInfo;
+                    // Non-UTF8 entries: buffer for batch detection
+                    nonUtf8Buffer ??= new();
+                    nonUtf8Buffer.Add((cdEntry, entryInfo));
+                }
+
+                if (!entryInfo.IsDirectory)
+                {
                     totalUncompressedSize += cdEntry.UncompressedSize;
                     totalCompressedSize += cdEntry.CompressedSize;
-
-                    EnsureParentDirectories(trie, filePath, directoriesSeen);
                 }
 
                 entryCount++;
@@ -147,6 +159,12 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
                 {
                     _logger.LogDebug("Parsed {Count} entries...", entryCount);
                 }
+            }
+
+            // Phase 2 & 3: Detect encoding and insert buffered non-UTF8 entries
+            if (nonUtf8Buffer is { Count: > 0 })
+            {
+                DecodeAndInsertNonUtf8Entries(trie, directoriesSeen, nonUtf8Buffer);
             }
 
             stopwatch.Stop();
@@ -186,6 +204,109 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
                     ["BuildTimeMs"] = stopwatch.ElapsedMilliseconds
                 }
             };
+        }
+    }
+
+    /// <summary>
+    /// Inserts an entry into the trie with appropriate key formatting.
+    /// </summary>
+    private static void InsertEntry(
+        TrieDictionary<ZipEntryInfo> trie,
+        HashSet<string> directoriesSeen,
+        ZipEntryInfo entryInfo,
+        string normalizedPath)
+    {
+        if (entryInfo.IsDirectory)
+        {
+            string dirPath = normalizedPath.EndsWith('/') ? normalizedPath : normalizedPath + "/";
+            trie[dirPath] = entryInfo;
+            directoriesSeen.Add(dirPath);
+        }
+        else
+        {
+            string filePath = normalizedPath.TrimEnd('/');
+            trie[filePath] = entryInfo;
+            EnsureParentDirectories(trie, filePath, directoriesSeen);
+        }
+    }
+
+    /// <summary>
+    /// Detects encoding for buffered non-UTF8 entries, decodes filenames, and inserts into trie.
+    /// Uses two-level detection: per-archive fast path, per-entry fallback for mixed-encoding archives.
+    /// </summary>
+    private void DecodeAndInsertNonUtf8Entries(
+        TrieDictionary<ZipEntryInfo> trie,
+        HashSet<string> directoriesSeen,
+        List<(ZipCentralDirectoryEntry CdEntry, ZipEntryInfo Info)> buffer)
+    {
+        if (_encodingDetector == null)
+        {
+            // No detector configured — use fallback encoding for all entries
+            foreach ((ZipCentralDirectoryEntry cdEntry, ZipEntryInfo info) in buffer)
+            {
+                string path = NormalizePath(cdEntry.DecodeFileName(_fallbackEncoding));
+                InsertEntry(trie, directoriesSeen, info, path);
+
+                ZipTelemetry.EncodingDetections.Add(1,
+                    new KeyValuePair<string, object?>("result", "fallback"),
+                    new KeyValuePair<string, object?>("encoding", _fallbackEncoding.WebName));
+            }
+            return;
+        }
+
+        // Phase 2: Per-archive detection
+        List<byte[]> allBytes = buffer.Select(e => e.CdEntry.FileNameBytes).ToList();
+        DetectionResult? archiveResult = _encodingDetector.DetectEncoding(allBytes);
+
+        if (archiveResult != null)
+        {
+            _logger.LogInformation(
+                "Archive-level encoding detected: {Encoding} (confidence={Confidence:F2})",
+                archiveResult.Encoding.WebName, archiveResult.Confidence);
+
+            // Fast path: apply archive encoding to all entries
+            foreach ((ZipCentralDirectoryEntry cdEntry, ZipEntryInfo info) in buffer)
+            {
+                string path = NormalizePath(cdEntry.DecodeFileName(archiveResult.Encoding));
+                InsertEntry(trie, directoriesSeen, info, path);
+
+                ZipTelemetry.EncodingDetections.Add(1,
+                    new KeyValuePair<string, object?>("result", "archive_detected"),
+                    new KeyValuePair<string, object?>("encoding", archiveResult.Encoding.WebName));
+            }
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Archive-level encoding detection inconclusive, using per-entry detection for {Count} entries",
+                buffer.Count);
+
+            // Slow path: per-entry detection with fallback chain
+            foreach ((ZipCentralDirectoryEntry cdEntry, ZipEntryInfo info) in buffer)
+            {
+                DetectionResult? entryResult = _encodingDetector.DetectSingleEntry(cdEntry.FileNameBytes);
+
+                Encoding effectiveEncoding;
+                string resultTag;
+
+                if (entryResult != null)
+                {
+                    effectiveEncoding = entryResult.Encoding;
+                    resultTag = "entry_detected";
+                }
+                else
+                {
+                    effectiveEncoding = _fallbackEncoding;
+                    resultTag = "fallback";
+                }
+
+                string path = NormalizePath(cdEntry.DecodeFileName(effectiveEncoding));
+                InsertEntry(trie, directoriesSeen, info, path);
+
+                ZipTelemetry.EncodingDetections.Add(1,
+                    new KeyValuePair<string, object?>("result", resultTag),
+                    new KeyValuePair<string, object?>("encoding", effectiveEncoding.WebName));
+            }
         }
     }
 

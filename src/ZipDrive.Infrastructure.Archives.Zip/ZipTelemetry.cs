@@ -7,7 +7,7 @@ namespace ZipDrive.Infrastructure.Archives.Zip;
 /// Static telemetry definitions for the ZIP reader subsystem.
 /// Uses System.Diagnostics.Metrics and System.Diagnostics.ActivitySource (no OTel dependency).
 /// </summary>
-internal static class ZipTelemetry
+public static class ZipTelemetry
 {
     internal const string MeterName = "ZipDrive.Zip";
     internal const string ActivitySourceName = "ZipDrive.Zip";
@@ -26,4 +26,8 @@ internal static class ZipTelemetry
     internal static readonly Counter<long> BytesExtracted =
         Meter.CreateCounter<long>("zip.bytes_extracted", unit: "By",
             description: "Total bytes extracted from ZIP archives");
+
+    public static readonly Counter<long> EncodingDetections =
+        Meter.CreateCounter<long>("zip.encoding.detections",
+            description: "Encoding detection outcomes for ZIP filenames");
 }
