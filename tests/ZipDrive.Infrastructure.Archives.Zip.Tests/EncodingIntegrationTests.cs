@@ -205,11 +205,9 @@ public class EncodingIntegrationTests : IDisposable
 
     private async Task<ArchiveStructure> BuildStructureAsync(
         string zipPath,
-        IFilenameEncodingDetector? detector = null,
-        Encoding? fallback = null)
+        IFilenameEncodingDetector? detector = null)
     {
-        detector ??= new FilenameEncodingDetector(confidenceThreshold: 0.5f);
-        fallback ??= Encoding.UTF8;
+        detector ??= new FilenameEncodingDetector(0.5f, Encoding.UTF8);
 
         var readerFactory = new ZipReaderFactory();
         var evictionPolicy = new LruEvictionPolicy();
@@ -219,7 +217,7 @@ public class EncodingIntegrationTests : IDisposable
 
         var cache = new ArchiveStructureCache(
             structureStore, readerFactory, TimeProvider.System, cacheOpts,
-            NullLogger<ArchiveStructureCache>.Instance, detector, fallback);
+            NullLogger<ArchiveStructureCache>.Instance, detector);
 
         return await cache.GetOrBuildAsync("test", zipPath);
     }

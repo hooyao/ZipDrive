@@ -106,7 +106,7 @@ builder.ConfigureServices((context, services) =>
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
 
-    // Encoding detection
+    // Encoding detection (detector owns fallback + threshold)
     var mountOptions = context.Configuration.GetSection("Mount").Get<MountOptions>() ?? new MountOptions();
     Encoding fallbackEncoding;
     try
@@ -121,6 +121,7 @@ builder.ConfigureServices((context, services) =>
     services.AddSingleton<IFilenameEncodingDetector>(
         sp => new FilenameEncodingDetector(
             mountOptions.EncodingConfidenceThreshold,
+            fallbackEncoding,
             sp.GetService<Microsoft.Extensions.Logging.ILogger<FilenameEncodingDetector>>()));
 
     // Application services
@@ -131,15 +132,7 @@ builder.ConfigureServices((context, services) =>
     // Cache infrastructure
     services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
     services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
-    services.AddSingleton<IArchiveStructureCache>(sp =>
-        new ArchiveStructureCache(
-            sp.GetRequiredService<IArchiveStructureStore>(),
-            sp.GetRequiredService<IZipReaderFactory>(),
-            sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CacheOptions>>(),
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ArchiveStructureCache>>(),
-            sp.GetRequiredService<IFilenameEncodingDetector>(),
-            fallbackEncoding));
+    services.AddSingleton<IArchiveStructureCache, ArchiveStructureCache>();
     services.AddSingleton<DualTierFileCache>();
 
     // Cache maintenance (periodic eviction + cleanup)
