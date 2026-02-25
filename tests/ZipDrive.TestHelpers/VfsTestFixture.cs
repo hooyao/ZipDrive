@@ -43,7 +43,9 @@ public class VfsTestFixture : IAsyncLifetime
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(
             new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
-        var encodingDetector = new FilenameEncodingDetector(0.5f, System.Text.Encoding.UTF8);
+        var encodingDetector = new FilenameEncodingDetector(
+            Microsoft.Extensions.Options.Options.Create(new EncodingDetectionOptions()),
+            NullLogger<FilenameEncodingDetector>.Instance);
         var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 

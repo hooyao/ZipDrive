@@ -207,7 +207,9 @@ public class EncodingIntegrationTests : IDisposable
         string zipPath,
         IFilenameEncodingDetector? detector = null)
     {
-        detector ??= new FilenameEncodingDetector(0.5f, Encoding.UTF8);
+        detector ??= new FilenameEncodingDetector(
+            Options.Create(new EncodingDetectionOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<FilenameEncodingDetector>.Instance);
 
         var readerFactory = new ZipReaderFactory();
         var evictionPolicy = new LruEvictionPolicy();

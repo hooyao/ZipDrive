@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using UtfUnknown;
 
 namespace ZipDrive.Infrastructure.Archives.Zip;
@@ -15,16 +16,31 @@ public sealed class FilenameEncodingDetector : IFilenameEncodingDetector
 {
     private readonly float _confidenceThreshold;
     private readonly Encoding _fallbackEncoding;
-    private readonly ILogger<FilenameEncodingDetector>? _logger;
+    private readonly ILogger<FilenameEncodingDetector> _logger;
 
     public FilenameEncodingDetector(
-        float confidenceThreshold,
-        Encoding fallbackEncoding,
-        ILogger<FilenameEncodingDetector>? logger = null)
+        IOptions<EncodingDetectionOptions> options,
+        ILogger<FilenameEncodingDetector> logger)
     {
-        _confidenceThreshold = confidenceThreshold;
-        _fallbackEncoding = fallbackEncoding;
+        var opts = options.Value;
+        _confidenceThreshold = opts.EncodingConfidenceThreshold;
         _logger = logger;
+
+        try
+        {
+            _fallbackEncoding = Encoding.GetEncoding(opts.FallbackEncoding);
+        }
+        catch (ArgumentException)
+        {
+            _logger.LogWarning(
+                "Invalid FallbackEncoding '{Encoding}', defaulting to UTF-8",
+                opts.FallbackEncoding);
+            _fallbackEncoding = Encoding.UTF8;
+        }
+
+        _logger.LogInformation(
+            "FilenameEncodingDetector initialized: fallback={Fallback}, threshold={Threshold}",
+            _fallbackEncoding.WebName, _confidenceThreshold);
     }
 
     /// <inheritdoc />

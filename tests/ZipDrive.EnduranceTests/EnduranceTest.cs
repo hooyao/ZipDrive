@@ -73,7 +73,9 @@ public class EnduranceTest : IAsyncLifetime
 
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
-        var encodingDetector = new FilenameEncodingDetector(0.5f, System.Text.Encoding.UTF8);
+        var encodingDetector = new FilenameEncodingDetector(
+            Microsoft.Extensions.Options.Options.Create(new EncodingDetectionOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<FilenameEncodingDetector>.Instance);
         _structureCache = new ArchiveStructureCache(structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 

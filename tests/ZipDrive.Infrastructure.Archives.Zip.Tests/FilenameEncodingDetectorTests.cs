@@ -1,5 +1,7 @@
 using System.Text;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 using ZipDrive.Infrastructure.Archives.Zip;
 
@@ -7,7 +9,17 @@ namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
 
 public class FilenameEncodingDetectorTests
 {
-    private readonly FilenameEncodingDetector _detector = new(0.5f, Encoding.UTF8);
+    private static FilenameEncodingDetector CreateDetector(float threshold = 0.5f, string fallback = "utf-8")
+    {
+        var options = Options.Create(new EncodingDetectionOptions
+        {
+            EncodingConfidenceThreshold = threshold,
+            FallbackEncoding = fallback
+        });
+        return new FilenameEncodingDetector(options, NullLogger<FilenameEncodingDetector>.Instance);
+    }
+
+    private readonly FilenameEncodingDetector _detector = CreateDetector();
 
     private static byte[] EncodeString(string text, int codePage)
     {
@@ -129,8 +141,7 @@ public class FilenameEncodingDetectorTests
         // Act
         Encoding? result = _detector.DetectArchiveEncoding(filenames);
 
-        // Assert — any result (including null) is acceptable for ASCII,
-        // since ASCII is a subset of all supported encodings.
+        // Assert — any result (including null) is acceptable for ASCII
         if (result != null)
         {
             string decoded = result.GetString(filenames[0]);
@@ -142,7 +153,7 @@ public class FilenameEncodingDetectorTests
     public void DetectArchiveEncoding_HighThreshold_RejectsLowConfidence()
     {
         // Arrange — detector with very high threshold
-        var strictDetector = new FilenameEncodingDetector(0.99f, Encoding.UTF8);
+        var strictDetector = CreateDetector(threshold: 0.99f);
         var filenames = new List<byte[]>
         {
             EncodeString("テスト.txt", 932),
@@ -153,7 +164,6 @@ public class FilenameEncodingDetectorTests
         Encoding? result = strictDetector.DetectArchiveEncoding(filenames);
 
         // Assert — with 0.99 threshold, most detections will be rejected
-        // Result may be null (rejected) — that's expected behavior
     }
 
     [Fact]
@@ -178,6 +188,19 @@ public class FilenameEncodingDetectorTests
         Encoding result = _detector.ResolveEntryEncoding(Array.Empty<byte>());
 
         // Assert — returns configured fallback (UTF-8)
+        result.Should().Be(Encoding.UTF8);
+    }
+
+    [Fact]
+    public void Constructor_InvalidFallbackEncoding_DefaultsToUtf8()
+    {
+        // Arrange — invalid encoding name
+        var detector = CreateDetector(fallback: "not-a-real-encoding");
+
+        // Act — should not throw, should fall back to UTF-8
+        Encoding result = detector.ResolveEntryEncoding(Array.Empty<byte>());
+
+        // Assert
         result.Should().Be(Encoding.UTF8);
     }
 }

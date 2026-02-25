@@ -106,23 +106,9 @@ builder.ConfigureServices((context, services) =>
         : null;
     services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
 
-    // Encoding detection (detector owns fallback + threshold)
-    var mountOptions = context.Configuration.GetSection("Mount").Get<MountOptions>() ?? new MountOptions();
-    Encoding fallbackEncoding;
-    try
-    {
-        fallbackEncoding = Encoding.GetEncoding(mountOptions.FallbackEncoding);
-    }
-    catch (ArgumentException)
-    {
-        Log.Warning("Invalid FallbackEncoding '{Encoding}', defaulting to UTF-8", mountOptions.FallbackEncoding);
-        fallbackEncoding = Encoding.UTF8;
-    }
-    services.AddSingleton<IFilenameEncodingDetector>(
-        sp => new FilenameEncodingDetector(
-            mountOptions.EncodingConfidenceThreshold,
-            fallbackEncoding,
-            sp.GetService<Microsoft.Extensions.Logging.ILogger<FilenameEncodingDetector>>()));
+    // Encoding detection (detector self-configures from EncodingDetectionOptions)
+    services.Configure<EncodingDetectionOptions>(context.Configuration.GetSection("Mount"));
+    services.AddSingleton<IFilenameEncodingDetector, FilenameEncodingDetector>();
 
     // Application services
     services.AddSingleton<IPathResolver, PathResolver>();
