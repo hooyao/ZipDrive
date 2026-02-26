@@ -11,13 +11,13 @@ namespace ZipDrive.Infrastructure.Caching;
 /// </summary>
 public sealed class CacheMaintenanceService : BackgroundService
 {
-    private readonly DualTierFileCache _fileCache;
+    private readonly IFileContentCache _fileCache;
     private readonly IArchiveStructureCache _structureCache;
     private readonly TimeSpan _interval;
     private readonly ILogger<CacheMaintenanceService> _logger;
 
     public CacheMaintenanceService(
-        DualTierFileCache fileCache,
+        IFileContentCache fileCache,
         IArchiveStructureCache structureCache,
         IOptions<CacheOptions> options,
         ILogger<CacheMaintenanceService> logger)

@@ -9,10 +9,18 @@ namespace ZipDrive.Infrastructure.Caching;
 public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
 {
     /// <inheritdoc />
-    public async Task<StoredEntry> StoreAsync(CacheFactoryResult<Stream> result, CancellationToken cancellationToken)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(result);
-        ArgumentNullException.ThrowIfNull(result.Value);
+        ArgumentNullException.ThrowIfNull(factory);
+
+        await using CacheFactoryResult<Stream> result = await factory(cancellationToken).ConfigureAwait(false);
+
+        if (result.SizeBytes > int.MaxValue)
+            throw new InvalidOperationException(
+                $"File size {result.SizeBytes} bytes exceeds the memory tier limit of {int.MaxValue} bytes. " +
+                "Route large files to the disk tier instead.");
 
         MemoryStream ms = new MemoryStream((int)result.SizeBytes);
         await result.Value.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);

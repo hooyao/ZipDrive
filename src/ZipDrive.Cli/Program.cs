@@ -126,7 +126,7 @@ builder.ConfigureServices((context, services) =>
     services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
     services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
     services.AddSingleton<IArchiveStructureCache, ArchiveStructureCache>();
-    services.AddSingleton<DualTierFileCache>();
+    services.AddSingleton<IFileContentCache, FileContentCache>();
 
     // Cache maintenance (periodic eviction + cleanup)
     services.AddHostedService<CacheMaintenanceService>();

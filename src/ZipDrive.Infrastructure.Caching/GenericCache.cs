@@ -195,26 +195,17 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
-        // Call factory to get data AND size
-        CacheFactoryResult<T> result = await factory(cancellationToken).ConfigureAwait(false);
+        // Strategy owns the full pipeline: call factory → consume stream → dispose resources → return StoredEntry
+        StoredEntry stored = await _storageStrategy.MaterializeAsync(factory, cancellationToken).ConfigureAwait(false);
 
         double materializationMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
-        string sizeBucket = SizeBucketClassifier.Classify(result.SizeBytes);
+        string sizeBucket = SizeBucketClassifier.Classify(stored.SizeBytes);
 
         using (Activity? materializeActivity = CacheTelemetry.Source.StartActivity("cache.materialize"))
         {
             materializeActivity?.SetTag("tier", _name);
             materializeActivity?.SetTag("size_bucket", sizeBucket);
-            materializeActivity?.SetTag("size_bytes", result.SizeBytes);
-
-            // ═══════════════════════════════════════════════════════════════════
-            // LAYER 3: Eviction (only if capacity exceeded)
-            // Only evicts entries with RefCount = 0
-            // ═══════════════════════════════════════════════════════════════════
-            await EvictIfNeededAsync(result.SizeBytes).ConfigureAwait(false);
-
-            // Store using strategy - returns opaque StoredEntry
-            StoredEntry stored = await _storageStrategy.StoreAsync(result, cancellationToken).ConfigureAwait(false);
+            materializeActivity?.SetTag("size_bytes", stored.SizeBytes);
 
             CacheEntry entry = new CacheEntry(
                 cacheKey,

@@ -1,10 +1,7 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
-using ZipDrive.Infrastructure.Archives.Zip;
-using ZipDrive.Infrastructure.Caching;
 
 namespace ZipDrive.Application.Services;
 
@@ -16,30 +13,24 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 {
     private readonly IArchiveTrie _archiveTrie;
     private readonly IArchiveStructureCache _structureCache;
-    private readonly DualTierFileCache _fileCache;
+    private readonly IFileContentCache _fileContentCache;
     private readonly IArchiveDiscovery _discovery;
     private readonly IPathResolver _pathResolver;
-    private readonly IZipReaderFactory _zipReaderFactory;
-    private readonly CacheOptions _cacheOptions;
     private readonly ILogger<ZipVirtualFileSystem> _logger;
 
     public ZipVirtualFileSystem(
         IArchiveTrie archiveTrie,
         IArchiveStructureCache structureCache,
-        DualTierFileCache fileCache,
+        IFileContentCache fileContentCache,
         IArchiveDiscovery discovery,
         IPathResolver pathResolver,
-        IZipReaderFactory zipReaderFactory,
-        IOptions<CacheOptions> cacheOptions,
         ILogger<ZipVirtualFileSystem> logger)
     {
         _archiveTrie = archiveTrie;
         _structureCache = structureCache;
-        _fileCache = fileCache;
+        _fileContentCache = fileContentCache;
         _discovery = discovery;
         _pathResolver = pathResolver;
-        _zipReaderFactory = zipReaderFactory;
-        _cacheOptions = cacheOptions.Value;
         _logger = logger;
     }
 
@@ -177,45 +168,10 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         if (entry.Value.IsDirectory)
             throw new VfsAccessDeniedException(path ?? "");
 
-        // Check if offset is at or beyond EOF
-        if (offset >= entry.Value.UncompressedSize)
-            return 0;
-
-        // Borrow from file content cache
+        // Delegate to file content cache — it owns extraction, caching, and byte retrieval
         string cacheKey = $"{archive.VirtualPath}:{internalPath}";
-        long fileSizeBytes = entry.Value.UncompressedSize;
-
-        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
-        {
-            // Materialize: extract file from ZIP into a stream
-            await using (IZipReader reader = _zipReaderFactory.Create(archive.PhysicalPath))
-            {
-                Stream decompressedStream = await reader.OpenEntryStreamAsync(entry.Value, ct).ConfigureAwait(false);
-
-                // Read entire file into a stream for random access
-                MemoryStream ms = new((int)Math.Min(fileSizeBytes, int.MaxValue));
-                await decompressedStream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                ms.Position = 0;
-
-                return new CacheFactoryResult<Stream>
-                {
-                    Value = ms,
-                    SizeBytes = ms.Length
-                };
-            }
-        };
-
-        using (ICacheHandle<Stream> handle = await _fileCache.BorrowAsync(
-                   cacheKey, _cacheOptions.DefaultTtl, fileSizeBytes, factory, cancellationToken).ConfigureAwait(false))
-        {
-            Stream stream = handle.Value;
-            stream.Position = offset;
-
-            int bytesToRead = (int)Math.Min(buffer.Length, entry.Value.UncompressedSize - offset);
-            int bytesRead = await stream.ReadAsync(buffer.AsMemory(0, bytesToRead), cancellationToken)
-                .ConfigureAwait(false);
-            return bytesRead;
-        }
+        return await _fileContentCache.ReadAsync(
+            archive.PhysicalPath, entry.Value, cacheKey, buffer, offset, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

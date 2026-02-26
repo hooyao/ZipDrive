@@ -9,13 +9,16 @@ namespace ZipDrive.Infrastructure.Caching;
 public interface IStorageStrategy<TValue>
 {
     /// <summary>
-    /// Stores the factory result and returns an opaque StoredEntry.
-    /// The actual storage format (byte[], MMF, object) is implementation-specific.
+    /// Calls the factory delegate, consumes the result, disposes factory resources,
+    /// and returns an opaque StoredEntry. The strategy owns the full materialization
+    /// pipeline — this enables direct streaming (e.g., ZIP → disk) without intermediate buffering.
     /// </summary>
-    /// <param name="result">The factory result containing value and size</param>
+    /// <param name="factory">Factory delegate that produces the value to cache</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Opaque stored entry wrapping the internal representation</returns>
-    Task<StoredEntry> StoreAsync(CacheFactoryResult<TValue> result, CancellationToken cancellationToken);
+    Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<TValue>>> factory,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Retrieves the value from the stored entry.

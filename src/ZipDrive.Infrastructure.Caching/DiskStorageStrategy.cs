@@ -37,38 +37,66 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
     }
 
     /// <inheritdoc />
-    public async Task<StoredEntry> StoreAsync(CacheFactoryResult<Stream> result, CancellationToken cancellationToken)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(result);
-        ArgumentNullException.ThrowIfNull(result.Value);
+        ArgumentNullException.ThrowIfNull(factory);
 
         string tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.zip2vd.cache");
 
-        _logger.LogDebug("Creating temp file: {Path} ({Size} bytes)", tempPath, result.SizeBytes);
-
-        // Write to temp file
-        await using (FileStream fileStream = new FileStream(
-            tempPath,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            bufferSize: 81920,
-            FileOptions.Asynchronous | FileOptions.SequentialScan))
+        try
         {
-            await result.Value.CopyToAsync(fileStream, cancellationToken).ConfigureAwait(false);
-            await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            long sizeBytes;
+
+            // Call factory and pipe directly to temp file — no intermediate buffer
+            await using (CacheFactoryResult<Stream> result = await factory(cancellationToken).ConfigureAwait(false))
+            {
+                sizeBytes = result.SizeBytes;
+                _logger.LogDebug("Creating temp file: {Path} ({Size} bytes)", tempPath, sizeBytes);
+
+                await using FileStream fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 81920,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+                await result.Value.CopyToAsync(fileStream, cancellationToken).ConfigureAwait(false);
+                await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            // Factory result (and its Value stream + OnDisposed callback) are now disposed
+
+            // Create memory-mapped file for random access
+            MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(
+                tempPath,
+                FileMode.Open,
+                mapName: null,
+                sizeBytes,
+                MemoryMappedFileAccess.Read);
+
+            DiskCacheEntry entry = new DiskCacheEntry(tempPath, mmf, sizeBytes);
+            return new StoredEntry(entry, sizeBytes);
         }
+        catch
+        {
+            // Clean up partial temp file on any failure
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                    _logger.LogDebug("Cleaned up partial temp file: {Path}", tempPath);
+                }
+            }
+            catch (Exception cleanupEx)
+            {
+                _logger.LogWarning(cleanupEx, "Failed to clean up partial temp file: {Path}", tempPath);
+            }
 
-        // Create memory-mapped file for random access
-        MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(
-            tempPath,
-            FileMode.Open,
-            mapName: null,
-            result.SizeBytes,
-            MemoryMappedFileAccess.Read);
-
-        DiskCacheEntry entry = new DiskCacheEntry(tempPath, mmf, result.SizeBytes);
-        return new StoredEntry(entry, result.SizeBytes);
+            throw;
+        }
     }
 
     /// <inheritdoc />

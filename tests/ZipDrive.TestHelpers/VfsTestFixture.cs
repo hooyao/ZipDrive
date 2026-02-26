@@ -50,15 +50,14 @@ public class VfsTestFixture : IAsyncLifetime
         var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 
-        var fileCache = new DualTierFileCache(
-            cacheOpts,
+        var fileContentCache = new FileContentCache(
+            readerFactory, cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance);
 
         var vfs = new ZipVirtualFileSystem(
-            archiveTrie, structureCache, fileCache,
-            discovery, pathResolver, readerFactory,
-            cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
+            archiveTrie, structureCache, fileContentCache,
+            discovery, pathResolver, NullLogger<ZipVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = RootPath, MaxDiscoveryDepth = 6 });
         Vfs = vfs;

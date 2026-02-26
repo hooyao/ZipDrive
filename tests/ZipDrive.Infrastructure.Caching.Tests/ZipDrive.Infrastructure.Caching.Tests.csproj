@@ -22,6 +22,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\ZipDrive.Infrastructure.Caching\ZipDrive.Infrastructure.Caching.csproj" />
+      <ProjectReference Include="..\..\src\ZipDrive.Infrastructure.Archives.Zip\ZipDrive.Infrastructure.Archives.Zip.csproj" />
     </ItemGroup>
 
 </Project>
