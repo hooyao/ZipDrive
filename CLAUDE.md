@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), dual-tier cache coordinator, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 242 total tests passing. 8-hour soak test validated.
+**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 259 total tests passing. 8-hour soak test validated.
 
 ## Development Workflow Requirements
 
@@ -196,7 +196,7 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 
 **Architecture**: Generic cache with pluggable storage strategies, borrow/return pattern, and dual-tier routing
 - **GenericCache<T>**: Single cache implementation with reference counting and `System.Diagnostics.Metrics` instrumentation
-- **DualTierFileCache**: Routes to memory or disk tier based on `CacheOptions.SmallFileCutoffMb` (default 50MB)
+- **FileContentCache**: Owns ZIP extraction, tier routing, and caching. Routes to memory or disk tier based on `CacheOptions.SmallFileCutoffMb` (default 50MB)
 - **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
 - **DiskStorageStrategy**: `MemoryMappedFile` backed by temp files for large files (≥ 50MB)
 - **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
@@ -335,7 +335,7 @@ DokanNet integration for Windows file system mounting.
 Command-line interface entry point with OpenTelemetry SDK wiring.
 
 **Key Responsibilities**:
-- DI registration for all services (including `DualTierFileCache`)
+- DI registration for all services (including `FileContentCache`)
 - OpenTelemetry SDK configuration (opt-in; OTLP export to Aspire Dashboard when endpoint configured)
 - Serilog structured logging
 - Configuration binding (`Mount`, `Cache`, `OpenTelemetry` sections)
@@ -346,10 +346,11 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 |---------|----------|---------|
 | **Clean Architecture** | Solution structure | Dependency inversion, testability |
 | **Pluggable Strategy** | `IStorageStrategy<T>`, `IEvictionPolicy` | Storage and eviction extensibility |
+| **Strategy-Owned Materialization** | `IStorageStrategy.MaterializeAsync()` | Strategy calls factory, consumes stream, disposes resources — eliminates intermediate buffering |
 | **Borrow/Return (RAII)** | `GenericCache<T>`, `ICacheHandle<T>` | Reference counting, eviction protection |
 | **Lazy Materialization** | `Lazy<Task<T>>` | Thundering herd prevention |
 | **Async Cleanup** | `DiskStorageStrategy` | Non-blocking eviction |
-| **Dual-Tier Routing** | `DualTierFileCache` | Size-based memory/disk routing |
+| **Dual-Tier Routing** | `FileContentCache` | Size-based memory/disk routing |
 | **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 | **Bytes-First Decoding** | `ZipCentralDirectoryEntry.FileNameBytes` | Defer string decode until encoding is known |
@@ -537,7 +538,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `DiskStorageStrategy`, `ObjectStorageStrategy<T>` |
 | Phase 4 (Eviction) | ✅ Complete | `LruEvictionPolicy` |
 | Phase 5 (Tests) | ✅ Complete | 42 integration tests passing |
-| Phase 6 (Coordinator) | ✅ Complete | `DualTierFileCache` with size-hint routing (6 tests) |
+| Phase 6 (Coordinator) | ✅ Complete | `FileContentCache` with strategy-owned materialization and size-hint routing (6 tests) |
 | Phase 7 (Observability) | ✅ Complete | OpenTelemetry metrics, tracing, Aspire Dashboard export |
 
 ### Streaming ZIP Reader
@@ -557,10 +558,10 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 |-----------|--------|-------------|
 | ZipArchiveProvider | ⏳ Pending | `IArchiveProvider` implementation |
 | DokanNet Adapter | ✅ Complete | `DokanFileSystemAdapter` + `DokanHostedService` |
-| CLI | ✅ Complete | OTel wiring, DualTierFileCache DI, config binding, single-file publish |
+| CLI | ✅ Complete | OTel wiring, FileContentCache DI, config binding, single-file publish |
 | Multi-archive | ✅ Complete | `ArchiveTrie` + `ArchiveDiscovery` |
 | Observability | ✅ Complete | OpenTelemetry metrics/tracing, Aspire Dashboard |
-| Dual-tier Cache | ✅ Complete | `DualTierFileCache` with size-hint routing |
+| Dual-tier Cache | ✅ Complete | `FileContentCache` with strategy-owned materialization and size-hint routing |
 | Cache Maintenance | ✅ Complete | `CacheMaintenanceService` background eviction + cleanup |
 | Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 23 concurrent tasks |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
@@ -621,7 +622,7 @@ ZipDrive is considered complete when:
 - [x] ZIP reader implemented and tested (33 tests, including encoding detection)
 - [x] DokanNet adapter functional (mount/unmount works)
 - [x] CLI accepts arguments and mounts drives
-- [x] Dual-tier cache coordinator implemented and tested (6 tests)
+- [x] Dual-tier cache coordinator with strategy-owned materialization (6 tests)
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
 - [x] Background cache maintenance with configurable interval
 - [ ] All performance targets met
