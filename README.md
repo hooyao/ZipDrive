@@ -195,7 +195,7 @@ dotnet test tests/ZipDrive.EnduranceTests
 ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDrive.EnduranceTests
 ```
 
-**Test coverage**: 242 tests across unit, integration, concurrency, and endurance suites. 8-hour soak test validated with zero errors and zero handle leaks.
+**Test coverage**: 259 tests across unit, integration, concurrency, and endurance suites. 8-hour soak test validated with zero errors and zero handle leaks.
 
 ## Design Documents
 

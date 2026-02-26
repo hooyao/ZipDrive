@@ -1,8 +1,8 @@
 # ZipDrive - File Content Cache Design Document
 
-**Version:** 2.0
-**Last Updated:** 2026-02-23
-**Status:** ✅ Implementation Complete (Core + Dual-Tier + Observability)
+**Version:** 3.0
+**Last Updated:** 2026-02-27
+**Status:** ✅ Implementation Complete (Core + Strategy-Owned Materialization + Dual-Tier + Observability)
 
 ---
 
@@ -12,7 +12,7 @@
 
 **The Solution**: Dual-tier caching that materializes (fully decompresses) ZIP entries into random-access storage with TTL-based expiration and capacity limits.
 
-**API Design**: Generic `ICache<T>` interface where the factory returns `CacheFactoryResult<T>` containing both the value and metadata (including size). This design allows the factory to discover the size during data preparation, rather than requiring the caller to know it upfront.
+**API Design**: Generic `ICache<T>` interface where the factory returns `CacheFactoryResult<T>` containing both the value and metadata (including size). `CacheFactoryResult<T>` implements `IAsyncDisposable` with an `OnDisposed` callback, enabling chained resource cleanup. Strategies own the full materialization pipeline via `MaterializeAsync()` — they call the factory, consume the stream, and dispose resources, eliminating intermediate buffering.
 
 **Unified Architecture**: A single `GenericCache<TStored, TValue>` implementation handles all caching concerns (TTL, eviction, capacity, concurrency). Storage differences are abstracted via `IStorageStrategy`:
 - `MemoryStorageStrategy` → byte[] for small files
@@ -314,15 +314,12 @@ User perspective:
    │  └─ If yes: Wait for same Lazy<Task<T>>, share result
    └─ If no: This thread will materialize
    ↓
-8. GenericCache: Call factory to get CacheFactoryResult
-   ├─ Factory extracts file from ZIP
-   └─ Factory returns: { Value=stream, SizeBytes=80MB, Metadata=... }
+8. GenericCache: Delegate to IStorageStrategy.MaterializeAsync(factory)
+   ├─ Strategy calls factory internally to get CacheFactoryResult
+   ├─ Strategy consumes stream (e.g., DiskStrategy pipes ZIP → temp file)
+   └─ Strategy disposes factory resources via CacheFactoryResult.DisposeAsync()
    ↓
-9. GenericCache: Call IStorageStrategy.StoreAsync(factoryResult)
-   ├─ DiskStorageStrategy internally: Create temp file /tmp/{guid}.zip2vd
-   ├─ DiskStorageStrategy internally: Write 80MB to temp file
-   ├─ DiskStorageStrategy internally: Create MemoryMappedFile from temp file
-   └─ DiskStorageStrategy internally: Return StoredEntry (wraps MMF + path)
+9. Strategy returns StoredEntry (opaque, wraps MMF + path or byte[])
    ↓
 10. GenericCache: Store entry in ConcurrentDictionary
     └─ _cache[key] = new CacheEntry(storedEntry, RefCount=0, ...)
@@ -449,9 +446,11 @@ namespace ZipDrive.Infrastructure.Caching;
 /// <summary>
 /// Result from cache factory, containing the cached value and metadata.
 /// The factory is responsible for preparing the data and reporting its size.
+/// Implements IAsyncDisposable to allow storage strategies to dispose the
+/// value and chain resource cleanup via OnDisposed.
 /// </summary>
 /// <typeparam name="T">Type of cached value</typeparam>
-public sealed class CacheFactoryResult<T>
+public sealed class CacheFactoryResult<T> : IAsyncDisposable
 {
     /// <summary>The cached value to store.</summary>
     public required T Value { get; init; }
@@ -466,6 +465,23 @@ public sealed class CacheFactoryResult<T>
     /// Optional metadata (e.g., content type, compression ratio, original filename).
     /// </summary>
     public IReadOnlyDictionary<string, object>? Metadata { get; init; }
+
+    /// <summary>
+    /// Optional callback invoked after Value is disposed.
+    /// Use to chain cleanup of owning resources (e.g., dispose an IZipReader
+    /// after the decompressed stream has been consumed by the storage strategy).
+    /// </summary>
+    public Func<ValueTask>? OnDisposed { get; init; }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Value is IAsyncDisposable asyncDisposable)
+            await asyncDisposable.DisposeAsync();
+        else if (Value is IDisposable disposable)
+            disposable.Dispose();
+        if (OnDisposed is not null)
+            await OnDisposed();
+    }
 }
 
 /// <summary>
@@ -538,13 +554,19 @@ public interface ICache<T>
 }
 
 /// <summary>
-/// File cache abstraction for materialized ZIP entries.
+/// File content cache abstraction for materialized ZIP entries.
+/// Owns ZIP extraction, tier routing, and caching.
 /// Converts sequential ZIP streams into random-access streams.
 /// </summary>
-public interface IFileCache : ICache<Stream>
+public interface IFileContentCache
 {
-    // Inherits all members from ICache<Stream>
-    // Can add file-specific members if needed in the future
+    Task<ICacheHandle<Stream>> GetOrExtractAsync(
+        string archiveKey,
+        ZipEntryInfo entryInfo,
+        string archivePath,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default);
+    // Also exposes EvictExpired(), ProcessPendingCleanup(), Clear(), etc.
 }
 ```
 
@@ -583,13 +605,16 @@ public sealed class StoredEntry
 public interface IStorageStrategy<TValue>
 {
     /// <summary>
-    /// Stores the factory result and returns an opaque StoredEntry.
-    /// The actual storage format (byte[], MMF, object) is implementation-specific.
+    /// Calls the factory delegate, consumes the result, disposes factory resources,
+    /// and returns an opaque StoredEntry. The strategy owns the full materialization
+    /// pipeline — this enables direct streaming (e.g., ZIP → disk) without intermediate buffering.
     /// </summary>
-    /// <param name="result">The factory result containing value and size</param>
+    /// <param name="factory">Factory delegate that produces the value to cache</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Opaque stored entry wrapping the internal representation</returns>
-    Task<StoredEntry> StoreAsync(CacheFactoryResult<TValue> result, CancellationToken cancellationToken);
+    Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<TValue>>> factory,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Retrieves the value from the stored entry.
@@ -628,8 +653,11 @@ public interface IStorageStrategy<TValue>
 /// </summary>
 public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
 {
-    public async Task<StoredEntry> StoreAsync(CacheFactoryResult<Stream> result, CancellationToken ct)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory,
+        CancellationToken ct)
     {
+        await using var result = await factory(ct);
         using var ms = new MemoryStream((int)result.SizeBytes);
         await result.Value.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
@@ -669,15 +697,21 @@ public sealed class DiskStorageStrategy : IStorageStrategy<Stream>
         _tempDirectory = tempDirectory;
     }
 
-    public async Task<StoredEntry> StoreAsync(CacheFactoryResult<Stream> result, CancellationToken ct)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory,
+        CancellationToken ct)
     {
         var tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.cache");
 
-        // Write to temp file
-        await using var fileStream = new FileStream(tempPath, FileMode.Create,
-            FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
-        await result.Value.CopyToAsync(fileStream, ct);
-        await fileStream.FlushAsync(ct);
+        // Call factory and pipe directly to temp file — no intermediate buffer
+        await using (var result = await factory(ct))
+        {
+            await using var fileStream = new FileStream(tempPath, FileMode.Create,
+                FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
+            await result.Value.CopyToAsync(fileStream, ct);
+            await fileStream.FlushAsync(ct);
+        }
+        // Factory result (and its Value stream + OnDisposed callback) are now disposed
 
         // Create memory-mapped file for random access
         var mmf = MemoryMappedFile.CreateFromFile(tempPath, FileMode.Open,
@@ -721,9 +755,12 @@ internal sealed record DiskCacheEntry(string TempFilePath, MemoryMappedFile Memo
 /// </summary>
 public sealed class ObjectStorageStrategy<T> : IStorageStrategy<T>
 {
-    public Task<StoredEntry> StoreAsync(CacheFactoryResult<T> result, CancellationToken ct)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<T>>> factory,
+        CancellationToken ct)
     {
-        return Task.FromResult(new StoredEntry(result.Value!, result.SizeBytes));
+        await using var result = await factory(ct);
+        return new StoredEntry(result.Value!, result.SizeBytes);
     }
 
     public T Retrieve(StoredEntry stored)
@@ -838,17 +875,8 @@ public sealed class GenericCache<T> : ICache<T>
         Func<CancellationToken, Task<CacheFactoryResult<T>>> factory,
         CancellationToken cancellationToken)
     {
-        // Call factory to get data AND size
-        var result = await factory(cancellationToken);
-
-        // ═══════════════════════════════════════════════════════════
-        // LAYER 3: Eviction (only if capacity exceeded)
-        // Only evicts entries with RefCount = 0
-        // ═══════════════════════════════════════════════════════════
-        await EvictIfNeededAsync(result.SizeBytes);
-
-        // Store using strategy - returns opaque StoredEntry
-        var stored = await _storageStrategy.StoreAsync(result, cancellationToken);
+        // Strategy owns the full pipeline: call factory → consume stream → dispose resources → return StoredEntry
+        var stored = await _storageStrategy.MaterializeAsync(factory, cancellationToken);
 
         var entry = new CacheEntry(
             cacheKey, stored,

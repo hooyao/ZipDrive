@@ -235,7 +235,7 @@ The caching layer uses a **generic cache with pluggable storage strategies**:
 
 ## Phase 6: Dual-Tier Coordinator ✅ COMPLETE
 
-### 6.1 DualTierFileCache Class
+### 6.1 FileContentCache Class
 
 - [x] Constructor: Create both memory and disk GenericCache instances with named tiers
 - [x] Route based on file size via `BorrowAsync(key, ttl, sizeHintBytes, factory)` overload
@@ -247,7 +247,7 @@ The caching layer uses a **generic cache with pluggable storage strategies**:
 ### 6.2 VFS Integration
 
 - [x] `ZipVirtualFileSystem.ReadFileAsync` passes size hint from `ZipEntryInfo.UncompressedSize`
-- [x] DI registration in `Program.cs` replaces single `GenericCache<Stream>` with `DualTierFileCache`
+- [x] DI registration in `Program.cs` replaces single `GenericCache<Stream>` with `FileContentCache`
 
 **Phase 6 Checkpoint:** ✅ Dual-tier cache coordinator implemented and tested
 
@@ -465,6 +465,6 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives:
 
 1. ⏳ Implement `ZipArchiveProvider` (IArchiveProvider implementation)
 2. ✅ Implement DokanNet file system adapter — Complete (`DokanFileSystemAdapter` + `DokanHostedService`)
-3. ✅ Create dual-tier cache coordinator — Complete (`DualTierFileCache` with size-hint routing)
+3. ✅ Create file content cache — Complete (`FileContentCache` with strategy-owned materialization and size-hint routing)
 4. ⏳ Add performance benchmarks
 5. ✅ Add observability/metrics — Complete (OpenTelemetry metrics, tracing, Aspire Dashboard)
