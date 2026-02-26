@@ -3,18 +3,34 @@
 
 # ZipDrive
 
-A high-performance virtual file system that mounts ZIP archives as accessible Windows drives using [DokanNet](https://github.com/dokan-dev/dokany). Browse ZIP contents as if they were regular folders — no extraction needed.
+**Mount ZIP archives as native Windows drives — instantly, with zero extraction.**
 
-## Features
+ZipDrive turns any directory of ZIP files into a browsable Windows drive letter. Unlike Windows Explorer's built-in "Open as folder" (which silently extracts to temp and chokes on large archives), ZipDrive streams file content on demand through an intelligent dual-tier cache. No temp folder bloat. No waiting. Just `R:\archive.zip\folder\file.txt` in every app.
+
+## Why ZipDrive?
+
+| | Windows Built-in ZIP | Other Mount Tools | **ZipDrive** |
+|---|---|---|---|
+| Real drive letter | No (folder view only) | Varies | **Yes — works in every app** |
+| Upfront extraction | Yes (hidden temp copy) | Often required | **No — streams on demand** |
+| Multi-archive mount | No | Rarely | **Yes — entire directories of ZIPs** |
+| Large file support (>4 GB) | Limited | Varies | **Full ZIP64 support** |
+| International filenames | Mojibake common | Varies | **Auto charset detection (Shift-JIS, GBK, EUC-KR, ...)** |
+| Concurrent access | Single-threaded | Varies | **100+ simultaneous readers, validated by 8-hour soak test** |
+| Observability | None | None | **OpenTelemetry metrics & tracing** |
+| Open source | No | Rarely | **Yes — clean architecture, extensible** |
+
+## Key Features
 
 - **Virtual Drive Mounting** — Mount any directory of ZIP archives as a Windows drive letter
 - **Multi-Archive Discovery** — Automatically discovers and indexes ZIP files recursively
-- **Two-Level Caching** — Structure cache (parsed ZIP metadata) + file content cache (decompressed data)
-- **Dual-Tier File Cache** — Small files in memory, large files on disk via memory-mapped files
-- **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support, no full extraction required
-- **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UtfUnknown)
-- **OpenTelemetry Observability** — Metrics, tracing, and structured logging with Aspire Dashboard support
-- **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup
+- **Dual-Tier Caching** — Small files stay in memory, large files spill to disk via memory-mapped files — no redundant decompression
+- **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support; no full extraction required
+- **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UtfUnknown / Mozilla Universal Charset Detector)
+- **Thundering Herd Prevention** — Lock-free cache hits with per-key deduplication; 20 concurrent requests for the same uncached file trigger only one decompression
+- **OpenTelemetry Observability** — Opt-in metrics, tracing, and structured logging with Aspire Dashboard support
+- **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup with configurable intervals
+- **Shell Metadata Short-Circuit** — Intercepts Windows Explorer probes (`desktop.ini`, `thumbs.db`, etc.) before any ZIP parsing occurs
 
 ## Prerequisites
 
@@ -207,4 +223,3 @@ Detailed design documents are available in `src/Docs/`:
 ## License
 
 See [LICENSE](LICENSE) for details.
-
