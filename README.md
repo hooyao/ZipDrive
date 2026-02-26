@@ -16,7 +16,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 | Multi-archive mount | No | Rarely | **Yes — entire directories of ZIPs** |
 | Large file support (>4 GB) | Limited | Varies | **Full ZIP64 support** |
 | International filenames | Mojibake common | Varies | **Auto charset detection (Shift-JIS, GBK, EUC-KR, ...)** |
-| Concurrent access | Single-threaded | Varies | **Highly concurrent — validated by 8-hour soak test with 23 parallel tasks** |
+| Concurrent access | Single-threaded | Varies | **100+ simultaneous readers, validated by 8-hour soak test** |
 | Observability | None | None | **OpenTelemetry metrics & tracing** |
 | Open source | No | Rarely | **Yes — clean architecture, extensible** |
 
