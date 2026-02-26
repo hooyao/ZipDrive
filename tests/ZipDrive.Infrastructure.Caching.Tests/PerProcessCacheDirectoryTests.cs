@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using ZipDrive.Infrastructure.Archives.Zip;
 
 namespace ZipDrive.Infrastructure.Caching.Tests;
 
@@ -35,7 +36,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public async Task DiskStorageStrategy_StoreAsync_StoresFilesInProcessSubdirectory()
+    public async Task DiskStorageStrategy_MaterializeAsync_StoresFilesInProcessSubdirectory()
     {
         string expectedDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
 
@@ -45,13 +46,14 @@ public class PerProcessCacheDirectoryTests : IDisposable
 
         byte[] data = new byte[1024];
         Random.Shared.NextBytes(data);
-        var result = new CacheFactoryResult<Stream>
-        {
-            Value = new MemoryStream(data),
-            SizeBytes = data.Length
-        };
 
-        var stored = await strategy.StoreAsync(result, CancellationToken.None);
+        var stored = await strategy.MaterializeAsync(
+            ct => Task.FromResult(new CacheFactoryResult<Stream>
+            {
+                Value = new MemoryStream(data),
+                SizeBytes = data.Length
+            }),
+            CancellationToken.None);
 
         var files = Directory.GetFiles(expectedDir, "*.zip2vd.cache");
         files.Should().HaveCount(1, "cache file should be stored in the process subdirectory");
@@ -80,7 +82,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public void DualTierFileCache_ConstructsCorrectSubdirectoryName()
+    public void FileContentCache_ConstructsCorrectSubdirectoryName()
     {
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(new CacheOptions
         {
@@ -89,11 +91,11 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TempDirectory = _baseDir
         });
 
-        var cache = new DualTierFileCache(
+        var cache = new FileContentCache(
+            new ZipReaderFactory(),
             cacheOpts,
             new LruEvictionPolicy(),
             TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance,
             NullLoggerFactory.Instance);
 
         var dirs = Directory.GetDirectories(_baseDir);
@@ -102,7 +104,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public void DualTierFileCache_DeleteCacheDirectory_RemovesDirectory()
+    public void FileContentCache_DeleteCacheDirectory_RemovesDirectory()
     {
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(new CacheOptions
         {
@@ -111,11 +113,11 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TempDirectory = _baseDir
         });
 
-        var cache = new DualTierFileCache(
+        var cache = new FileContentCache(
+            new ZipReaderFactory(),
             cacheOpts,
             new LruEvictionPolicy(),
             TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance,
             NullLoggerFactory.Instance);
 
         var dirs = Directory.GetDirectories(_baseDir);

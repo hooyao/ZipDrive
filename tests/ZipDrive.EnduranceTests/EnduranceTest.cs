@@ -31,7 +31,7 @@ public class EnduranceTest : IAsyncLifetime
 {
     private string _rootPath = "";
     private ZipVirtualFileSystem _vfs = null!;
-    private DualTierFileCache _fileCache = null!;
+    private FileContentCache _fileCache = null!;
     private IArchiveStructureCache _structureCache = null!;
 
     private readonly ConcurrentBag<string> _errors = new();
@@ -80,13 +80,13 @@ public class EnduranceTest : IAsyncLifetime
         _structureCache = new ArchiveStructureCache(structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 
-        _fileCache = new DualTierFileCache(
-            cacheOpts,
+        _fileCache = new FileContentCache(
+            readerFactory, cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance);
 
         _vfs = new ZipVirtualFileSystem(archiveTrie, _structureCache, _fileCache, discovery, pathResolver,
-            readerFactory, cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLogger<ZipVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
     }
 
@@ -380,12 +380,15 @@ public class EnduranceTest : IAsyncLifetime
             }
             catch (OperationCanceledException) { break; }
 
+            // Increment cycle count immediately so the assertion detects that
+            // the loop ran even if eviction itself is a fast no-op.
+            Interlocked.Increment(ref _evictionCycles);
+
             try
             {
                 _fileCache.EvictExpired();
                 _structureCache.EvictExpired();
                 _fileCache.ProcessPendingCleanup();
-                Interlocked.Increment(ref _evictionCycles);
             }
             catch (Exception ex)
             {

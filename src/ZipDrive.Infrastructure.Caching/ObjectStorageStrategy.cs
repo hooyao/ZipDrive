@@ -10,11 +10,15 @@ namespace ZipDrive.Infrastructure.Caching;
 public sealed class ObjectStorageStrategy<T> : IStorageStrategy<T>
 {
     /// <inheritdoc />
-    public Task<StoredEntry> StoreAsync(CacheFactoryResult<T> result, CancellationToken cancellationToken)
+    public async Task<StoredEntry> MaterializeAsync(
+        Func<CancellationToken, Task<CacheFactoryResult<T>>> factory,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(factory);
 
-        return Task.FromResult(new StoredEntry(result.Value!, result.SizeBytes));
+        await using CacheFactoryResult<T> result = await factory(cancellationToken).ConfigureAwait(false);
+
+        return new StoredEntry(result.Value!, result.SizeBytes);
     }
 
     /// <inheritdoc />

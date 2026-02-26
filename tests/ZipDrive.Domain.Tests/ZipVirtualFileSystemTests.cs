@@ -66,15 +66,14 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             structureStore, readerFactory,
             TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
 
-        var fileCache = new DualTierFileCache(
-            cacheOpts,
+        var fileContentCache = new FileContentCache(
+            readerFactory, cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance);
 
         _vfs = new ZipVirtualFileSystem(
-            archiveTrie, structureCache, fileCache,
-            discovery, pathResolver, readerFactory,
-            cacheOpts, NullLogger<ZipVirtualFileSystem>.Instance);
+            archiveTrie, structureCache, fileContentCache,
+            discovery, pathResolver, NullLogger<ZipVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 6 });
     }
@@ -175,12 +174,12 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             NullLogger<FilenameEncodingDetector>.Instance);
         var structCache = new ArchiveStructureCache(structStore, factory,
             TimeProvider.System, cacheOpts2, NullLogger<ArchiveStructureCache>.Instance, detector2);
-        var fc = new DualTierFileCache(
-            cacheOpts2,
+        var fc = new FileContentCache(
+            factory, cacheOpts2,
             new LruEvictionPolicy(), TimeProvider.System,
-            NullLogger<DualTierFileCache>.Instance, NullLoggerFactory.Instance);
-        var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver, factory,
-            cacheOpts2, NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLoggerFactory.Instance);
+        var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
+            NullLogger<ZipVirtualFileSystem>.Instance);
 
         bool? eventValue = null;
         vfs.MountStateChanged += (_, mounted) => eventValue = mounted;

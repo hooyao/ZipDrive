@@ -64,13 +64,3 @@ public interface ICache<T>
     /// </summary>
     void EvictExpired();
 }
-
-/// <summary>
-/// File cache abstraction for materialized ZIP entries.
-/// Converts sequential ZIP streams into random-access streams.
-/// </summary>
-public interface IFileCache : ICache<Stream>
-{
-    // Inherits all members from ICache<Stream>
-    // Can add file-specific members if needed in the future
-}
