@@ -16,7 +16,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 | Multi-archive mount | No | Rarely | **Yes — entire directories of ZIPs** |
 | Large file support (>4 GB) | Limited | Varies | **Full ZIP64 support** |
 | International filenames | Mojibake common | Varies | **Auto charset detection (Shift-JIS, GBK, EUC-KR, ...)** |
-| Concurrent access | Single-threaded | Varies | **100+ simultaneous readers, validated by 8-hour soak test** |
+| Concurrent access | Single-threaded | Varies | **Highly concurrent — validated by 8-hour soak test with 23 parallel tasks** |
 | Observability | None | None | **OpenTelemetry metrics & tracing** |
 | Open source | No | Rarely | **Yes — clean architecture, extensible** |
 
@@ -26,7 +26,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 - **Multi-Archive Discovery** — Automatically discovers and indexes ZIP files recursively
 - **Dual-Tier Caching** — Small files stay in memory, large files spill to disk via memory-mapped files — no redundant decompression
 - **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support; no full extraction required
-- **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UtfUnknown / Mozilla Universal Charset Detector)
+- **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UTF.Unknown, a .NET port based on Mozilla's Universal Charset Detector)
 - **Thundering Herd Prevention** — Lock-free cache hits with per-key deduplication; 20 concurrent requests for the same uncached file trigger only one decompression
 - **OpenTelemetry Observability** — Opt-in metrics, tracing, and structured logging with Aspire Dashboard support
 - **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup with configurable intervals
