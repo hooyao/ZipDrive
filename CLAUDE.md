@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer (66 tests), streaming ZIP reader (15 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 259 total tests passing. 8-hour soak test validated.
+**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 325 total tests passing. 8-hour soak test validated.
 
 ## Development Workflow Requirements
 
@@ -198,9 +198,11 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - **GenericCache<T>**: Single cache implementation with reference counting and `System.Diagnostics.Metrics` instrumentation
 - **FileContentCache**: Owns ZIP extraction, tier routing, and caching. Routes to memory or disk tier based on `CacheOptions.SmallFileCutoffMb` (default 50MB)
 - **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
-- **DiskStorageStrategy**: `MemoryMappedFile` backed by temp files for large files (≥ 50MB)
+- **ChunkedDiskStorageStrategy**: Incremental chunk-based extraction for large files (≥ 50MB). Decompresses in configurable chunks (default 10MB) to NTFS sparse files. `MaterializeAsync` returns after the first chunk (~50ms), background task continues extracting. Replaces the former `DiskStorageStrategy`.
+- **ChunkedFileEntry**: Tracks chunk state via `int[]` with `Volatile` reads/writes + `TaskCompletionSource<bool>[]` for per-chunk completion signaling. Owns the sparse backing file, background extraction task, and `CancellationTokenSource`.
+- **ChunkedStream**: `Stream` subclass returned by `ChunkedDiskStorageStrategy.Retrieve()`. Maps reads to chunks, blocks on unextracted regions via `EnsureChunkReadyAsync()` safety gate. Each borrower gets an independent instance with its own `FileStream`.
 - **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
-- **CacheTelemetry**: Static metrics (counters, histograms, observable gauges) and ActivitySource for tracing
+- **CacheTelemetry**: Static metrics (counters, histograms, observable gauges) and ActivitySource for tracing. Includes chunked extraction metrics (`cache.chunks.extracted`, `cache.chunks.waits`, `cache.chunks.wait_duration`, `cache.chunks.extraction_duration`).
 
 **Why Custom Cache (not built-in MemoryCache)?**
 - Built-in `MemoryCache` lacks pluggable eviction policies
@@ -214,11 +216,12 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - `Dispose()` on handle decrements `RefCount`, allowing eviction
 - Prevents data corruption when reading while eviction occurs
 
-**Four-Layer Concurrency Strategy** (prevents thundering herd + data corruption):
+**Five-Layer Concurrency Strategy** (prevents thundering herd + data corruption):
 1. **Layer 1 (Lock-free)**: `ConcurrentDictionary.TryGetValue` for cache hits (< 100ns, zero contention)
 2. **Layer 2 (Per-key)**: `Lazy<Task<T>>` prevents duplicate materialization of same file
 3. **Layer 3 (Eviction)**: Global lock only when capacity exceeded (infrequent)
 4. **Layer 4 (RefCount)**: Borrowed entries protected from eviction during use
+5. **Layer 5 (Per-chunk)**: `TaskCompletionSource<bool>[]` signals chunk completion — readers await specific chunks with zero polling, multiple readers served concurrently from completed chunks
 
 **Key Features**:
 - TTL-based expiration (configurable via `CacheOptions.DefaultTtlMinutes`, default: 30 minutes)
@@ -230,6 +233,7 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 
 **Documentation**: See `src/Docs/`:
 - [`CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md) - Comprehensive design (1500+ lines)
+- [`CHUNKED_EXTRACTION_DESIGN.md`](src/Docs/CHUNKED_EXTRACTION_DESIGN.md) - Incremental chunk-based extraction design
 - [`CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md) - Multi-layer locking details
 - [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) - Implementation steps
 
@@ -349,7 +353,8 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 | **Strategy-Owned Materialization** | `IStorageStrategy.MaterializeAsync()` | Strategy calls factory, consumes stream, disposes resources — eliminates intermediate buffering |
 | **Borrow/Return (RAII)** | `GenericCache<T>`, `ICacheHandle<T>` | Reference counting, eviction protection |
 | **Lazy Materialization** | `Lazy<Task<T>>` | Thundering herd prevention |
-| **Async Cleanup** | `DiskStorageStrategy` | Non-blocking eviction |
+| **Chunked Extraction** | `ChunkedDiskStorageStrategy`, `ChunkedFileEntry`, `ChunkedStream` | Incremental decompression with per-chunk TCS signaling |
+| **Async Cleanup** | `ChunkedDiskStorageStrategy` | Non-blocking eviction |
 | **Dual-Tier Routing** | `FileContentCache` | Size-based memory/disk routing |
 | **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
@@ -386,7 +391,7 @@ When working with the caching layer:
 
 ### Endurance Tests (`tests/ZipDrive.EnduranceTests`)
 - **Duration**: Configurable via `ENDURANCE_DURATION_HOURS` env var (default: 0.02 = ~72s for CI)
-- **Concurrency**: 23 tasks (8 browsers, 5 sequential readers, 4 path stress, 3 same-file thundering herd, 2 different-file parallel, 1 maintenance loop)
+- **Concurrency**: 26 tasks (8 browsers, 5 sequential readers, 4 path stress, 3 same-file thundering herd, 2 different-file parallel, 3 random-offset large-file readers, 1 maintenance loop)
 - **Cache config**: Tight limits (2MB memory, 20MB disk, 5MB cutoff, 1min TTL, 2s maintenance interval) to force eviction
 - **Verification**: SHA-256 content checks on every read against embedded `__manifest__.json`
 - **Post-run assertions**: Zero errors, zero handle leaks (`BorrowedEntryCount == 0`), verified reads > 0, maintenance ran
@@ -420,6 +425,7 @@ When working with the caching layer:
     "MemoryCacheSizeMb": 2048,              // Memory tier capacity (2GB)
     "DiskCacheSizeMb": 10240,               // Disk tier capacity (10GB)
     "SmallFileCutoffMb": 50,                // Routing threshold (< cutoff → memory, >= cutoff → disk)
+    "ChunkSizeMb": 10,                      // Chunk size for incremental disk-tier extraction
     "TempDirectory": null,                  // null = system temp dir
     "DefaultTtlMinutes": 30,               // Entry expiration (used by ZipVirtualFileSystem + ArchiveStructureCache)
     "EvictionCheckIntervalSeconds": 60      // CacheMaintenanceService sweep interval
@@ -427,7 +433,7 @@ When working with the caching layer:
 }
 ```
 
-All six options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, and `SmallFileCutoffBytes`.
+All seven options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, `SmallFileCutoffBytes`, and `ChunkSizeBytes`.
 
 **Tuning Guidelines**:
 - Low memory systems: Reduce `MemoryCacheSizeMb`, lower `SmallFileCutoffMb`
@@ -535,7 +541,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 |-------|--------|-------------|
 | Phase 1 (Interfaces) | ✅ Complete | `ICache<T>`, `ICacheHandle<T>`, `IStorageStrategy<T>`, `IEvictionPolicy` |
 | Phase 2 (GenericCache) | ✅ Complete | Borrow/return pattern, reference counting, four-layer concurrency |
-| Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `DiskStorageStrategy`, `ObjectStorageStrategy<T>` |
+| Phase 3 (Storage) | ✅ Complete | `MemoryStorageStrategy`, `ChunkedDiskStorageStrategy` (replaces DiskStorageStrategy), `ObjectStorageStrategy<T>` |
 | Phase 4 (Eviction) | ✅ Complete | `LruEvictionPolicy` |
 | Phase 5 (Tests) | ✅ Complete | 42 integration tests passing |
 | Phase 6 (Coordinator) | ✅ Complete | `FileContentCache` with strategy-owned materialization and size-hint routing (6 tests) |
@@ -563,7 +569,8 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Observability | ✅ Complete | OpenTelemetry metrics/tracing, Aspire Dashboard |
 | Dual-tier Cache | ✅ Complete | `FileContentCache` with strategy-owned materialization and size-hint routing |
 | Cache Maintenance | ✅ Complete | `CacheMaintenanceService` background eviction + cleanup |
-| Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 23 concurrent tasks |
+| Chunked Extraction | ✅ Complete | `ChunkedDiskStorageStrategy` with incremental 10MB chunks, per-chunk TCS signaling, 66 new tests |
+| Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 26 concurrent tasks including random-offset large-file readers |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
 
 ## Known Limitations / Future Work
@@ -578,6 +585,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - [ ] Write support (currently read-only)
 - [x] ZIP64 support (files > 4GB, archives > 65535 entries) - **Implemented**
 - [ ] LZMA compression support
+- [ ] Direct-read for Store-compressed entries (bypass extraction for uncompressed files in ZIP)
 
 ## Code Style Conventions
 
@@ -610,7 +618,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - **Path resolution**: < 1ms (prefix tree + dictionary lookup)
 - **Cache hit**: < 1ms overhead
 - **Cache miss (small)**: < 100ms for 10MB file decompression + caching
-- **Cache miss (large)**: < 2s for 100MB file decompression + caching
+- **Cache miss (large, first byte)**: ~50ms for first 10MB chunk (chunked extraction); full file decompresses in background
 - **Eviction**: < 1ms (mark phase only, cleanup async)
 - **Concurrent reads**: Support 100+ simultaneous file reads
 - **Directory listing**: 1000 entries in < 100ms
@@ -618,7 +626,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ## Success Criteria
 
 ZipDrive is considered complete when:
-- [x] Caching layer fully implemented with 80%+ test coverage (67 tests)
+- [x] Caching layer fully implemented with 80%+ test coverage (149 tests including chunked extraction)
 - [x] ZIP reader implemented and tested (33 tests, including encoding detection)
 - [x] DokanNet adapter functional (mount/unmount works)
 - [x] CLI accepts arguments and mounts drives

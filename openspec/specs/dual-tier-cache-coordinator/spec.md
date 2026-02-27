@@ -16,7 +16,7 @@ The system SHALL provide a `DualTierFileCache` that implements `ICache<Stream>` 
 #### Scenario: Large file routed to disk tier
 
 - **WHEN** a file with `UncompressedSize` >= `SmallFileCutoffBytes` is requested via `BorrowAsync`
-- **THEN** the operation SHALL be delegated to the disk-tier `GenericCache<Stream>` (backed by `DiskStorageStrategy`)
+- **THEN** the operation SHALL be delegated to the disk-tier `GenericCache<Stream>` (backed by `ChunkedDiskStorageStrategy`)
 
 #### Scenario: Default cutoff is 50 MB
 
@@ -92,16 +92,18 @@ The `DualTierFileCache` SHALL implement `ICache<Stream>` without requiring chang
 
 ---
 
-### Requirement: Disk tier uses DiskStorageStrategy with MemoryMappedFile
+### Requirement: Disk tier uses ChunkedDiskStorageStrategy
 
-The disk tier SHALL use `DiskStorageStrategy` to store decompressed file data as memory-mapped files backed by temporary files on disk.
+The disk tier SHALL use `ChunkedDiskStorageStrategy` to store decompressed file data as NTFS sparse files with incremental chunk-based extraction.
 
-#### Scenario: Large file stored as memory-mapped file
+#### Scenario: Large file stored with chunked extraction
 
 - **WHEN** a file >= `SmallFileCutoffBytes` is materialized
-- **THEN** the decompressed data SHALL be written to a temporary file
-- **AND** a `MemoryMappedFile` SHALL be created from the temp file for random-access reads
-- **AND** the temp file SHALL be deleted when the cache entry is evicted
+- **THEN** the decompressed data SHALL be extracted incrementally in fixed-size chunks to an NTFS sparse file
+- **AND** `MaterializeAsync` SHALL return after the first chunk is extracted
+- **AND** a background task SHALL continue extracting remaining chunks
+- **AND** retrieval SHALL return a `ChunkedStream` that serves completed chunks instantly and blocks on unextracted regions
+- **AND** the sparse file SHALL be deleted when the cache entry is evicted
 
 #### Scenario: Disk tier capacity enforced
 
