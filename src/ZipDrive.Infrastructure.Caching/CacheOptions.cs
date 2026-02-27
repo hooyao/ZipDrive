@@ -111,8 +111,28 @@ public class CacheOptions
 
     /// <summary>
     /// Gets the chunk size in bytes (computed property).
+    /// Validates that ChunkSizeMb is positive and does not overflow int.
     /// </summary>
-    internal int ChunkSizeBytes => ChunkSizeMb * 1024 * 1024;
+    internal int ChunkSizeBytes
+    {
+        get
+        {
+            if (ChunkSizeMb <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(ChunkSizeMb), ChunkSizeMb,
+                    "ChunkSizeMb must be a positive value.");
+
+            const int bytesPerMb = 1024 * 1024;
+            const int maxChunkSizeMb = int.MaxValue / bytesPerMb;
+
+            if (ChunkSizeMb > maxChunkSizeMb)
+                throw new ArgumentOutOfRangeException(
+                    nameof(ChunkSizeMb), ChunkSizeMb,
+                    $"ChunkSizeMb must be <= {maxChunkSizeMb}.");
+
+            return checked(ChunkSizeMb * bytesPerMb);
+        }
+    }
 
     /// <summary>
     /// Gets the eviction check interval as a TimeSpan (computed property).

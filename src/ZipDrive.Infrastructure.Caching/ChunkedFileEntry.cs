@@ -92,16 +92,9 @@ internal sealed class ChunkedFileEntry : IDisposable
         if (completionTask.IsCompleted)
             return completionTask;
 
-        return WaitWithCancellationAsync(completionTask, cancellationToken);
-    }
-
-    private static async Task WaitWithCancellationAsync(Task completionTask, CancellationToken cancellationToken)
-    {
-        using CancellationTokenRegistration _ = cancellationToken.Register(static () => { });
-        Task cancelTask = Task.Delay(Timeout.Infinite, cancellationToken);
-        await Task.WhenAny(completionTask, cancelTask).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        await completionTask.ConfigureAwait(false); // Propagate any exception
+        // WaitAsync cancels only the waiter, not the underlying TCS —
+        // other readers and the extraction task are unaffected.
+        return completionTask.WaitAsync(cancellationToken);
     }
 
     /// <summary>
@@ -180,6 +173,15 @@ internal sealed class ChunkedFileEntry : IDisposable
 
                     totalRead += read;
                 }
+
+                // Premature EOF: stream ended before expected chunk length.
+                // Treat as data corruption — writing a short chunk would leave
+                // zero-filled gaps in the sparse file that silently corrupt reads.
+                if (totalRead < chunkLength)
+                    throw new InvalidDataException(
+                        $"Decompressed stream ended prematurely at chunk {i}: " +
+                        $"expected {chunkLength} bytes, got {totalRead}. " +
+                        $"Archive may be truncated or corrupt.");
 
                 fs.Position = GetChunkOffset(i);
                 await fs.WriteAsync(buffer.AsMemory(0, totalRead), cancellationToken)

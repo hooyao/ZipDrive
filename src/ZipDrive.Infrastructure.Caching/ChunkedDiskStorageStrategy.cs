@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace ZipDrive.Infrastructure.Caching;
@@ -59,7 +61,8 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
         string tempPath = Path.Combine(_tempDirectory, $"{Guid.NewGuid()}.zip2vd.chunked");
 
         CacheFactoryResult<Stream>? result = null;
-        bool extractionOwnsResult = false;
+        ChunkedFileEntry? entry = null;
+        bool extractionStarted = false;
 
         try
         {
@@ -72,7 +75,9 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
                 sizeBytes / (1024.0 * 1024.0),
                 _chunkSizeBytes / (1024.0 * 1024.0));
 
-            // Create sparse file sized to full uncompressed size
+            // Create sparse file sized to full uncompressed size.
+            // Must explicitly set the NTFS sparse attribute via FSCTL_SET_SPARSE
+            // before calling SetLength, otherwise the OS pre-allocates the full size on disk.
             await using (FileStream createFs = new FileStream(
                 tempPath,
                 FileMode.Create,
@@ -82,11 +87,14 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
                 FileOptions.Asynchronous))
             {
                 if (sizeBytes > 0)
+                {
+                    SetSparseAttribute(createFs);
                     createFs.SetLength(sizeBytes);
+                }
             }
 
             // Create the chunk orchestrator
-            ChunkedFileEntry entry = new ChunkedFileEntry(tempPath, sizeBytes, _chunkSizeBytes);
+            entry = new ChunkedFileEntry(tempPath, sizeBytes, _chunkSizeBytes);
 
             if (entry.ChunkCount == 0)
             {
@@ -101,7 +109,7 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
             // The extraction task owns the decompressed stream and OnDisposed callback lifecycle.
             long startTimestamp = Stopwatch.GetTimestamp();
             CancellationToken extractionToken = entry.ExtractionCts.Token;
-            extractionOwnsResult = true; // ExtractAsync will dispose the stream in its finally block
+            extractionStarted = true; // ExtractAsync will dispose the stream in its finally block
 
             entry.ExtractionTask = Task.Run(async () =>
             {
@@ -128,25 +136,46 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
         }
         catch
         {
-            // Dispose factory result if the extraction task hasn't taken ownership
-            if (!extractionOwnsResult && result is not null)
+            if (extractionStarted && entry is not null)
             {
-                try { await result.DisposeAsync().ConfigureAwait(false); }
-                catch { /* best-effort cleanup */ }
-            }
-
-            // Clean up partial temp file on failure
-            try
-            {
-                if (File.Exists(tempPath))
+                // Extraction task is running — cancel it, wait for it to finish
+                // (which disposes the decompressed stream + ZipReader), then dispose the entry
+                // (which deletes the backing file and cancels pending chunk waiters).
+                try
                 {
-                    File.Delete(tempPath);
-                    _logger.LogDebug("Cleaned up partial temp file: {Path}", tempPath);
+                    entry.ExtractionCts.Cancel();
+                    await entry.ExtractionTask.ConfigureAwait(false);
+                }
+                catch { /* extraction task may have faulted or been cancelled */ }
+                finally
+                {
+                    entry.Dispose();
                 }
             }
-            catch (Exception cleanupEx)
+            else
             {
-                _logger.LogWarning(cleanupEx, "Failed to clean up partial temp file: {Path}", tempPath);
+                // Extraction not started — dispose factory result directly
+                if (result is not null)
+                {
+                    try { await result.DisposeAsync().ConfigureAwait(false); }
+                    catch { /* best-effort cleanup */ }
+                }
+
+                entry?.Dispose();
+
+                // Clean up partial temp file
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                        _logger.LogDebug("Cleaned up partial temp file: {Path}", tempPath);
+                    }
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogWarning(cleanupEx, "Failed to clean up partial temp file: {Path}", tempPath);
+                }
             }
 
             throw;
@@ -191,4 +220,47 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
             _logger.LogWarning(ex, "Failed to delete cache directory: {Path}", _tempDirectory);
         }
     }
+
+    /// <summary>
+    /// Sets the NTFS sparse attribute on a file via FSCTL_SET_SPARSE.
+    /// Without this, SetLength pre-allocates the full file size on disk.
+    /// Falls back silently on non-NTFS volumes (sparse not supported).
+    /// </summary>
+    private void SetSparseAttribute(FileStream fs)
+    {
+        try
+        {
+            int bytesReturned = 0;
+            bool success = DeviceIoControl(
+                fs.SafeFileHandle,
+                FSCTL_SET_SPARSE,
+                IntPtr.Zero, 0,
+                IntPtr.Zero, 0,
+                ref bytesReturned,
+                IntPtr.Zero);
+
+            if (!success)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                _logger.LogDebug(
+                    "FSCTL_SET_SPARSE failed (error {Error}) — file system may not support sparse files, falling back to regular file",
+                    error);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to set sparse attribute, falling back to regular file");
+        }
+    }
+
+    private const int FSCTL_SET_SPARSE = 0x000900C4;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        Microsoft.Win32.SafeHandles.SafeFileHandle hDevice,
+        int dwIoControlCode,
+        IntPtr lpInBuffer, int nInBufferSize,
+        IntPtr lpOutBuffer, int nOutBufferSize,
+        ref int lpBytesReturned,
+        IntPtr lpOverlapped);
 }
