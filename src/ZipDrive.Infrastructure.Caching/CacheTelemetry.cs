@@ -26,11 +26,29 @@ internal static class CacheTelemetry
     internal static readonly Counter<long> Evictions =
         Meter.CreateCounter<long>("cache.evictions", unit: "{eviction}", description: "Number of cache evictions");
 
+    // === Chunked Extraction Counters ===
+
+    internal static readonly Counter<long> ChunksExtracted =
+        Meter.CreateCounter<long>("cache.chunks.extracted",
+            unit: "{chunk}", description: "Number of chunks extracted");
+
+    internal static readonly Counter<long> ChunkWaits =
+        Meter.CreateCounter<long>("cache.chunks.waits",
+            unit: "{wait}", description: "Number of times a reader waited for chunk extraction");
+
     // === Histograms ===
 
     internal static readonly Histogram<double> MaterializationDuration =
         Meter.CreateHistogram<double>("cache.materialization.duration", unit: "ms",
             description: "Time to materialize a cache entry");
+
+    internal static readonly Histogram<double> ChunkExtractionDuration =
+        Meter.CreateHistogram<double>("cache.chunks.extraction_duration", unit: "ms",
+            description: "Time to extract a single chunk");
+
+    internal static readonly Histogram<double> ChunkWaitDuration =
+        Meter.CreateHistogram<double>("cache.chunks.wait_duration", unit: "ms",
+            description: "Time a reader waited for chunk extraction");
 
     // === Observable Gauges ===
     // These are registered per-instance via RegisterInstance/UnregisterInstance.

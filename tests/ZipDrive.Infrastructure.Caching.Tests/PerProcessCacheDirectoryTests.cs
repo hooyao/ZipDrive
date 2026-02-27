@@ -25,10 +25,11 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public void DiskStorageStrategy_CreatesProcessSubdirectory()
+    public void ChunkedDiskStorageStrategy_CreatesProcessSubdirectory()
     {
-        var strategy = new DiskStorageStrategy(
-            NullLogger<DiskStorageStrategy>.Instance,
+        var strategy = new ChunkedDiskStorageStrategy(
+            NullLogger<ChunkedDiskStorageStrategy>.Instance,
+            chunkSizeBytes: 1024 * 1024,
             _baseDir);
 
         string expected = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
@@ -36,12 +37,13 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public async Task DiskStorageStrategy_MaterializeAsync_StoresFilesInProcessSubdirectory()
+    public async Task ChunkedDiskStorageStrategy_MaterializeAsync_StoresFilesInProcessSubdirectory()
     {
         string expectedDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
 
-        var strategy = new DiskStorageStrategy(
-            NullLogger<DiskStorageStrategy>.Instance,
+        var strategy = new ChunkedDiskStorageStrategy(
+            NullLogger<ChunkedDiskStorageStrategy>.Instance,
+            chunkSizeBytes: 1024 * 1024,
             _baseDir);
 
         byte[] data = new byte[1024];
@@ -55,7 +57,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
             }),
             CancellationToken.None);
 
-        var files = Directory.GetFiles(expectedDir, "*.zip2vd.cache");
+        var files = Directory.GetFiles(expectedDir, "*.zip2vd.chunked");
         files.Should().HaveCount(1, "cache file should be stored in the process subdirectory");
 
         // Cleanup
@@ -63,16 +65,17 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public void DiskStorageStrategy_DeleteCacheDirectory_RemovesEntireDirectory()
+    public void ChunkedDiskStorageStrategy_DeleteCacheDirectory_RemovesEntireDirectory()
     {
         string expectedDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
 
-        var strategy = new DiskStorageStrategy(
-            NullLogger<DiskStorageStrategy>.Instance,
+        var strategy = new ChunkedDiskStorageStrategy(
+            NullLogger<ChunkedDiskStorageStrategy>.Instance,
+            chunkSizeBytes: 1024 * 1024,
             _baseDir);
 
         // Create a dummy file in the directory to simulate cache content
-        File.WriteAllText(Path.Combine(expectedDir, "dummy.zip2vd.cache"), "test");
+        File.WriteAllText(Path.Combine(expectedDir, "dummy.zip2vd.chunked"), "test");
         Directory.Exists(expectedDir).Should().BeTrue();
 
         strategy.DeleteCacheDirectory();
@@ -131,10 +134,11 @@ public class PerProcessCacheDirectoryTests : IDisposable
     }
 
     [Fact]
-    public void DiskStorageStrategy_NullTempDirectory_CreatesSubdirectoryUnderSystemTemp()
+    public void ChunkedDiskStorageStrategy_NullTempDirectory_CreatesSubdirectoryUnderSystemTemp()
     {
-        var strategy = new DiskStorageStrategy(
-            NullLogger<DiskStorageStrategy>.Instance,
+        var strategy = new ChunkedDiskStorageStrategy(
+            NullLogger<ChunkedDiskStorageStrategy>.Instance,
+            chunkSizeBytes: 1024 * 1024,
             tempDirectory: null);
 
         string expected = Path.Combine(Path.GetTempPath(), $"ZipDrive-{_pid}");

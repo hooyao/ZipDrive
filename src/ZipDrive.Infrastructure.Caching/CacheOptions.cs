@@ -99,6 +99,22 @@ public class CacheOptions
     public TimeSpan DefaultTtl => TimeSpan.FromMinutes(DefaultTtlMinutes);
 
     /// <summary>
+    /// Gets or sets the chunk size in megabytes for incremental disk-tier extraction.
+    /// Tradeoff: smaller = lower first-byte latency, more TCS overhead.
+    /// Default: 10 MB.
+    /// </summary>
+    /// <remarks>
+    /// At 10 MB chunk size, a 5 GB file produces 500 chunks with ~40 KB of TCS overhead.
+    /// First-byte latency is approximately ChunkSizeMb / 200 seconds at ~200 MB/s decompression speed.
+    /// </remarks>
+    public int ChunkSizeMb { get; set; } = 10;
+
+    /// <summary>
+    /// Gets the chunk size in bytes (computed property).
+    /// </summary>
+    internal int ChunkSizeBytes => ChunkSizeMb * 1024 * 1024;
+
+    /// <summary>
     /// Gets the eviction check interval as a TimeSpan (computed property).
     /// </summary>
     public TimeSpan EvictionCheckInterval => TimeSpan.FromSeconds(EvictionCheckIntervalSeconds);

@@ -51,6 +51,10 @@
     // Size threshold in MB that routes files to memory (< cutoff) or disk (>= cutoff).
     "SmallFileCutoffMb": 50,
 
+    // Chunk size in MB for incremental disk-tier extraction. Smaller = faster first-byte
+    // but more signaling overhead. 10 MB gives ~50ms first-byte at ~200 MB/s decompression.
+    "ChunkSizeMb": 10,
+
     // Directory for disk-tier temp files. null = system temp directory.
     "TempDirectory": null,
 

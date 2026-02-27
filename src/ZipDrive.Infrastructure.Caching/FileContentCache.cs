@@ -16,7 +16,7 @@ public sealed class FileContentCache : IFileContentCache
 {
     private readonly GenericCache<Stream> _memoryCache;
     private readonly GenericCache<Stream> _diskCache;
-    private readonly DiskStorageStrategy _diskStorageStrategy;
+    private readonly ChunkedDiskStorageStrategy _diskStorageStrategy;
     private readonly IZipReaderFactory _zipReaderFactory;
     private readonly long _cutoffBytes;
     private readonly TimeSpan _defaultTtl;
@@ -49,8 +49,9 @@ public sealed class FileContentCache : IFileContentCache
             loggerFactory.CreateLogger<GenericCache<Stream>>(),
             name: "memory");
 
-        _diskStorageStrategy = new DiskStorageStrategy(
-            loggerFactory.CreateLogger<DiskStorageStrategy>(),
+        _diskStorageStrategy = new ChunkedDiskStorageStrategy(
+            loggerFactory.CreateLogger<ChunkedDiskStorageStrategy>(),
+            opts.ChunkSizeBytes,
             opts.TempDirectory);
 
         _diskCache = new GenericCache<Stream>(
@@ -62,8 +63,8 @@ public sealed class FileContentCache : IFileContentCache
             name: "disk");
 
         _logger.LogInformation(
-            "FileContentCache initialized: memory={MemoryMb}MB, disk={DiskMb}MB, cutoff={CutoffMb}MB",
-            opts.MemoryCacheSizeMb, opts.DiskCacheSizeMb, opts.SmallFileCutoffMb);
+            "FileContentCache initialized: memory={MemoryMb}MB, disk={DiskMb}MB, cutoff={CutoffMb}MB, chunkSize={ChunkMb}MB",
+            opts.MemoryCacheSizeMb, opts.DiskCacheSizeMb, opts.SmallFileCutoffMb, opts.ChunkSizeMb);
     }
 
     /// <inheritdoc />
