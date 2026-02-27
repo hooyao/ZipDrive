@@ -7,7 +7,7 @@ namespace ZipDrive.Infrastructure.Caching;
 public sealed class StoredEntry
 {
     /// <summary>
-    /// Internal data (byte[], DiskCacheEntry, or T object).
+    /// Internal data (byte[], ChunkedFileEntry, or T object).
     /// </summary>
     internal object Data { get; }
 

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Time.Testing;
 namespace ZipDrive.Infrastructure.Caching.Tests;
 
 /// <summary>
-/// Integration tests for GenericCache with MemoryStorageStrategy and DiskStorageStrategy.
+/// Integration tests for GenericCache with MemoryStorageStrategy and ChunkedDiskStorageStrategy.
 /// Tests the borrow/return pattern, reference counting, eviction, and actual data caching.
 /// </summary>
 public class GenericCacheIntegrationTests : IDisposable
@@ -353,7 +353,7 @@ public class GenericCacheIntegrationTests : IDisposable
 
     #endregion
 
-    #region DiskStorageStrategy Tests
+    #region ChunkedDiskStorageStrategy Tests
 
     /// <summary>
     /// Verifies that DiskStorageStrategy creates a memory-mapped file on disk for cached data.
@@ -395,7 +395,7 @@ public class GenericCacheIntegrationTests : IDisposable
             cache.EntryCount.Should().Be(1);
 
             // Verify temp file was created
-            string[] tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories);
+            string[] tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories);
             tempFiles.Should().HaveCount(1);
         }
         finally
@@ -495,7 +495,7 @@ public class GenericCacheIntegrationTests : IDisposable
             cache.HitRate.Should().Be(0.5);
 
             // Should still have only 1 temp file
-            string[] tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories);
+            string[] tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories);
             tempFiles.Should().HaveCount(1);
         }
         finally
@@ -532,7 +532,7 @@ public class GenericCacheIntegrationTests : IDisposable
             {
             }
 
-            Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Should().HaveCount(1);
+            Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Should().HaveCount(1);
 
             // Add second entry that fits
             using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
@@ -547,7 +547,7 @@ public class GenericCacheIntegrationTests : IDisposable
             {
             }
 
-            Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Should().HaveCount(2);
+            Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Should().HaveCount(2);
 
             // Add third entry - should trigger eviction
             using (ICacheHandle<Stream> handle = await cache.BorrowAsync(
@@ -1099,7 +1099,7 @@ public class GenericCacheIntegrationTests : IDisposable
             successCount.Should().Be(100, "All threads should get correct data");
 
             // Only one temp file should exist
-            Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Should().HaveCount(1);
+            Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Should().HaveCount(1);
         }
         finally
         {
@@ -1397,7 +1397,7 @@ public class GenericCacheIntegrationTests : IDisposable
             cache.BorrowedEntryCount.Should().Be(0);
 
             // Only one temp file should exist
-            Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Should().HaveCount(1);
+            Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Should().HaveCount(1);
         }
         finally
         {
@@ -1769,7 +1769,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 "All reads must return correct data");
 
             // Should have only 1 temp file at any time
-            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Length;
+            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
             tempFileCount.Should().BeLessThanOrEqualTo(1,
                 "Temp files should be cleaned up after eviction");
 
@@ -1953,7 +1953,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 "All concurrent disk reads must return correct data");
 
             // Verify no temp file leak
-            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Length;
+            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
             tempFileCount.Should().BeLessThanOrEqualTo(cacheCapacity,
                 "Should not leak temp files");
         }
@@ -2100,7 +2100,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 using (await AccessKey("disk-evict-A")) { }
 
                 // Verify temp file count
-                int tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Length;
+                int tempFiles = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
                 tempFiles.Should().BeLessThanOrEqualTo(3,
                     "Should not accumulate excess temp files");
             }
@@ -2459,7 +2459,7 @@ public class GenericCacheIntegrationTests : IDisposable
                 "Size should not exceed capacity");
 
             // Temp file count should match entry count
-            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.cache", SearchOption.AllDirectories).Length;
+            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
             tempFileCount.Should().Be(entryCount,
                 "Temp file count should match entry count");
         }
@@ -2789,7 +2789,10 @@ public class GenericCacheIntegrationTests : IDisposable
     private GenericCache<Stream> CreateDiskCache(long capacityBytes)
     {
         return new GenericCache<Stream>(
-            new DiskStorageStrategy(NullLogger<DiskStorageStrategy>.Instance, _tempDir),
+            new ChunkedDiskStorageStrategy(
+                NullLogger<ChunkedDiskStorageStrategy>.Instance,
+                chunkSizeBytes: 1024 * 1024, // 1MB chunks for tests
+                _tempDir),
             new LruEvictionPolicy(),
             capacityBytes,
             _fakeTime,

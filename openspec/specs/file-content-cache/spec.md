@@ -135,11 +135,14 @@ The cache SHALL use `IStorageStrategy<T>` to abstract storage and retrieval. Dif
 - **AND** retrieval returns a seekable `MemoryStream`
 - **AND** cleanup is GC-based (no async cleanup required)
 
-#### Scenario: Disk storage strategy
+#### Scenario: Chunked disk storage strategy
 
-- **WHEN** using `DiskStorageStrategy`
-- **THEN** data is stored as a `MemoryMappedFile` backed by a temp file
-- **AND** retrieval returns a seekable `MemoryMappedViewStream`
+- **WHEN** using `ChunkedDiskStorageStrategy`
+- **THEN** data is extracted incrementally in fixed-size chunks to an NTFS sparse file
+- **AND** `MaterializeAsync` SHALL return after the first chunk is extracted
+- **AND** a background task SHALL continue extracting remaining chunks
+- **AND** retrieval returns a `ChunkedStream` that blocks on unextracted regions
+- **AND** cleanup cancels the background extraction and deletes the sparse file
 - **AND** cleanup requires async file deletion
 
 #### Scenario: Object storage strategy
@@ -324,7 +327,7 @@ The disk storage strategy SHALL always create a per-process subdirectory under t
 
 #### Scenario: Process subdirectory created on startup
 
-- **WHEN** `DiskStorageStrategy` is constructed
+- **WHEN** `ChunkedDiskStorageStrategy` is constructed
 - **THEN** a directory named `ZipDrive-{pid}` is created under the base temp directory
 - **AND** all subsequent cache files are stored inside this subdirectory
 - **AND** the directory is created if it does not already exist
@@ -337,9 +340,9 @@ The disk storage strategy SHALL always create a per-process subdirectory under t
 
 #### Scenario: Cache files stored in process subdirectory
 
-- **WHEN** `StoreAsync` creates a new cache file
-- **THEN** the file path is `{baseDir}/ZipDrive-{pid}/{guid}.zip2vd.cache`
-- **AND** the file is accessible via memory-mapped file as before
+- **WHEN** `MaterializeAsync` creates a new cache file
+- **THEN** the file path is `{baseDir}/ZipDrive-{pid}/{guid}.zip2vd.chunked`
+- **AND** the file is an NTFS sparse file sized to the full `UncompressedSize`
 
 ---
 
