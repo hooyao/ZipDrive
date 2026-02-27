@@ -334,6 +334,13 @@ public static class TestZipGenerator
             long size = rng.Next(5 * 1024 * 1024, 6 * 1024 * 1024);
             files.Add(($"large/medium{i:D2}.bin", size));
         }
+        // 2 large files (6-8MB) → disk tier, multiple chunks at 1MB chunk size
+        // These files exercise chunked extraction with concurrent readers
+        for (int i = 0; i < 2; i++)
+        {
+            long size = rng.Next(6 * 1024 * 1024, 8 * 1024 * 1024);
+            files.Add(($"large/chunked{i:D2}.bin", size));
+        }
         return files;
     }
 

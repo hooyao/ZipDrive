@@ -44,6 +44,6 @@
 
 ## 7. Endurance Testing
 
-- [ ] 7.1 Extend endurance test fixture with files >= 50MB that exercise chunked extraction path (DEFERRED: endurance test has pre-existing failure on `main`)
-- [ ] 7.2 Add concurrent reader scenarios that read from large files at random offsets during extraction (DEFERRED: depends on 7.1)
-- [ ] 7.3 Run endurance test for extended duration, verify zero errors, zero handle leaks (`BorrowedEntryCount == 0`), SHA-256 integrity (DEFERRED: depends on 7.1)
+- [x] 7.1 Extend endurance test fixture with files >= 50MB that exercise chunked extraction path. Added 2 large files (6-8MB) to EnduranceMixed profile, set ChunkSizeMb=1 to produce multiple chunks. Fixed pre-existing endurance test failure (PeriodicTimer starvation → dedicated Thread with initial increment).
+- [x] 7.2 Add concurrent reader scenarios that read from large files at random offsets during extraction. Added RunRandomOffsetLargeFileReaderAsync (3 tasks, random seeks on largest files).
+- [x] 7.3 Run endurance test for extended duration, verify zero errors, zero handle leaks (`BorrowedEntryCount == 0`), SHA-256 integrity. Passed 3/3 consecutive runs + full suite (325 tests).

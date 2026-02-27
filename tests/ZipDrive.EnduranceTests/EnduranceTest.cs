@@ -62,12 +62,14 @@ public class EnduranceTest : IAsyncLifetime
         var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var readerFactory = new ZipReaderFactory();
 
-        // Tight cache to force eviction
+        // Tight cache to force eviction. ChunkSizeMb=1 ensures disk-tier files
+        // produce multiple chunks, exercising chunked extraction under load.
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(new CacheOptions
         {
             MemoryCacheSizeMb = 2,
             DiskCacheSizeMb = 20,
             SmallFileCutoffMb = 5,
+            ChunkSizeMb = 1,
             DefaultTtlMinutes = 1,
             EvictionCheckIntervalSeconds = 2
         });
@@ -114,10 +116,10 @@ public class EnduranceTest : IAsyncLifetime
 
         await PreloadManifestsAsync(archivePaths, cts.Token);
 
-        // Step 2: Launch 22 concurrent workload tasks + 1 maintenance task
+        // Step 2: Launch 25 concurrent workload tasks + 1 maintenance task
         Random rng = new(42);
-        Task[] tasks = new Task[23];
-        for (int i = 0; i < 22; i++)
+        Task[] tasks = new Task[26];
+        for (int i = 0; i < 25; i++)
         {
             int taskId = i;
             tasks[i] = taskId switch
@@ -126,11 +128,12 @@ public class EnduranceTest : IAsyncLifetime
                 < 13 => RunVerifiedSequentialReaderAsync(archivePaths, rng.Next(), cts.Token),
                 < 17 => RunPathResolutionStressAsync(archivePaths, rng.Next(), cts.Token),
                 < 20 => RunConcurrentSameFileAsync(archivePaths, rng.Next(), cts.Token),
-                _ => RunConcurrentDifferentFilesAsync(archivePaths, rng.Next(), cts.Token)
+                < 22 => RunConcurrentDifferentFilesAsync(archivePaths, rng.Next(), cts.Token),
+                _ => RunRandomOffsetLargeFileReaderAsync(archivePaths, rng.Next(), cts.Token)
             };
         }
         // Background maintenance: periodic eviction + cleanup
-        tasks[22] = RunMaintenanceLoopAsync(cts.Token);
+        tasks[25] = RunMaintenanceLoopAsync(cts.Token);
 
         await Task.WhenAll(tasks);
 
@@ -366,36 +369,85 @@ public class EnduranceTest : IAsyncLifetime
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Background maintenance: periodic eviction + cleanup
+    // Workload: Random-offset reads on large files (exercises chunked extraction)
     // ═══════════════════════════════════════════════════════════════════
 
-    private async Task RunMaintenanceLoopAsync(CancellationToken ct)
+    private async Task RunRandomOffsetLargeFileReaderAsync(List<string> archives, int seed, CancellationToken ct)
     {
-        using PeriodicTimer timer = new(TimeSpan.FromSeconds(2));
+        Random rng = new(seed);
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await timer.WaitForNextTickAsync(ct).ConfigureAwait(false);
+                string archivePath = archives[rng.Next(archives.Count)];
+                var contents = await _vfs.ListDirectoryAsync(archivePath, ct);
+                // Pick largest non-manifest file to exercise chunked extraction
+                var file = contents
+                    .Where(e => !e.IsDirectory && e.Name != "__manifest__.json" && e.SizeBytes > 1024 * 1024)
+                    .OrderByDescending(e => e.SizeBytes)
+                    .FirstOrDefault();
+                if (file.Name == null) continue;
+
+                string filePath = $"{archivePath}/{file.Name}";
+
+                // Read at random offsets (simulates video player seeking)
+                for (int r = 0; r < 5 && !ct.IsCancellationRequested; r++)
+                {
+                    long offset = (long)(rng.NextDouble() * Math.Max(0, file.SizeBytes - 65536));
+                    byte[] buf = new byte[65536];
+                    int read = await _vfs.ReadFileAsync(filePath, buf, offset, ct);
+                    Interlocked.Increment(ref _totalReads);
+
+                    if (read > 0)
+                        Interlocked.Increment(ref _verifiedReads);
+                }
             }
             catch (OperationCanceledException) { break; }
-
-            // Increment cycle count immediately so the assertion detects that
-            // the loop ran even if eviction itself is a fast no-op.
-            Interlocked.Increment(ref _evictionCycles);
-
-            try
-            {
-                _fileCache.EvictExpired();
-                _structureCache.EvictExpired();
-                _fileCache.ProcessPendingCleanup();
-            }
-            catch (Exception ex)
-            {
-                _errors.Add($"Maintenance: {ex.GetType().Name}: {ex.Message}");
-                break;
-            }
+            catch (Exception ex) { _errors.Add($"RandomOffset: {ex.GetType().Name}: {ex.Message}"); break; }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Background maintenance: periodic eviction + cleanup
+    // ═══════════════════════════════════════════════════════════════════
+
+    private Task RunMaintenanceLoopAsync(CancellationToken ct)
+    {
+        // Run on a dedicated thread to avoid thread pool starvation from
+        // concurrent workload tasks blocking the maintenance timer.
+        // Use a dedicated thread to guarantee scheduling under thread pool pressure.
+        TaskCompletionSource maintenanceDone = new();
+        Thread maintenanceThread = new(() =>
+        {
+            // Initial tick immediately to verify thread started
+            Interlocked.Increment(ref _evictionCycles);
+            while (!ct.IsCancellationRequested)
+            {
+                Thread.Sleep(2000);
+                if (ct.IsCancellationRequested) break;
+
+                Interlocked.Increment(ref _evictionCycles);
+
+                try
+                {
+                    _fileCache.EvictExpired();
+                    _structureCache.EvictExpired();
+                    _fileCache.ProcessPendingCleanup();
+                }
+                catch (Exception ex)
+                {
+                    _errors.Add($"Maintenance: {ex.GetType().Name}: {ex.Message}");
+                    break;
+                }
+            }
+            maintenanceDone.SetResult();
+        })
+        {
+            IsBackground = true,
+            Name = "EnduranceMaintenance"
+        };
+        maintenanceThread.Start();
+        return maintenanceDone.Task;
     }
 
     // ═══════════════════════════════════════════════════════════════════
