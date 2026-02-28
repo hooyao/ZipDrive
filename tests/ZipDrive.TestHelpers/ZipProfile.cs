@@ -34,5 +34,11 @@ public enum ZipProfile
     /// 15 small files (100KB-4MB) + 3 medium files (5-6MB).
     /// Designed for endurance tests with SmallFileCutoffMb=5 to exercise both cache tiers.
     /// </summary>
-    EnduranceMixed
+    EnduranceMixed,
+
+    /// <summary>
+    /// Files sized for SmallFileCutoffMb=1: small (10KB-900KB) for memory tier,
+    /// large (1MB-50MB) for disk tier. Used by the full 24-hour endurance test.
+    /// </summary>
+    EnduranceFull
 }

@@ -11,6 +11,9 @@ public sealed class ZipManifest
     [JsonPropertyName("entries")]
     public List<ManifestEntry> Entries { get; set; } = new();
 
+    [JsonPropertyName("partialSamples")]
+    public List<PartialSample> PartialSamples { get; set; } = new();
+
     [JsonPropertyName("profile")]
     public string Profile { get; set; } = "";
 
@@ -37,4 +40,23 @@ public sealed class ManifestEntry
 
     [JsonPropertyName("compressionMethod")]
     public string CompressionMethod { get; set; } = "Deflate";
+}
+
+/// <summary>
+/// Pre-computed SHA-256 checksum for a byte range within a file.
+/// Used by endurance tests to verify partial/random-offset reads.
+/// </summary>
+public sealed class PartialSample
+{
+    [JsonPropertyName("fileName")]
+    public string FileName { get; set; } = "";
+
+    [JsonPropertyName("offset")]
+    public long Offset { get; set; }
+
+    [JsonPropertyName("length")]
+    public int Length { get; set; }
+
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; set; } = "";
 }

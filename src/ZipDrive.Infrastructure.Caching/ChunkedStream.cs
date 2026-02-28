@@ -18,12 +18,18 @@ internal sealed class ChunkedStream : Stream
     public ChunkedStream(ChunkedFileEntry entry)
     {
         _entry = entry ?? throw new ArgumentNullException(nameof(entry));
+        // bufferSize: 1 disables internal FileStream buffering. This is CRITICAL
+        // because ChunkedStream reads from a sparse file that is being written
+        // incrementally by a background extraction task. With a larger buffer,
+        // FileStream may cache zeros from unwritten sparse regions when a read
+        // spans a chunk boundary, then serve stale zeros after the chunk is written.
+        // Each ReadAsync goes directly to the OS, which always returns current data.
         _readStream = new FileStream(
             entry.BackingFilePath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite,
-            bufferSize: 81920,
+            bufferSize: 1,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
     }
 
