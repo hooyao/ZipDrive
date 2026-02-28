@@ -499,21 +499,25 @@ This solution uses **Central Package Management**. All package versions are defi
 5. Use `dotnet-counters monitor --counters ZipDrive.Caching` for quick CLI metrics
 6. Use deterministic tests with `FakeTimeProvider` to reproduce timing issues
 
-### Addressing GitHub Copilot PR Review Comments
+### PR Merge Flow
 
-After creating a PR, GitHub Copilot may leave review comments. Follow this workflow:
+When creating and merging a PR, follow this complete flow:
 
-1. **Check comments**: `gh api repos/{owner}/{repo}/pulls/{pr}/comments` or use `pull_request_read` with `get_review_comments`
-2. **Analyze each comment**: Determine if the feedback is valid and actionable
-3. **Fix valid issues**: Make code changes, add tests, commit and push to the PR branch
-4. **Reply to each comment**: Use `gh api repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body="..."` to explain what was done (or why a comment was declined)
-5. **Resolve conversations**: Query thread IDs via GraphQL, then resolve each with `resolveReviewThread` mutation:
+1. **Create branch and commit**: `git checkout -b feat/<name>`, stage changes, commit
+2. **Push and create PR**: `git push -u origin feat/<name>`, then `gh pr create --title "..." --body "..."`
+3. **Wait for CI**: Poll with `gh run list --branch feat/<name>` until the CI workflow succeeds
+4. **Wait for Copilot review**: Poll `gh api repos/{owner}/{repo}/pulls/{pr}/comments` until comments appear (~2-3 minutes)
+5. **Fix review comments**: Make code changes, commit and push to the PR branch
+6. **Reply to each comment**: `gh api repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body="Fixed in {commit}. {description}"`
+7. **Resolve conversations**: Query thread IDs via GraphQL, then resolve each:
    ```bash
    # Get thread IDs
    gh api graphql -f query='{ repository(owner: "...", name: "...") { pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved } } } } }'
    # Resolve a thread
    gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
    ```
+8. **Merge**: `gh pr merge {number} --squash --delete-branch --admin`
+9. **Update local**: The merge command auto-fetches and fast-forwards local main
 
 ## Important Architectural Decisions
 
