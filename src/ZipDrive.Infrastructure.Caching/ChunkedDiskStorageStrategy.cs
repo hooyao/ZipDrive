@@ -50,7 +50,7 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
             _logger.LogInformation("Created cache directory: {Path}", _tempDirectory);
         }
 
-        CheckFileSystemSparseSupport(baseDir);
+        CheckFileSystemSparseSupport(_tempDirectory);
     }
 
     /// <inheritdoc />
@@ -304,11 +304,11 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool GetVolumeInformation(
         string rootPathName,
-        char[] volumeNameBuffer, int volumeNameSize,
+        [Out] char[] volumeNameBuffer, int volumeNameSize,
         out uint volumeSerialNumber,
         out uint maximumComponentLength,
         out FileSystemFlags fileSystemFlags,
-        char[] fileSystemNameBuffer, int fileSystemNameSize);
+        [Out] char[] fileSystemNameBuffer, int fileSystemNameSize);
 
     /// <summary>
     /// Ensures the backing file supports sparse allocation so that SetLength does not
