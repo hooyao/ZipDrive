@@ -517,7 +517,7 @@ When creating and merging a PR, follow this complete flow:
    gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
    ```
 8. **Merge**: `gh pr merge {number} --squash --delete-branch --admin`
-9. **Update local**: The merge command auto-fetches and fast-forwards local main
+9. **Update local main**: `git checkout main && git pull --ff-only origin main`
 
 ## Important Architectural Decisions
 

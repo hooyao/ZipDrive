@@ -1952,17 +1952,17 @@ public class GenericCacheIntegrationTests : IDisposable
             verificationResults.Should().AllSatisfy(v => v.Should().BeTrue(),
                 "All concurrent disk reads must return correct data");
 
-            // Verify no temp file leak.
-            // Allow cacheCapacity + 1 because ChunkedDiskStorageStrategy uses async cleanup:
-            // an evicted entry's backing file may still be pending deletion while
-            // a replacement entry has already created a new file.
-            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
-            tempFileCount.Should().BeLessThanOrEqualTo(cacheCapacity + 1,
-                "Should not leak temp files (capacity + 1 allowed for async cleanup)");
+            // Verify no temp file leak after full cleanup.
+            // ClearAsync forcibly removes all entries and deletes backing files,
+            // so the count should be zero after cleanup completes.
         }
         finally
         {
             await cache.ClearAsync();
+            cache.ProcessPendingCleanup();
+
+            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
+            tempFileCount.Should().Be(0, "all temp files should be deleted after ClearAsync + ProcessPendingCleanup");
         }
     }
 
