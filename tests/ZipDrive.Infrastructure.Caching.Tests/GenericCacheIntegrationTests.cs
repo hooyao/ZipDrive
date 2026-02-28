@@ -1952,14 +1952,17 @@ public class GenericCacheIntegrationTests : IDisposable
             verificationResults.Should().AllSatisfy(v => v.Should().BeTrue(),
                 "All concurrent disk reads must return correct data");
 
-            // Verify no temp file leak
-            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
-            tempFileCount.Should().BeLessThanOrEqualTo(cacheCapacity,
-                "Should not leak temp files");
+            // Verify no temp file leak after full cleanup.
+            // ClearAsync forcibly removes all entries and deletes backing files,
+            // so the count should be zero after cleanup completes.
         }
         finally
         {
             await cache.ClearAsync();
+            cache.ProcessPendingCleanup();
+
+            int tempFileCount = Directory.GetFiles(_tempDir, "*.zip2vd.chunked", SearchOption.AllDirectories).Length;
+            tempFileCount.Should().Be(0, "all temp files should be deleted after ClearAsync + ProcessPendingCleanup");
         }
     }
 
