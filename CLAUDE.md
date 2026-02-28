@@ -33,6 +33,14 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 - **Package Management**: NuGet Central Package Management (`Directory.Packages.props` at repo root)
 - **Key Libraries**: `System.IO.MemoryMappedFiles`, `System.Threading.Channels`, `System.Collections.Concurrent`, `System.Diagnostics.Metrics`, `OpenTelemetry`, `UTF.Unknown`
 
+## Cross-Platform Considerations
+
+ZipDrive's CLI and DokanNet adapter are **Windows-only**, but the underlying infrastructure libraries (`ZipDrive.Infrastructure.Caching`, `ZipDrive.Infrastructure.Archives.Zip`, `ZipDrive.Domain`, `ZipDrive.Application`) are designed to be **cross-platform**. Key platform-specific handling:
+
+- **Sparse file creation** (`ChunkedDiskStorageStrategy.SetSparseAttribute`): On Windows/NTFS, must explicitly call `FSCTL_SET_SPARSE` via `DeviceIoControl` P/Invoke before `SetLength`, otherwise the OS pre-allocates the full file size. On Linux (ext4/btrfs/xfs), `SetLength` creates sparse files by default — no ioctl needed. The method uses `OperatingSystem.IsWindows()` to branch.
+- **File sharing** (`FileShare.Read` / `FileShare.ReadWrite`): Used by `ChunkedFileEntry` (writer) and `ChunkedStream` (readers) for concurrent access to the backing sparse file. Works on both Windows and Linux.
+- **Any new platform-specific code** should follow this pattern: guard with `OperatingSystem.IsWindows()` / `OperatingSystem.IsLinux()`, provide fallback behavior, and log at Debug level when a platform feature is unavailable.
+
 ## Prerequisites
 
 - **Windows x64 only** - Uses DokanNet which is Windows-specific
