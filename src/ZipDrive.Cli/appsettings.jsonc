@@ -4,7 +4,7 @@
   // Valid levels: Verbose, Debug, Information, Warning, Error, Fatal
   "Serilog": {
     "MinimumLevel": {
-      "Default": "Information",
+      "Default": "Warning",
       "Override": {
         "Microsoft": "Warning"
       }

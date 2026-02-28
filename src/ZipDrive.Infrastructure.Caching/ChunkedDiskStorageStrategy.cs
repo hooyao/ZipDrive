@@ -49,6 +49,8 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
             Directory.CreateDirectory(_tempDirectory);
             _logger.LogInformation("Created cache directory: {Path}", _tempDirectory);
         }
+
+        CheckFileSystemSparseSupport(_tempDirectory);
     }
 
     /// <inheritdoc />
@@ -222,12 +224,114 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
     }
 
     /// <summary>
-    /// Sets the NTFS sparse attribute on a file via FSCTL_SET_SPARSE.
-    /// Without this, SetLength pre-allocates the full file size on disk.
-    /// Falls back silently on non-NTFS volumes (sparse not supported).
+    /// Checks whether the file system at the cache directory supports sparse files.
+    /// Logs a warning at startup if it does not (e.g., FAT32, exFAT).
+    /// </summary>
+    private void CheckFileSystemSparseSupport(string basePath)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                CheckFileSystemSparseSupportWindows(basePath);
+            }
+            else
+            {
+                // Linux/macOS: ext4, btrfs, xfs, APFS all support sparse files by default.
+                // No reliable cross-platform API to detect file system type, and the
+                // uncommon file systems that don't support sparse (e.g., FAT on removable)
+                // are rare for cache directories. Skip the check.
+                _logger.LogDebug("Sparse file support check skipped on non-Windows platform");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to check file system sparse support");
+        }
+    }
+
+    private void CheckFileSystemSparseSupportWindows(string basePath)
+    {
+        // Resolve to a drive root (e.g., "C:\") for GetVolumeInformation
+        string? root = Path.GetPathRoot(Path.GetFullPath(basePath));
+        if (string.IsNullOrEmpty(root))
+            return;
+
+        const int maxNameLength = 261;
+        char[] volumeName = new char[maxNameLength];
+        char[] fileSystemName = new char[maxNameLength];
+
+        bool ok = GetVolumeInformation(
+            root,
+            volumeName, maxNameLength,
+            out _, out _,
+            out FileSystemFlags flags,
+            fileSystemName, maxNameLength);
+
+        if (!ok)
+        {
+            _logger.LogDebug(
+                "GetVolumeInformation failed for {Root} (error {Error})",
+                root, Marshal.GetLastPInvokeError());
+            return;
+        }
+
+        string fsName = new string(fileSystemName).TrimEnd('\0');
+        bool supportsSparse = (flags & FileSystemFlags.SupportsSparseFiles) != 0;
+
+        if (supportsSparse)
+        {
+            _logger.LogDebug(
+                "Cache directory file system: {FileSystem} on {Root} — sparse files supported",
+                fsName, root);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Cache directory is on {FileSystem} ({Root}) which does NOT support sparse files. " +
+                "Large cached files will pre-allocate their full size on disk, consuming significant space. " +
+                "For optimal performance, set Cache:TempDirectory to a path on an NTFS or ReFS volume.",
+                fsName, root);
+        }
+    }
+
+    [Flags]
+    private enum FileSystemFlags : uint
+    {
+        SupportsSparseFiles = 0x00000040,
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetVolumeInformation(
+        string rootPathName,
+        [Out] char[] volumeNameBuffer, int volumeNameSize,
+        out uint volumeSerialNumber,
+        out uint maximumComponentLength,
+        out FileSystemFlags fileSystemFlags,
+        [Out] char[] fileSystemNameBuffer, int fileSystemNameSize);
+
+    /// <summary>
+    /// Ensures the backing file supports sparse allocation so that SetLength does not
+    /// pre-allocate the full file size on disk.
+    /// <para>
+    /// <strong>Windows (NTFS)</strong>: Calls FSCTL_SET_SPARSE via DeviceIoControl.
+    /// Without this, SetLength physically allocates the entire file.
+    /// </para>
+    /// <para>
+    /// <strong>Linux (ext4/btrfs/xfs)</strong>: Files are sparse by default — SetLength
+    /// creates a sparse file without physical allocation. No ioctl needed.
+    /// </para>
+    /// Falls back silently on unsupported platforms or file systems.
     /// </summary>
     private void SetSparseAttribute(FileStream fs)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Linux/macOS: files created with SetLength are sparse by default
+            // on ext4, btrfs, xfs, APFS. No explicit action needed.
+            return;
+        }
+
         try
         {
             int bytesReturned = 0;
