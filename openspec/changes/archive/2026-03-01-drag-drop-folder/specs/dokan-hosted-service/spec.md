@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Mount on startup
 
@@ -29,31 +29,3 @@
 - **THEN** the service SHALL print an error message including the invalid path to the console
 - **AND** the service SHALL print "Press any key to exit..." and call `Console.ReadKey()` before stopping
 - **AND** the host SHALL be stopped
-
----
-
-### Requirement: Clean unmount on shutdown
-
-The service SHALL cleanly unmount the drive when the application is stopped (Ctrl+C or host shutdown).
-
-#### Scenario: Ctrl+C triggers unmount
-
-- **WHEN** `StopAsync` is called (via Ctrl+C or host stop)
-- **THEN** `Dokan.RemoveMountPoint` is called with the configured mount point
-- **AND** `IVirtualFileSystem.UnmountAsync` is called to clear caches
-
----
-
-### Requirement: Configuration binding
-
-The service SHALL read mount configuration from `IOptions<MountOptions>` bound from the `Mount` section of `appsettings.json`.
-
-#### Scenario: Configuration from appsettings.json
-
-- **WHEN** appsettings.json contains `{ "Mount": { "MountPoint": "R:\\", "ArchiveDirectory": "D:\\Archives" } }`
-- **THEN** the service mounts at `R:\` with archives from `D:\Archives`
-
-#### Scenario: Command-line override
-
-- **WHEN** the app is run with `Mount:MountPoint=Z:\`
-- **THEN** the mount point is `Z:\` regardless of appsettings.json value

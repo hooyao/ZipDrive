@@ -16,6 +16,7 @@ using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Cli;
 using ZipDrive.Infrastructure.FileSystem;
 
 [assembly: SupportedOSPlatform("windows")]
@@ -37,7 +38,15 @@ Log.Logger = new LoggerConfiguration()
 
 Log.Information("ZipDrive {Version} starting", version);
 
+// Drag-and-drop support: when a folder is dragged onto ZipDrive.exe,
+// Windows passes the path as a bare positional arg. Rewrite it to
+// --Mount:ArchiveDirectory=<path> so the config pipeline picks it up.
+args = ArgPreprocessor.RewriteBareArgs(args);
+
 var builder = Host.CreateDefaultBuilder(args)
+    // Drag-and-drop sets CWD to the dragged folder, not the exe directory.
+    // Force content root to the exe's directory so config files are found.
+    .UseContentRoot(AppContext.BaseDirectory)
     .ConfigureAppConfiguration((_, config) =>
     {
         // Note: CreateDefaultBuilder auto-adds appsettings.json (optional: true).
@@ -45,6 +54,9 @@ var builder = Host.CreateDefaultBuilder(args)
         // We ship only appsettings.jsonc; no appsettings.json exists in output.
         config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
         config.AddJsonFile("appsettings.dev.jsonc", optional: true, reloadOnChange: false);
+        // Re-add command line so it wins over jsonc files (last source wins).
+        // Without this, appsettings.jsonc overrides the rewritten drag-and-drop args.
+        config.AddCommandLine(args);
     });
 
 builder.UseSerilog((context, config) =>
