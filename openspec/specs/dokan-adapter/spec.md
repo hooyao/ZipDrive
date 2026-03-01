@@ -4,11 +4,21 @@
 
 The `DokanFileSystemAdapter` SHALL implement `IDokanOperations2` and delegate all file system operations to `IVirtualFileSystem`.
 
-#### Scenario: ReadFile delegates to VFS
+#### Scenario: ReadFile delegates to VFS with pooled buffer
 
-- **WHEN** DokanNet calls `ReadFile` with a path, buffer, and offset
-- **THEN** the adapter converts `ReadOnlyNativeMemory<char>` to string, calls `VFS.ReadFileAsync`, writes the result into `NativeMemory<byte>.Span`, and sets `bytesRead`
-- **AND** returns `DokanResult.Success`
+- **WHEN** DokanNet calls `ReadFile` with a path, `NativeMemory<byte>` buffer, and offset
+- **THEN** the adapter rents a buffer from the pool via `NativeMemory<byte>.RentArray()`, passes it to `VFS.ReadFileAsync`, and returns it via `ReturnArray()` in a `finally` block
+- **AND** sets `bytesRead` and returns `DokanResult.Success`
+
+#### Scenario: ReadFile returns zero bytes
+
+- **WHEN** `ReadFileAsync` returns 0 bytes (EOF or empty file)
+- **THEN** the adapter returns the buffer via `ReturnArray(array, copyBack: false)` to skip the unnecessary copy
+
+#### Scenario: ReadFile exception returns buffer to pool
+
+- **WHEN** `ReadFileAsync` throws an exception
+- **THEN** the rented buffer is still returned to the pool via `finally` block to prevent pool exhaustion
 
 #### Scenario: FindFilesWithPattern delegates to VFS
 

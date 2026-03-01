@@ -88,11 +88,11 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         bytesRead = 0;
         long startTimestamp = Stopwatch.GetTimestamp();
 
+        ArraySegment<byte> rented = buffer.RentArray();
+        byte[] rentedArray = rented.Array!;
         try
         {
-            byte[] tempBuffer = new byte[buffer.Span.Length];
-            int read = _vfs.ReadFileAsync(path, tempBuffer, offset).GetAwaiter().GetResult();
-            tempBuffer.AsSpan(0, read).CopyTo(buffer.Span);
+            int read = _vfs.ReadFileAsync(path, rentedArray, offset).GetAwaiter().GetResult();
             bytesRead = read;
 
             DokanTelemetry.ReadDuration.Record(
@@ -117,6 +117,10 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
 
             _logger.LogError(ex, "ReadFile error: {Path}", path);
             return DokanResult.InternalError;
+        }
+        finally
+        {
+            buffer.ReturnArray(rentedArray, clearArray: false);
         }
     }
 
