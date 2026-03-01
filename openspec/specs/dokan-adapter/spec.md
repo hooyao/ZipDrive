@@ -13,12 +13,12 @@ The `DokanFileSystemAdapter` SHALL implement `IDokanOperations2` and delegate al
 #### Scenario: ReadFile returns zero bytes
 
 - **WHEN** `ReadFileAsync` returns 0 bytes (EOF or empty file)
-- **THEN** the adapter returns the buffer via `ReturnArray(array, copyBack: false)` to skip the unnecessary copy
+- **THEN** the adapter skips the copy to native buffer, sets `bytesRead` to 0, and returns the array to the pool
 
 #### Scenario: ReadFile exception returns buffer to pool
 
 - **WHEN** `ReadFileAsync` throws an exception
-- **THEN** the rented buffer is still returned to the pool via `finally` block to prevent pool exhaustion
+- **THEN** the rented buffer is still returned to `ArrayPool<byte>.Shared` via `finally` block to prevent pool exhaustion
 
 #### Scenario: FindFilesWithPattern delegates to VFS
 

@@ -10,15 +10,15 @@
 
 ## Decisions
 
-### Use RentArray/ReturnArray (not GetStream or GetMemoryManager)
+### Use ArrayPool directly (not RentArray/ReturnArray)
 
-**Decision**: Use `buffer.RentArray()` and `buffer.ReturnArray(rentedBuffer, read > 0)`.
+**Decision**: Use `ArrayPool<byte>.Shared.Rent()` and `.Return()` directly, with a manual bounded copy of only `bytesRead` bytes to the native buffer.
 
-**Rationale**: Drop-in replacement — no API changes, no new abstractions, 3-line diff. `GetStream()` or `GetMemoryManager()` would require changing `IVirtualFileSystem.ReadFileAsync` to accept `Stream` or `Memory<byte>` targets, which is unnecessary complexity for this optimization.
+**Rationale**: `NativeMemory<T>.ReturnArray()` always copies the entire rented buffer back to native memory — it has no byte-count parameter. Since `ArrayPool` arrays are not zeroed, this would leak stale pool data into the Dokan native buffer beyond `bytesRead`. Using `ArrayPool` directly with `rentedArray.AsSpan(0, bytesRead).CopyTo(buffer.Span)` copies only valid bytes.
 
-**Note**: `ReturnArray` with `copyBack: false` when `read == 0` avoids an unnecessary copy on EOF/error.
+**Note**: `GetStream()` or `GetMemoryManager()` would require changing `IVirtualFileSystem.ReadFileAsync` to accept `Stream` or `Memory<byte>` targets, which is unnecessary complexity for this optimization.
 
 ## Risks / Trade-offs
 
-- **[Risk] Rented array may be larger than requested**: `ArrayPool` may return a larger array. `ReadFileAsync` uses `buffer.Length` to determine bytes to read, so the extra capacity is harmless — only `read` bytes are copied back via `ReturnArray`.
+- **[Risk] Rented array may be larger than requested**: `ArrayPool` may return a larger array. The VFS reads up to `rentedArray.Length` bytes (potentially more than the native buffer), but `bytesRead` is capped to `requestedLength` and only that many bytes are copied. Extra decompression work is wasted but harmless.
 - **[Trade-off] Still one copy** (pool → native): True zero-copy would require `Memory<byte>` throughout the stack. Not worth the API churn for a 64KB buffer.
