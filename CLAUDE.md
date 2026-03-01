@@ -349,7 +349,11 @@ DokanNet integration for Windows file system mounting.
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
 - `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, and `EncodingConfidenceThreshold`
 
+**ReadFile Buffer Pooling**: `DokanFileSystemAdapter.ReadFile()` uses `ArrayPool<byte>.Shared.Rent()` to avoid per-read `byte[]` allocations. The rented array may be larger than the Dokan native buffer, so `bytesRead` is capped to `buffer.Span.Length` and only valid bytes are copied via `AsSpan(0, bytesRead).CopyTo(buffer.Span)`. The array is returned in a `finally` block. **Do NOT use `NativeMemory<byte>.ReturnArray()`** — it always copies the entire rented array back to the native buffer (no byte-count parameter), which leaks stale ArrayPool data beyond `bytesRead`.
+
 **Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.jsonc`.
+
+**Unmanaged Memory (~394MB)**: Profiling shows ~394MB unmanaged memory at runtime. This is almost entirely **Dokany driver infrastructure** (`dokan2.dll` kernel-to-usermode communication buffers), not ZipDrive code. The managed heap is typically ~1-2MB. This is the normal baseline cost of a FUSE-like file system on Windows and is outside our control.
 
 **Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
