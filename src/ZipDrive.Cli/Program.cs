@@ -16,6 +16,7 @@ using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Cli;
 using ZipDrive.Infrastructure.FileSystem;
 
 [assembly: SupportedOSPlatform("windows")]
@@ -36,6 +37,11 @@ Log.Logger = new LoggerConfiguration()
     .CreateBootstrapLogger();
 
 Log.Information("ZipDrive {Version} starting", version);
+
+// Drag-and-drop support: when a folder is dragged onto ZipDrive.exe,
+// Windows passes the path as a bare positional arg. Rewrite it to
+// --Mount:ArchiveDirectory=<path> so the config pipeline picks it up.
+args = ArgPreprocessor.RewriteBareArgs(args);
 
 var builder = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((_, config) =>

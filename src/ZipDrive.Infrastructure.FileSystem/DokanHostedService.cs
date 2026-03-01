@@ -49,8 +49,17 @@ public sealed class DokanHostedService : BackgroundService
 
             if (string.IsNullOrWhiteSpace(_mountSettings.ArchiveDirectory))
             {
-                _logger.LogError("Mount:ArchiveDirectory is required. Set it in appsettings.jsonc or via command line: Mount:ArchiveDirectory=<path>");
-                _lifetime.StopApplication();
+                Console.Error.WriteLine("Error: Mount:ArchiveDirectory is required.");
+                Console.Error.WriteLine("Set it in appsettings.jsonc, via command line (--Mount:ArchiveDirectory=<path>),");
+                Console.Error.WriteLine("or drag a folder onto ZipDrive.exe.");
+                WaitForKeyAndStop();
+                return;
+            }
+
+            if (!Directory.Exists(_mountSettings.ArchiveDirectory))
+            {
+                Console.Error.WriteLine($"Error: Directory not found: {_mountSettings.ArchiveDirectory}");
+                WaitForKeyAndStop();
                 return;
             }
 
@@ -130,6 +139,14 @@ public sealed class DokanHostedService : BackgroundService
         _logger.LogInformation("Drive unmounted cleanly");
 
         await base.StopAsync(cancellationToken);
+    }
+
+    private void WaitForKeyAndStop()
+    {
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Press any key to exit...");
+        Console.ReadKey(intercept: true);
+        _lifetime.StopApplication();
     }
 
     /// <summary>
