@@ -14,7 +14,7 @@ public static class ArgPreprocessor
     /// </summary>
     public static string[] RewriteBareArgs(string[] args)
     {
-        if (args.Length > 0 && !args[0].StartsWith("--"))
+        if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
         {
             return [$"--Mount:ArchiveDirectory={args[0]}", .. args[1..]];
         }
