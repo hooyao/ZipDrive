@@ -32,6 +32,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 - **OpenTelemetry Observability** — Opt-in metrics, tracing, and structured logging with Aspire Dashboard support
 - **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup with configurable intervals
 - **Shell Metadata Short-Circuit** — Intercepts Windows Explorer probes (`desktop.ini`, `thumbs.db`, etc.) before any ZIP parsing occurs
+- **Drag-and-Drop Launch** — Drag a folder onto `ZipDrive.exe` to mount it instantly — no command line needed
 
 ## Prerequisites
 
@@ -41,7 +42,11 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 
 ## Quick Start
 
-### Using the Published Executable
+### Drag and Drop
+
+The easiest way: **drag a folder onto `ZipDrive.exe`** in Windows Explorer. All ZIP files in that folder are mounted at `R:\` (configurable in `appsettings.jsonc`).
+
+### Using the Command Line
 
 ```bash
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
