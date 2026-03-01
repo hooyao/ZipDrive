@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 332 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
+**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, and drag-and-drop folder launch implemented. 332 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
 
 ## Development Workflow Requirements
 
@@ -93,6 +93,8 @@ Run with:
 ```bash
 ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="R:\"
 ```
+
+**Drag-and-drop**: You can also drag a folder onto `ZipDrive.exe` in Windows Explorer. The folder path is automatically used as `Mount:ArchiveDirectory`. The mount point defaults to `R:\` from `appsettings.jsonc`.
 
 **Versioning**: `Directory.Build.props` sets `<Version>1.0.0-dev</Version>` as the default — **do NOT modify this file for releases**. The startup log displays the version with the `+commit-hash` metadata stripped (e.g., `ZipDrive 1.0.0-dev starting`). For release builds, the CI pipeline overrides this via `-p:Version=1.0.7` on the `dotnet publish` command line (see `.github/workflows/release.yml`), producing `ZipDrive 1.0.7 starting`.
 
@@ -362,6 +364,11 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 - OpenTelemetry SDK configuration (opt-in; OTLP export to Aspire Dashboard when endpoint configured)
 - Serilog structured logging
 - Configuration binding (`Mount`, `Cache`, `OpenTelemetry` sections)
+- Drag-and-drop arg rewriting (`ArgPreprocessor`)
+
+**Drag-and-Drop Support**: When a folder is dragged onto `ZipDrive.exe`, Windows passes the path as a bare positional arg (`args[0]`). `ArgPreprocessor.RewriteBareArgs()` detects this (first arg not starting with `--`) and prepends `--Mount:ArchiveDirectory=<path>` to the args array. Prepending ensures an explicit `--Mount:ArchiveDirectory` later in the args wins (last-wins semantics). The host builder uses `UseContentRoot(AppContext.BaseDirectory)` so config files are found relative to the exe, not the dragged folder's location. Command-line args are re-added at the end of `ConfigureAppConfiguration` to override `appsettings.jsonc` defaults.
+
+**Validation UX**: `DokanHostedService` validates `ArchiveDirectory` is a non-empty, existing directory. On validation failure, the error is printed to stderr and `Console.ReadKey()` keeps the auto-created console window open so drag-and-drop users can read the message.
 
 ## Key Design Patterns
 
@@ -378,6 +385,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 | **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 | **Bytes-First Decoding** | `ZipCentralDirectoryEntry.FileNameBytes` | Defer string decode until encoding is known |
+| **Arg Rewriting** | `ArgPreprocessor` | Translate bare positional args to named config keys for drag-and-drop |
 
 ## Critical Concurrency Rules
 
@@ -599,6 +607,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Chunked Extraction | ✅ Complete | `ChunkedDiskStorageStrategy` with incremental 10MB chunks, per-chunk TCS signaling, 66 new tests |
 | Endurance Testing | ✅ Complete | 24-hour soak test with 100 concurrent tasks, full + partial SHA-256 verification, fail-fast diagnostics, latency reporting |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
+| Drag-and-Drop Launch | ✅ Complete | `ArgPreprocessor` rewrites bare args, `DokanHostedService` validates directory + press-any-key UX |
 
 ## Known Limitations / Future Work
 
@@ -631,6 +640,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - **Dual-Tier Cache Spec**: [`openspec/specs/dual-tier-cache-coordinator/spec.md`](openspec/specs/dual-tier-cache-coordinator/spec.md) - Size-based routing requirements
 - **CLI Application Spec**: [`openspec/specs/cli-application/spec.md`](openspec/specs/cli-application/spec.md) - Host, OTel, and DI requirements
 - **Endurance Testing Spec**: [`openspec/specs/endurance-testing/spec.md`](openspec/specs/endurance-testing/spec.md) - Suite architecture, fail-fast, partial checksums, latency measurement
+- **Drag-and-Drop Launch Spec**: [`openspec/specs/drag-drop-launch/spec.md`](openspec/specs/drag-drop-launch/spec.md) - Bare arg rewriting for drag-and-drop
 
 ### Design Documents
 - **File Content Caching**: [`src/Docs/CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md)
