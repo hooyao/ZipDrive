@@ -44,6 +44,9 @@ Log.Information("ZipDrive {Version} starting", version);
 args = ArgPreprocessor.RewriteBareArgs(args);
 
 var builder = Host.CreateDefaultBuilder(args)
+    // Drag-and-drop sets CWD to the dragged folder, not the exe directory.
+    // Force content root to the exe's directory so config files are found.
+    .UseContentRoot(AppContext.BaseDirectory)
     .ConfigureAppConfiguration((_, config) =>
     {
         // Note: CreateDefaultBuilder auto-adds appsettings.json (optional: true).
