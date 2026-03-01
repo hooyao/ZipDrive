@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 325 total tests passing. 8-hour soak test validated.
+**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, and automatic charset detection for non-UTF8 filenames implemented. 332 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
 
 ## Development Workflow Requirements
 
@@ -71,8 +71,8 @@ dotnet run --project src/ZipDrive.Cli/ZipDrive.Cli.csproj
 # Run endurance test (default: ~72 seconds for CI)
 dotnet test tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj
 
-# Run endurance test for extended duration (e.g., 8 hours)
-ENDURANCE_DURATION_HOURS=8 dotnet test tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj
+# Run endurance test for extended duration (e.g., 24 hours)
+ENDURANCE_DURATION_HOURS=24 dotnet test tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj
 ```
 
 ## Publishing a Release
@@ -208,7 +208,7 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
 - **ChunkedDiskStorageStrategy**: Incremental chunk-based extraction for large files (≥ 50MB). Decompresses in configurable chunks (default 10MB) to NTFS sparse files. `MaterializeAsync` returns after the first chunk (~50ms), background task continues extracting. Replaces the former `DiskStorageStrategy`.
 - **ChunkedFileEntry**: Tracks chunk state via `int[]` with `Volatile` reads/writes + `TaskCompletionSource<bool>[]` for per-chunk completion signaling. Owns the sparse backing file, background extraction task, and `CancellationTokenSource`.
-- **ChunkedStream**: `Stream` subclass returned by `ChunkedDiskStorageStrategy.Retrieve()`. Maps reads to chunks, blocks on unextracted regions via `EnsureChunkReadyAsync()` safety gate. Each borrower gets an independent instance with its own `FileStream`.
+- **ChunkedStream**: `Stream` subclass returned by `ChunkedDiskStorageStrategy.Retrieve()`. Maps reads to chunks, blocks on unextracted regions via `EnsureChunkReadyAsync()` safety gate. Each borrower gets an independent instance with its own `FileStream` (unbuffered via `bufferSize: 1` to prevent stale reads from sparse file regions being written by the background extractor).
 - **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
 - **CacheTelemetry**: Static metrics (counters, histograms, observable gauges) and ActivitySource for tracing. Includes chunked extraction metrics (`cache.chunks.extracted`, `cache.chunks.waits`, `cache.chunks.wait_duration`, `cache.chunks.extraction_duration`).
 
@@ -379,6 +379,7 @@ When working with the caching layer:
 5. **Always use TimeProvider for TTL** - Enables deterministic testing with `FakeTimeProvider`
 6. **Borrow/Return pattern is mandatory** - Always dispose `ICacheHandle<T>` to allow eviction
 7. **Entries with RefCount > 0 are protected** - Never evict borrowed entries
+8. **ChunkedStream readers must use unbuffered FileStream** - `bufferSize: 1` prevents stale reads from sparse file regions written by the background extractor (the internal FileStream buffer can cache zeros from unwritten regions before the chunk is extracted)
 
 ## Testing Strategy
 
@@ -399,12 +400,15 @@ When working with the caching layer:
 
 ### Endurance Tests (`tests/ZipDrive.EnduranceTests`)
 - **Duration**: Configurable via `ENDURANCE_DURATION_HOURS` env var (default: 0.02 = ~72s for CI)
-- **Concurrency**: 26 tasks (8 browsers, 5 sequential readers, 4 path stress, 3 same-file thundering herd, 2 different-file parallel, 3 random-offset large-file readers, 1 maintenance loop)
-- **Cache config**: Tight limits (2MB memory, 20MB disk, 5MB cutoff, 1min TTL, 2s maintenance interval) to force eviction
-- **Verification**: SHA-256 content checks on every read against embedded `__manifest__.json`
-- **Post-run assertions**: Zero errors, zero handle leaks (`BorrowedEntryCount == 0`), verified reads > 0, maintenance ran
-- **Fixture**: `EnduranceMixed` profile generates files spanning both memory tier (<5MB) and disk tier (>=5MB)
-- **Validated**: 8-hour soak test passed with zero errors and zero data corruption
+- **Concurrency**: 100 tasks across 7 virtual suites + 2 maintenance tasks
+- **Suites**: NormalReadSuite (25), PartialReadSuite (20), ConcurrencyStressSuite (20), EdgeCaseSuite (10), EvictionValidationSuite (10), PathResolutionSuite (8), LatencyMeasurementSuite (5)
+- **Cache config**: Tight limits (1MB memory, 10MB disk, 1MB cutoff, 1min TTL, 2s maintenance interval) to force constant eviction
+- **Verification**: Full-file SHA-256 on every read + partial-read SHA-256 at 5-8 strategic offsets per file (start, chunk boundary cross, mid, random, near-end, tail) against embedded `__manifest__.json`
+- **Fail-fast**: First error cancels all 100 tasks immediately with rich diagnostics (suite, task, file, operation, cache state, stack trace)
+- **Latency reporting**: p50/p95/p99/max per category (CacheHit, CacheMiss, Linear, Random, PartialRead) with reservoir sampling (100K max per category)
+- **Duration-aware fixtures**: CI (<1h) uses ~50MB fixture; manual (>=1h) generates ~700MB fixture with `EnduranceFull` profile
+- **Post-run assertions**: Zero errors, zero handle leaks (`BorrowedEntryCount == 0`), all suites performed operations, maintenance ran
+- **Validated**: 24-hour soak test passed with zero errors and zero data corruption
 
 ## Configuration Schema
 
@@ -582,7 +586,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Dual-tier Cache | ✅ Complete | `FileContentCache` with strategy-owned materialization and size-hint routing |
 | Cache Maintenance | ✅ Complete | `CacheMaintenanceService` background eviction + cleanup |
 | Chunked Extraction | ✅ Complete | `ChunkedDiskStorageStrategy` with incremental 10MB chunks, per-chunk TCS signaling, 66 new tests |
-| Endurance Testing | ✅ Complete | 8-hour soak test with SHA-256 verification, 26 concurrent tasks including random-offset large-file readers |
+| Endurance Testing | ✅ Complete | 24-hour soak test with 100 concurrent tasks, full + partial SHA-256 verification, fail-fast diagnostics, latency reporting |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
 
 ## Known Limitations / Future Work
@@ -615,6 +619,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - **Telemetry Spec**: [`openspec/specs/telemetry/spec.md`](openspec/specs/telemetry/spec.md) - Metrics, tracing, and observability requirements
 - **Dual-Tier Cache Spec**: [`openspec/specs/dual-tier-cache-coordinator/spec.md`](openspec/specs/dual-tier-cache-coordinator/spec.md) - Size-based routing requirements
 - **CLI Application Spec**: [`openspec/specs/cli-application/spec.md`](openspec/specs/cli-application/spec.md) - Host, OTel, and DI requirements
+- **Endurance Testing Spec**: [`openspec/specs/endurance-testing/spec.md`](openspec/specs/endurance-testing/spec.md) - Suite architecture, fail-fast, partial checksums, latency measurement
 
 ### Design Documents
 - **File Content Caching**: [`src/Docs/CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md)
@@ -646,6 +651,6 @@ ZipDrive is considered complete when:
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
 - [x] Background cache maintenance with configurable interval
 - [ ] All performance targets met
-- [x] No memory leaks (validated with 8-hour soak test, zero handle leaks)
+- [x] No memory leaks (validated with 24-hour soak test, 100 concurrent tasks, zero handle leaks)
 - [x] Comprehensive documentation written
 - [x] Single-file release build (`dotnet publish` with `PublishSingleFile`)
