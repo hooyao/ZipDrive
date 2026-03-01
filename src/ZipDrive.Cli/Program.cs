@@ -54,6 +54,9 @@ var builder = Host.CreateDefaultBuilder(args)
         // We ship only appsettings.jsonc; no appsettings.json exists in output.
         config.AddJsonFile("appsettings.jsonc", optional: false, reloadOnChange: false);
         config.AddJsonFile("appsettings.dev.jsonc", optional: true, reloadOnChange: false);
+        // Re-add command line so it wins over jsonc files (last source wins).
+        // Without this, appsettings.jsonc overrides the rewritten drag-and-drop args.
+        config.AddCommandLine(args);
     });
 
 builder.UseSerilog((context, config) =>
