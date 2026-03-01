@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -88,12 +89,18 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         bytesRead = 0;
         long startTimestamp = Stopwatch.GetTimestamp();
 
+        int requestedLength = buffer.Span.Length;
+        byte[] rentedArray = ArrayPool<byte>.Shared.Rent(requestedLength);
         try
         {
-            byte[] tempBuffer = new byte[buffer.Span.Length];
-            int read = _vfs.ReadFileAsync(path, tempBuffer, offset).GetAwaiter().GetResult();
-            tempBuffer.AsSpan(0, read).CopyTo(buffer.Span);
-            bytesRead = read;
+            // ArrayPool may return a larger array than requested. Cap bytesRead
+            // to the native buffer size and copy only valid bytes to avoid
+            // leaking stale ArrayPool data into the Dokan native buffer.
+            int read = _vfs.ReadFileAsync(path, rentedArray, offset).GetAwaiter().GetResult();
+            bytesRead = Math.Min(read, requestedLength);
+
+            if (bytesRead > 0)
+                rentedArray.AsSpan(0, bytesRead).CopyTo(buffer.Span);
 
             DokanTelemetry.ReadDuration.Record(
                 Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -117,6 +124,10 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
 
             _logger.LogError(ex, "ReadFile error: {Path}", path);
             return DokanResult.InternalError;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedArray);
         }
     }
 
