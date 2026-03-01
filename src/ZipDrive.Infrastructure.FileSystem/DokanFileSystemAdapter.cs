@@ -88,12 +88,15 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         bytesRead = 0;
         long startTimestamp = Stopwatch.GetTimestamp();
 
+        int requestedLength = buffer.Span.Length;
         ArraySegment<byte> rented = buffer.RentArray();
         byte[] rentedArray = rented.Array!;
         try
         {
+            // ArrayPool may return a larger array than requested. Cap the read
+            // to the actual native buffer size to prevent bytesRead > buffer size.
             int read = _vfs.ReadFileAsync(path, rentedArray, offset).GetAwaiter().GetResult();
-            bytesRead = read;
+            bytesRead = Math.Min(read, requestedLength);
 
             DokanTelemetry.ReadDuration.Record(
                 Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
