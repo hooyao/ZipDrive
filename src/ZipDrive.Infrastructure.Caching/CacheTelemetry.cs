@@ -36,6 +36,16 @@ internal static class CacheTelemetry
         Meter.CreateCounter<long>("cache.chunks.waits",
             unit: "{wait}", description: "Number of times a reader waited for chunk extraction");
 
+    // === Coalescing Counters ===
+
+    internal static readonly Counter<long> CoalescingBatchesFired =
+        Meter.CreateCounter<long>("coalescing.batches_fired",
+            unit: "{batch}", description: "Number of coalescing batches dispatched to the sequential reader");
+
+    internal static readonly Counter<long> CoalescingSpeculativeCached =
+        Meter.CreateCounter<long>("coalescing.speculative_cached",
+            unit: "{entry}", description: "Number of hole entries speculatively cached during a sequential batch pass");
+
     // === Histograms ===
 
     internal static readonly Histogram<double> MaterializationDuration =
@@ -49,6 +59,10 @@ internal static class CacheTelemetry
     internal static readonly Histogram<double> ChunkWaitDuration =
         Meter.CreateHistogram<double>("cache.chunks.wait_duration", unit: "ms",
             description: "Time a reader waited for chunk extraction");
+
+    internal static readonly Histogram<double> CoalescingEntriesPerBatch =
+        Meter.CreateHistogram<double>("coalescing.entries_per_batch",
+            unit: "{entry}", description: "Number of requested entries per coalescing batch");
 
     // === Observable Gauges ===
     // These are registered per-instance via RegisterInstance/UnregisterInstance.

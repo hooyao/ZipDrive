@@ -8,9 +8,9 @@ namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
 /// File content cache that owns ZIP extraction, tier routing, and caching.
-/// Replaces <c>DualTierFileCache</c> by merging extraction ownership with cache coordination.
 /// Routes small files to memory tier and large files to disk tier based on
-/// <see cref="CacheOptions.SmallFileCutoffBytes"/>.
+/// <see cref="CacheOptions.SmallFileCutoffBytes"/>. When coalescing is enabled,
+/// memory-tier cache misses are batched via <see cref="CoalescingBatchCoordinator"/>.
 /// </summary>
 public sealed class FileContentCache : IFileContentCache
 {
@@ -18,6 +18,7 @@ public sealed class FileContentCache : IFileContentCache
     private readonly GenericCache<Stream> _diskCache;
     private readonly ChunkedDiskStorageStrategy _diskStorageStrategy;
     private readonly IZipReaderFactory _zipReaderFactory;
+    private readonly CoalescingBatchCoordinator? _coalescing;
     private readonly long _cutoffBytes;
     private readonly TimeSpan _defaultTtl;
     private readonly ILogger<FileContentCache> _logger;
@@ -25,12 +26,14 @@ public sealed class FileContentCache : IFileContentCache
     public FileContentCache(
         IZipReaderFactory zipReaderFactory,
         IOptions<CacheOptions> options,
+        IOptions<CoalescingOptions> coalescingOptions,
         IEvictionPolicy evictionPolicy,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(zipReaderFactory);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(coalescingOptions);
         ArgumentNullException.ThrowIfNull(evictionPolicy);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
@@ -62,9 +65,21 @@ public sealed class FileContentCache : IFileContentCache
             loggerFactory.CreateLogger<GenericCache<Stream>>(),
             name: "disk");
 
+        CoalescingOptions coalescing = coalescingOptions.Value;
+        if (coalescing.Enabled)
+        {
+            _coalescing = new CoalescingBatchCoordinator(
+                _memoryCache,
+                zipReaderFactory,
+                coalescing,
+                opts.DefaultTtl,
+                loggerFactory.CreateLogger<CoalescingBatchCoordinator>());
+        }
+
         _logger.LogInformation(
-            "FileContentCache initialized: memory={MemoryMb}MB, disk={DiskMb}MB, cutoff={CutoffMb}MB, chunkSize={ChunkMb}MB",
-            opts.MemoryCacheSizeMb, opts.DiskCacheSizeMb, opts.SmallFileCutoffMb, opts.ChunkSizeMb);
+            "FileContentCache initialized: memory={MemoryMb}MB, disk={DiskMb}MB, cutoff={CutoffMb}MB, chunkSize={ChunkMb}MB, coalescing={Coalescing}",
+            opts.MemoryCacheSizeMb, opts.DiskCacheSizeMb, opts.SmallFileCutoffMb, opts.ChunkSizeMb,
+            coalescing.Enabled ? "enabled" : "disabled");
     }
 
     /// <inheritdoc />
@@ -80,19 +95,38 @@ public sealed class FileContentCache : IFileContentCache
         if (offset >= entry.UncompressedSize)
             return 0;
 
-        // Route to correct tier based on entry size
-        GenericCache<Stream> cache = entry.UncompressedSize < _cutoffBytes
-            ? _memoryCache
-            : _diskCache;
+        bool isSmallFile = entry.UncompressedSize < _cutoffBytes;
 
-        // Build factory delegate — FileContentCache owns the extraction pipeline
+        if (isSmallFile && _coalescing is not null)
+        {
+            // Memory-tier hit fast path: check cache before touching the coordinator.
+            // This is the common case after the first extraction — skips all coordinator overhead.
+            if (_memoryCache.TryBorrow(cacheKey, out ICacheHandle<Stream>? cachedHandle))
+            {
+                using (cachedHandle)
+                    return await ReadFromStreamAsync(cachedHandle.Value, buffer, offset, entry.UncompressedSize, cancellationToken)
+                        .ConfigureAwait(false);
+            }
+
+            // Memory-tier miss: route through coordinator for coalescing.
+            // The coordinator calls BorrowAsync internally — the handle is already borrowed on return.
+            using ICacheHandle<Stream> handle = await _coalescing
+                .SubmitAsync(archivePath, entry, cacheKey, cancellationToken)
+                .ConfigureAwait(false);
+
+            return await ReadFromStreamAsync(handle.Value, buffer, offset, entry.UncompressedSize, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Disk tier, or coalescing disabled: standard per-entry factory path
+        GenericCache<Stream> cache = isSmallFile ? _memoryCache : _diskCache;
+
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
         {
             IZipReader reader = _zipReaderFactory.Create(archivePath);
             try
             {
                 Stream decompressedStream = await reader.OpenEntryStreamAsync(entry, ct).ConfigureAwait(false);
-
                 return new CacheFactoryResult<Stream>
                 {
                     Value = decompressedStream,
@@ -108,16 +142,25 @@ public sealed class FileContentCache : IFileContentCache
         };
 
         // Borrow from cache (thundering herd prevention is inside GenericCache)
-        using ICacheHandle<Stream> handle = await cache.BorrowAsync(
+        using ICacheHandle<Stream> cacheHandle = await cache.BorrowAsync(
             cacheKey, _defaultTtl, factory, cancellationToken).ConfigureAwait(false);
 
-        // Seek and read from the cached random-access stream.
+        return await ReadFromStreamAsync(cacheHandle.Value, buffer, offset, entry.UncompressedSize, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<int> ReadFromStreamAsync(
+        Stream stream,
+        byte[] buffer,
+        long offset,
+        long uncompressedSize,
+        CancellationToken cancellationToken)
+    {
         // Thread-safety: each BorrowAsync call returns a fresh stream instance via
         // IStorageStrategy.Retrieve(), so concurrent callers never share a stream object.
-        Stream stream = handle.Value;
         stream.Position = offset;
 
-        int bytesToRead = (int)Math.Min(buffer.Length, entry.UncompressedSize - offset);
+        int bytesToRead = (int)Math.Min(buffer.Length, uncompressedSize - offset);
         int totalRead = 0;
 
         while (totalRead < bytesToRead)
