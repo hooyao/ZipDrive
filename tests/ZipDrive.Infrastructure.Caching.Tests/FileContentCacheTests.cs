@@ -252,6 +252,83 @@ public sealed class FileContentCacheTests : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // WarmAsync Tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task WarmAsync_SmallEntry_StoredInMemoryTier()
+    {
+        byte[] data = CreateTestData(512);
+        var cache = CreateCache(cutoffMb: 1);
+
+        var entry = MakeEntry(512); // 512 bytes < 1 MB cutoff
+        await cache.WarmAsync(entry, "warm-key", new MemoryStream(data));
+
+        cache.MemoryTier.EntryCount.Should().Be(1);
+        cache.DiskTier.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WarmAsync_LargeEntry_StoredInDiskTier()
+    {
+        int size = 2 * 1024 * 1024; // 2 MB, cutoff is 1 MB
+        byte[] data = CreateTestData(size);
+        var cache = CreateCache(cutoffMb: 1);
+
+        var entry = MakeEntry(size);
+        await cache.WarmAsync(entry, "warm-large-key", new MemoryStream(data));
+
+        cache.DiskTier.EntryCount.Should().Be(1);
+        cache.MemoryTier.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WarmAsync_ExistingKey_IsNoOp_EntryUnchanged()
+    {
+        byte[] original = CreateTestData(100);
+        byte[] replacement = CreateTestData(100);
+
+        var cache = CreateCache();
+        var entry = MakeEntry(100);
+
+        await cache.WarmAsync(entry, "dup-key", new MemoryStream(original));
+        // Second warm for the same key — should be a no-op (thundering herd protection)
+        await cache.WarmAsync(entry, "dup-key", new MemoryStream(replacement));
+
+        cache.EntryCount.Should().Be(1, "second WarmAsync should not create a second entry");
+    }
+
+    [Fact]
+    public async Task WarmAsync_AfterWarm_ReadAsyncReturnsCachedContent()
+    {
+        byte[] data = CreateTestData(500);
+        var stubFactory = new StubZipReaderFactory(); // should never be called
+        var cache = CreateCache(factory: stubFactory);
+        var entry = MakeEntry(500);
+
+        await cache.WarmAsync(entry, "prefetch-key", new MemoryStream(data, writable: false));
+
+        byte[] buffer = new byte[500];
+        int bytesRead = await cache.ReadAsync("test.zip", entry, "prefetch-key", buffer, 0);
+
+        bytesRead.Should().Be(500);
+        buffer.Should().Equal(data);
+        stubFactory.CreateCount.Should().Be(0, "ReadAsync should serve from warm cache, not call factory");
+    }
+
+    [Fact]
+    public async Task WarmAsync_RefCountIsZeroAfterWarm()
+    {
+        byte[] data = CreateTestData(200);
+        var cache = CreateCache();
+        var entry = MakeEntry(200);
+
+        await cache.WarmAsync(entry, "refcount-key", new MemoryStream(data));
+
+        cache.BorrowedEntryCount.Should().Be(0, "WarmAsync disposes handle immediately, leaving RefCount=0");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // Helpers
     // ═══════════════════════════════════════════════════════════════════
 

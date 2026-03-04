@@ -1,5 +1,7 @@
 using System.Text;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
@@ -57,7 +59,10 @@ public class VfsTestFixture : IAsyncLifetime
 
         var vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileContentCache,
-            discovery, pathResolver, NullLogger<ZipVirtualFileSystem>.Instance);
+            discovery, pathResolver,
+            new NullHostApplicationLifetime(),
+            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            NullLogger<ZipVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = RootPath, MaxDiscoveryDepth = 6 });
         Vfs = vfs;
@@ -84,4 +89,13 @@ public class VfsTestFixture : IAsyncLifetime
 public class VfsIntegrationCollection : ICollectionFixture<VfsTestFixture>
 {
     // This class is never instantiated. It's just a marker for xunit.
+}
+
+/// <summary>Minimal stub for IHostApplicationLifetime used in tests.</summary>
+public sealed class NullHostApplicationLifetime : IHostApplicationLifetime
+{
+    public CancellationToken ApplicationStarted => CancellationToken.None;
+    public CancellationToken ApplicationStopping => CancellationToken.None;
+    public CancellationToken ApplicationStopped => CancellationToken.None;
+    public void StopApplication() { }
 }

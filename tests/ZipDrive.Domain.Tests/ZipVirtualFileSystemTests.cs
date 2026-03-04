@@ -1,7 +1,9 @@
 using System.IO.Compression;
 using System.Text;
 using FluentAssertions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
@@ -10,6 +12,7 @@ using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.TestHelpers;
 
 namespace ZipDrive.Domain.Tests;
 
@@ -73,7 +76,10 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
 
         _vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileContentCache,
-            discovery, pathResolver, NullLogger<ZipVirtualFileSystem>.Instance);
+            discovery, pathResolver,
+            new NullHostApplicationLifetime(),
+            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            NullLogger<ZipVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 6 });
     }
@@ -179,6 +185,8 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
         var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
+            new NullHostApplicationLifetime(),
+            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
         bool? eventValue = null;

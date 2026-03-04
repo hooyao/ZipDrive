@@ -1,5 +1,13 @@
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO.Compression;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Exceptions;
 using ZipDrive.Domain.Models;
 
@@ -16,7 +24,21 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
     private readonly IFileContentCache _fileContentCache;
     private readonly IArchiveDiscovery _discovery;
     private readonly IPathResolver _pathResolver;
+    private readonly IHostApplicationLifetime _appLifetime;
+    private readonly PrefetchOptions _prefetchOptions;
     private readonly ILogger<ZipVirtualFileSystem> _logger;
+
+    // Per-directory in-flight guard: prevents duplicate concurrent sequential scans.
+    // Key = "archiveVirtualPath:dirInternalPath"
+    private readonly ConcurrentDictionary<string, byte> _prefetchInFlight = new(StringComparer.OrdinalIgnoreCase);
+
+    // Discard buffer for hole bytes during sequential scan (64 KB)
+    private const int DiscardBufferSize = 64 * 1024;
+
+    // Fixed size of a ZIP local file header (excluding variable-length filename and extra field)
+    private const int LocalHeaderFixedSize = 30;
+    // Offset of FileNameLength within the fixed header
+    private const int FileNameLengthOffset = 26;
 
     public ZipVirtualFileSystem(
         IArchiveTrie archiveTrie,
@@ -24,6 +46,8 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         IFileContentCache fileContentCache,
         IArchiveDiscovery discovery,
         IPathResolver pathResolver,
+        IHostApplicationLifetime appLifetime,
+        IOptions<PrefetchOptions> prefetchOptions,
         ILogger<ZipVirtualFileSystem> logger)
     {
         _archiveTrie = archiveTrie;
@@ -31,6 +55,8 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         _fileContentCache = fileContentCache;
         _discovery = discovery;
         _pathResolver = pathResolver;
+        _appLifetime = appLifetime;
+        _prefetchOptions = prefetchOptions.Value;
         _logger = logger;
     }
 
@@ -119,7 +145,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         ArchiveTrieResult result = _pathResolver.Resolve(path);
 
-        return result.Status switch
+        IReadOnlyList<VfsFileInfo> listing = result.Status switch
         {
             ArchiveTrieStatus.VirtualRoot => ListVirtualFolder(""),
             ArchiveTrieStatus.VirtualFolder => ListVirtualFolder(result.VirtualFolderPath!),
@@ -130,6 +156,16 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
             ArchiveTrieStatus.NotFound => throw new VfsDirectoryNotFoundException(path ?? ""),
             _ => throw new VfsException($"Unexpected resolution status: {result.Status}")
         };
+
+        // Trigger prefetch fire-and-forget after listing completes (FindFiles trigger)
+        if (_prefetchOptions.PrefetchEnabled && _prefetchOptions.PrefetchOnListDirectory &&
+            (result.Status == ArchiveTrieStatus.ArchiveRoot || result.Status == ArchiveTrieStatus.InsideArchive))
+        {
+            string internalDir = result.Status == ArchiveTrieStatus.ArchiveRoot ? "" : result.InternalPath;
+            _ = PrefetchDirectoryAsync(result.Archive!, internalDir, triggerEntry: null);
+        }
+
+        return listing;
     }
 
     /// <inheritdoc />
@@ -170,8 +206,23 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         // Delegate to file content cache — it owns extraction, caching, and byte retrieval
         string cacheKey = $"{archive.VirtualPath}:{internalPath}";
-        return await _fileContentCache.ReadAsync(
+        bool wasCached = _fileContentCache.ContainsKey(cacheKey);
+        if (!wasCached)
+            _logger.LogInformation("Read (miss): {CacheKey} offset={Offset}", cacheKey, offset);
+        else
+            _logger.LogDebug("Read (hit): {CacheKey} offset={Offset}", cacheKey, offset);
+        int bytesRead = await _fileContentCache.ReadAsync(
             archive.PhysicalPath, entry.Value, cacheKey, buffer, offset, cancellationToken).ConfigureAwait(false);
+
+        // Trigger prefetch fire-and-forget only on a cold read — if the entry was already
+        // cached, siblings were already warmed by a previous read or prefetch pass.
+        if (!wasCached && _prefetchOptions.PrefetchEnabled && _prefetchOptions.PrefetchOnRead)
+        {
+            string dirPath = GetDirectoryPath(internalPath);
+            _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value);
+        }
+
+        return bytesRead;
     }
 
     /// <inheritdoc />
@@ -220,6 +271,291 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
             FreeBytes = 0,
             IsReadOnly = true
         };
+    }
+
+    // ── Prefetch ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fire-and-forget prefetch for a directory. Uses a per-directory in-flight guard
+    /// to prevent duplicate concurrent sequential reads of the same directory.
+    /// </summary>
+    private async Task PrefetchDirectoryAsync(
+        ArchiveDescriptor archive,
+        string dirInternalPath,
+        ZipEntryInfo? triggerEntry)
+    {
+        string guardKey = $"{archive.VirtualPath}:{dirInternalPath}";
+
+        // In-flight guard: only the first concurrent caller proceeds
+        if (!_prefetchInFlight.TryAdd(guardKey, 0))
+        {
+            PrefetchTelemetry.SkippedInFlight.Add(1);
+            _logger.LogInformation("Prefetch skipped (already in-flight): {Archive}/{Dir}", archive.VirtualPath, dirInternalPath);
+            return;
+        }
+
+        _logger.LogInformation("Prefetch triggered: {Archive}/{Dir}", archive.VirtualPath, dirInternalPath);
+
+        CancellationToken ct = _appLifetime.ApplicationStopping;
+
+        try
+        {
+            await PrefetchSiblingsAsync(archive, dirInternalPath, triggerEntry, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Application shutting down — expected, swallow silently
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Prefetch failed for archive={Archive} dir={Dir}", archive.VirtualPath, dirInternalPath);
+        }
+        finally
+        {
+            _prefetchInFlight.TryRemove(guardKey, out _);
+        }
+    }
+
+    /// <summary>
+    /// Performs the actual sibling prefetch:
+    /// 1. Lists directory and filters candidates by size threshold.
+    /// 2. Applies MaxDirectoryFiles cap (nearest by offset to trigger).
+    /// 3. Runs SpanSelector to pick the optimal contiguous window.
+    /// 4. Opens one raw FileStream on the archive, seeks once to SpanStart,
+    ///    and linearly reads: decompressing wanted entries, discarding holes.
+    /// </summary>
+    private async Task PrefetchSiblingsAsync(
+        ArchiveDescriptor archive,
+        string dirInternalPath,
+        ZipEntryInfo? triggerEntry,
+        CancellationToken ct)
+    {
+        ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
+            archive.VirtualPath, archive.PhysicalPath, ct).ConfigureAwait(false);
+
+        // Build candidate list: non-directory files below size threshold
+        long sizeThreshold = _prefetchOptions.PrefetchFileSizeThresholdBytes;
+        string dirPrefix = string.IsNullOrEmpty(dirInternalPath) ? "" : dirInternalPath + "/";
+        List<(string InternalPath, ZipEntryInfo Entry)> allItems = structure.ListDirectory(dirInternalPath)
+            .Where(item => !item.Entry.IsDirectory && item.Entry.UncompressedSize <= sizeThreshold)
+            .Select(item => (InternalPath: dirPrefix + item.Name, item.Entry))
+            .ToList();
+
+        if (allItems.Count == 0)
+            return;
+
+        // Apply MaxDirectoryFiles cap: keep entries nearest to trigger by LocalHeaderOffset
+        long pivotOffset = triggerEntry?.LocalHeaderOffset ?? allItems[0].Entry.LocalHeaderOffset;
+        IEnumerable<(string InternalPath, ZipEntryInfo Entry)> capped = allItems.Count > _prefetchOptions.PrefetchMaxDirectoryFiles
+            ? allItems
+                .OrderBy(x => Math.Abs(x.Entry.LocalHeaderOffset - pivotOffset))
+                .Take(_prefetchOptions.PrefetchMaxDirectoryFiles)
+            : allItems;
+
+        // Exclude trigger from span candidates (it's already being read)
+        List<ZipEntryInfo> candidates = capped
+            .Where(x => triggerEntry == null || x.Entry.LocalHeaderOffset != triggerEntry.Value.LocalHeaderOffset)
+            .Select(x => x.Entry)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return;
+
+        // Use trigger or first candidate as the centering anchor
+        ZipEntryInfo anchor = triggerEntry ?? candidates[0];
+
+        PrefetchPlan plan = SpanSelector.Select(
+            candidates,
+            anchor,
+            _prefetchOptions.PrefetchMaxFiles,
+            _prefetchOptions.PrefetchFillRatioThreshold);
+
+        if (plan.IsEmpty)
+            return;
+
+        // Build lookup: LocalHeaderOffset → (internalPath, entry)
+        Dictionary<long, (string InternalPath, ZipEntryInfo Entry)> wantedByOffset =
+            allItems
+                .Where(x => plan.Entries.Any(e => e.LocalHeaderOffset == x.Entry.LocalHeaderOffset))
+                .ToDictionary(x => x.Entry.LocalHeaderOffset);
+
+        // Skip entries already in cache — no need to re-read or re-decompress them.
+        // If all are warm, bail out entirely before opening the file.
+        wantedByOffset = wantedByOffset
+            .Where(kv => !_fileContentCache.ContainsKey($"{archive.VirtualPath}:{kv.Value.InternalPath}"))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        if (wantedByOffset.Count == 0)
+        {
+            _logger.LogInformation(
+                "Prefetch skipped (all {Count} entries already cached): {Archive}/{Dir}",
+                plan.Entries.Count, archive.VirtualPath, dirInternalPath);
+            return;
+        }
+
+        // Sort the plan entries by offset for linear traversal
+        IOrderedEnumerable<ZipEntryInfo> ordered = plan.Entries.OrderBy(e => e.LocalHeaderOffset);
+
+        long bytesRead = 0;
+        int filesWarmed = 0;
+        var sw = Stopwatch.StartNew();
+
+        await using FileStream zipStream = new(
+            archive.PhysicalPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 65536,
+            useAsync: true);
+
+        // Seek once to span start
+        zipStream.Seek(plan.SpanStart, SeekOrigin.Begin);
+        long currentPos = plan.SpanStart;
+
+        byte[] discardBuffer = ArrayPool<byte>.Shared.Rent(DiscardBufferSize);
+        byte[] headerBuffer = new byte[LocalHeaderFixedSize];
+
+        try
+        {
+            foreach (ZipEntryInfo wantedEntry in ordered)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Skip (discard) any bytes before this entry's local header
+                long gap = wantedEntry.LocalHeaderOffset - currentPos;
+                if (gap < 0)
+                {
+                    // Stream overshot (shouldn't happen with a valid plan) — skip this entry
+                    continue;
+                }
+
+                if (gap > 0)
+                {
+                    long discarded = await DiscardBytesAsync(zipStream, gap, discardBuffer, ct).ConfigureAwait(false);
+                    bytesRead += discarded;
+                    currentPos += discarded;
+                }
+
+                // Parse the local header (30 bytes fixed)
+                int headerRead = await ReadExactAsync(zipStream, headerBuffer, 0, LocalHeaderFixedSize, ct).ConfigureAwait(false);
+                if (headerRead < LocalHeaderFixedSize)
+                    break; // Truncated archive
+                currentPos += headerRead;
+                bytesRead += headerRead;
+
+                // Read FileNameLength (offset 26) and ExtraFieldLength (offset 28) — little-endian
+                ushort fileNameLen = BinaryPrimitives.ReadUInt16LittleEndian(headerBuffer.AsSpan(FileNameLengthOffset, 2));
+                ushort extraLen = BinaryPrimitives.ReadUInt16LittleEndian(headerBuffer.AsSpan(28, 2));
+                int variableHeaderLen = fileNameLen + extraLen;
+
+                // Skip filename + extra field
+                if (variableHeaderLen > 0)
+                {
+                    long skipped = await DiscardBytesAsync(zipStream, variableHeaderLen, discardBuffer, ct).ConfigureAwait(false);
+                    currentPos += skipped;
+                    bytesRead += skipped;
+                }
+
+                // Compressed data starts here — use CompressedSize from Central Directory (more reliable)
+                long compressedSize = wantedEntry.CompressedSize;
+
+                if (!wantedByOffset.TryGetValue(wantedEntry.LocalHeaderOffset, out var wanted))
+                {
+                    // Not a wanted entry (hole) — discard compressed bytes
+                    long discarded = await DiscardBytesAsync(zipStream, compressedSize, discardBuffer, ct).ConfigureAwait(false);
+                    currentPos += discarded;
+                    bytesRead += discarded;
+                    continue;
+                }
+
+                // Wanted entry — read compressed bytes and decompress
+                string cacheKey = $"{archive.VirtualPath}:{wanted.InternalPath}";
+
+                // Read compressed data into a pooled buffer
+                byte[] compressedBuffer = ArrayPool<byte>.Shared.Rent((int)compressedSize);
+                try
+                {
+                    int compRead = await ReadExactAsync(zipStream, compressedBuffer, 0, (int)compressedSize, ct).ConfigureAwait(false);
+                    currentPos += compRead;
+                    bytesRead += compRead;
+
+                    // Decompress into MemoryStream
+                    MemoryStream decompressed = new((int)wantedEntry.UncompressedSize);
+                    ushort compressionMethod = BinaryPrimitives.ReadUInt16LittleEndian(headerBuffer.AsSpan(8, 2));
+
+                    if (compressionMethod == 0) // Store
+                    {
+                        await decompressed.WriteAsync(compressedBuffer.AsMemory(0, compRead), ct).ConfigureAwait(false);
+                    }
+                    else if (compressionMethod == 8) // Deflate
+                    {
+                        await using var deflate = new DeflateStream(
+                            new MemoryStream(compressedBuffer, 0, compRead, writable: false),
+                            CompressionMode.Decompress,
+                            leaveOpen: false);
+                        await deflate.CopyToAsync(decompressed, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Unsupported compression — skip warming this entry
+                        continue;
+                    }
+
+                    decompressed.Position = 0;
+                    await _fileContentCache.WarmAsync(wantedEntry, cacheKey, decompressed, ct).ConfigureAwait(false);
+                    filesWarmed++;
+                    _logger.LogDebug("Prefetch warmed: {CacheKey} ({Bytes:N0} bytes)", cacheKey, wantedEntry.UncompressedSize);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(compressedBuffer);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(discardBuffer);
+        }
+
+        sw.Stop();
+
+        PrefetchTelemetry.FilesWarmed.Add(filesWarmed);
+        PrefetchTelemetry.BytesRead.Add(bytesRead);
+        PrefetchTelemetry.SpanReadDuration.Record(sw.Elapsed.TotalMilliseconds);
+
+        _logger.LogInformation(
+            "Prefetch complete: {Archive}/{Dir} — {Files}/{Candidates} files warmed, {Bytes:N0} bytes read in {Ms:F1} ms",
+            archive.VirtualPath, dirInternalPath, filesWarmed, wantedByOffset.Count + filesWarmed, bytesRead, sw.Elapsed.TotalMilliseconds);
+    }
+
+    // ── Sequential I/O helpers ───────────────────────────────────────────────
+
+    private static async Task<long> DiscardBytesAsync(
+        Stream stream, long count, byte[] buffer, CancellationToken ct)
+    {
+        long remaining = count;
+        while (remaining > 0)
+        {
+            int toRead = (int)Math.Min(remaining, buffer.Length);
+            int read = await stream.ReadAsync(buffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
+            if (read == 0) break;
+            remaining -= read;
+        }
+        return count - remaining;
+    }
+
+    private static async Task<int> ReadExactAsync(
+        Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)
+    {
+        int totalRead = 0;
+        while (totalRead < count)
+        {
+            int read = await stream.ReadAsync(buffer.AsMemory(offset + totalRead, count - totalRead), ct).ConfigureAwait(false);
+            if (read == 0) break;
+            totalRead += read;
+        }
+        return totalRead;
     }
 
     // === Private helpers ===
@@ -334,5 +670,12 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         string trimmed = path.TrimEnd('/');
         int lastSlash = trimmed.LastIndexOf('/');
         return lastSlash >= 0 ? trimmed[(lastSlash + 1)..] : trimmed;
+    }
+
+    private static string GetDirectoryPath(string internalPath)
+    {
+        string trimmed = internalPath.TrimEnd('/');
+        int lastSlash = trimmed.LastIndexOf('/');
+        return lastSlash >= 0 ? trimmed[..lastSlash] : "";
     }
 }
