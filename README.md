@@ -28,6 +28,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 - **Dual-Tier Caching** — Small files (< 50MB) cached in memory as byte arrays, large files cached on disk via NTFS sparse files — each tier with independent capacity limits and LRU eviction
 - **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support; parses Central Directory via streaming enumeration without loading the entire index into memory
 - **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UTF.Unknown, a .NET port based on Mozilla's Universal Charset Detector)
+- **Sibling Prefetch** — On first access to a file, ZipDrive proactively warms nearby siblings in a single sequential pass through the ZIP. A centered window of up to 20 files is selected using a fill-ratio algorithm that avoids reading large holes between sparse entries. Subsequent reads of siblings are served entirely from cache with zero disk I/O
 - **Thundering Herd Prevention** — Lock-free cache hits with per-key deduplication; 100 concurrent requests for the same uncached file trigger only one decompression, and all readers access completed chunks concurrently
 - **OpenTelemetry Observability** — Opt-in metrics, tracing, and structured logging with Aspire Dashboard support
 - **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup with configurable intervals
@@ -108,6 +109,18 @@ ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Ca
 | `Cache:TempDirectory` | System temp | Directory for disk-tier cache files. Set this to a fast SSD path to improve large-file read performance. When `null`, defaults to the OS temp directory |
 | `Cache:DefaultTtlMinutes` | `30` | Cache entry time-to-live |
 | `Cache:EvictionCheckIntervalSeconds` | `10` | Background maintenance sweep interval |
+
+### Prefetch Options
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `Cache:PrefetchEnabled` | `true` | Master on/off switch for sibling prefetch |
+| `Cache:PrefetchOnRead` | `true` | Trigger prefetch on cold file reads |
+| `Cache:PrefetchOnListDirectory` | `true` | Trigger prefetch on directory listings |
+| `Cache:PrefetchFileSizeThresholdMb` | `10` | Siblings larger than this are excluded from prefetch (they route to disk tier) |
+| `Cache:PrefetchMaxFiles` | `20` | Maximum siblings included in one prefetch span |
+| `Cache:PrefetchMaxDirectoryFiles` | `300` | Candidate cap: in very large directories, only the nearest N files by ZIP offset around the trigger are considered |
+| `Cache:PrefetchFillRatioThreshold` | `0.80` | Minimum density (wanted bytes / span bytes) required to accept a span. Lower values allow more hole bytes between files |
 
 ### OpenTelemetry
 
