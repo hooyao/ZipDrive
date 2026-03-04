@@ -102,6 +102,29 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             _name);
     }
 
+    /// <summary>
+    /// Attempts a synchronous lock-free cache hit. Returns <c>true</c> and a borrowed handle
+    /// if the entry is present and not expired; <c>false</c> if it is absent or expired.
+    /// The caller MUST dispose the handle when done.
+    /// </summary>
+    internal bool TryBorrow(string cacheKey, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ICacheHandle<T>? handle)
+    {
+        if (_cache.TryGetValue(cacheKey, out CacheEntry? entry) && !IsExpired(entry))
+        {
+            entry.IncrementRefCount();
+            entry.LastAccessedAt = _timeProvider.GetUtcNow();
+            entry.AccessCount++;
+            Interlocked.Increment(ref _hits);
+            CacheTelemetry.Hits.Add(1, _tierTag);
+            T value = _storageStrategy.Retrieve(entry.Stored);
+            handle = new CacheHandle<T>(entry, value, Return);
+            return true;
+        }
+
+        handle = null;
+        return false;
+    }
+
     /// <inheritdoc />
     public async Task<ICacheHandle<T>> BorrowAsync(
         string cacheKey,

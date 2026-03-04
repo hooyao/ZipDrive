@@ -68,6 +68,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
 
         var fileContentCache = new FileContentCache(
             readerFactory, cacheOpts,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
 
@@ -176,6 +177,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             TimeProvider.System, cacheOpts2, NullLogger<ArchiveStructureCache>.Instance, detector2);
         var fc = new FileContentCache(
             factory, cacheOpts2,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
         var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,

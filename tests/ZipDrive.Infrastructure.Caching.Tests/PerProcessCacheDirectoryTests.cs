@@ -97,6 +97,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
         var cache = new FileContentCache(
             new ZipReaderFactory(),
             cacheOpts,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(),
             TimeProvider.System,
             NullLoggerFactory.Instance);
@@ -119,6 +120,7 @@ public class PerProcessCacheDirectoryTests : IDisposable
         var cache = new FileContentCache(
             new ZipReaderFactory(),
             cacheOpts,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(),
             TimeProvider.System,
             NullLoggerFactory.Instance);

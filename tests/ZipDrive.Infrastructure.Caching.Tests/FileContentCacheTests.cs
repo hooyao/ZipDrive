@@ -42,6 +42,7 @@ public sealed class FileContentCacheTests : IDisposable
         return new FileContentCache(
             factory ?? new StubZipReaderFactory(),
             opts,
+            Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(),
             _fakeTime,
             NullLoggerFactory.Instance);

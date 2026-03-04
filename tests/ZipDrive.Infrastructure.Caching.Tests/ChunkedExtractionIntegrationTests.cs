@@ -321,6 +321,7 @@ public class ChunkedExtractionIntegrationTests : IDisposable
         var cache = new FileContentCache(
             new ZipDrive.Infrastructure.Archives.Zip.ZipReaderFactory(),
             cacheOpts,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(),
             TimeProvider.System,
             NullLoggerFactory.Instance);

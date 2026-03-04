@@ -70,5 +70,29 @@
   // Example: "http://localhost:18889" for Aspire Dashboard.
   "OpenTelemetry": {
     "Endpoint": ""
+  },
+
+  // Coalescing batch reader: batches concurrent small-file cache-miss requests into a single
+  // sequential ZIP pass. Reduces I/O seeks when Windows Explorer generates thumbnail bursts.
+  "Coalescing": {
+    // Set to false to disable coalescing and restore per-entry extraction behavior.
+    "Enabled": true,
+
+    // Milliseconds to wait after the first cache-miss before firing it solo if no second
+    // request arrives. 0 = dispatch immediately (no added latency for sequential access).
+    // Set to e.g. 20 to give concurrent burst requests time to arrive and be batched.
+    "FastPathMs": 0,
+
+    // Full coalescing window in milliseconds, activated once a burst is detected.
+    // All requests arriving within this window from the first are batched together.
+    "WindowMs": 500,
+
+    // Minimum ratio of useful bytes to total bytes read (0.0–1.0).
+    // 0.8 = allow up to 20% hole bytes in the sequential read range.
+    "DensityThreshold": 0.8,
+
+    // When true, hole entries (unrequested files between two requested files in the ZIP)
+    // are also decompressed and cached during the sequential pass.
+    "SpeculativeCache": false
   }
 }

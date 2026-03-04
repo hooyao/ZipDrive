@@ -96,6 +96,7 @@ public class EnduranceTest : IAsyncLifetime
 
         _fileCache = new FileContentCache(
             readerFactory, cacheOpts,
+            Microsoft.Extensions.Options.Options.Create(new CoalescingOptions { Enabled = false }),
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
 
