@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ['release-*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. release-1.0.10)'
+        required: true
 
 permissions:
   contents: write
@@ -18,7 +23,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           $version = $tag -replace '^release-', ''
           Write-Output "VERSION=$version" >> $env:GITHUB_OUTPUT
           if ($version -match '-') {
@@ -77,13 +82,13 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
           $prerelease = "${{ steps.version.outputs.PRERELEASE }}"
-          $args = @(
+          $ghArgs = @(
             "release", "create", "v$version",
             "--title", "ZipDrive $version",
             "--generate-notes",
             "ZipDrive-$version.zip"
           )
           if ($prerelease -eq "true") {
-            $args += "--prerelease"
+            $ghArgs += "--prerelease"
           }
-          gh @args
+          gh @ghArgs
