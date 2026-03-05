@@ -654,6 +654,12 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     /// <inheritdoc />
     public int EntryCount => _cache.Count;
 
+    /// <summary>
+    /// Returns true if a non-expired entry exists for the given key. Lock-free.
+    /// </summary>
+    public bool ContainsKey(string cacheKey) =>
+        _cache.TryGetValue(cacheKey, out CacheEntry? entry) && !IsExpired(entry);
+
     /// <inheritdoc />
     public int BorrowedEntryCount => _cache.Values.Count(e => e.RefCount > 0);
 

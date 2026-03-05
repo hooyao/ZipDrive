@@ -136,6 +136,38 @@ public sealed class FileContentCache : IFileContentCache
     }
 
     /// <inheritdoc />
+    public bool ContainsKey(string cacheKey) =>
+        _memoryCache.ContainsKey(cacheKey) || _diskCache.ContainsKey(cacheKey);
+
+    /// <inheritdoc />
+    public async Task WarmAsync(
+        ZipEntryInfo entry,
+        string cacheKey,
+        Stream decompressedStream,
+        CancellationToken cancellationToken = default)
+    {
+        GenericCache<Stream> cache = entry.UncompressedSize < _cutoffBytes
+            ? _memoryCache
+            : _diskCache;
+
+        // Capture stream reference for the factory closure
+        Stream capturedStream = decompressedStream;
+
+        Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = _ =>
+            Task.FromResult(new CacheFactoryResult<Stream>
+            {
+                Value = capturedStream,
+                SizeBytes = entry.UncompressedSize,
+                OnDisposed = () => ValueTask.CompletedTask
+            });
+
+        // BorrowAsync stores the entry (thundering herd protection: no-op if already cached).
+        // Immediate dispose releases RefCount to 0 — entry stays cached but eviction-eligible.
+        using ICacheHandle<Stream> handle = await cache.BorrowAsync(
+            cacheKey, _defaultTtl, factory, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public void EvictExpired()
     {
         _memoryCache.EvictExpired();

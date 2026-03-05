@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, and drag-and-drop folder launch implemented. 332 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
+**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch, and sibling prefetch with coalescing batch reader implemented. 347 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
 
 ## Development Workflow Requirements
 
@@ -463,12 +463,19 @@ When working with the caching layer:
     "ChunkSizeMb": 10,                      // Chunk size for incremental disk-tier extraction
     "TempDirectory": null,                  // null = system temp dir
     "DefaultTtlMinutes": 30,               // Entry expiration (used by ZipVirtualFileSystem + ArchiveStructureCache)
-    "EvictionCheckIntervalSeconds": 60      // CacheMaintenanceService sweep interval
+    "EvictionCheckIntervalSeconds": 60,     // CacheMaintenanceService sweep interval
+    "PrefetchEnabled": true,               // Master on/off switch for sibling prefetch
+    "PrefetchOnRead": true,                // Trigger prefetch on cold file reads
+    "PrefetchOnListDirectory": true,       // Trigger prefetch on directory listings
+    "PrefetchFileSizeThresholdMb": 10,     // Max file size for prefetch candidates (larger files skip)
+    "PrefetchMaxFiles": 20,                // Max siblings per prefetch span
+    "PrefetchMaxDirectoryFiles": 300,      // Candidate cap before nearest-offset trim
+    "PrefetchFillRatioThreshold": 0.80     // Min density (wanted bytes / span bytes) to accept a span
   }
 }
 ```
 
-All seven options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, `SmallFileCutoffBytes`, and `ChunkSizeBytes`.
+All options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, `SmallFileCutoffBytes`, `ChunkSizeBytes`, and `PrefetchFileSizeThresholdBytes` (via `PrefetchOptions`).
 
 **Tuning Guidelines**:
 - Low memory systems: Reduce `MemoryCacheSizeMb`, lower `SmallFileCutoffMb`
@@ -612,6 +619,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Endurance Testing | ✅ Complete | 24-hour soak test with 100 concurrent tasks, full + partial SHA-256 verification, fail-fast diagnostics, latency reporting |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
 | Drag-and-Drop Launch | ✅ Complete | `ArgPreprocessor` rewrites bare args, `DokanHostedService` validates directory + press-any-key UX |
+| Sibling Prefetch | ✅ Complete | `SpanSelector` + coalescing batch reader; fire-and-forget on cold reads and directory listings, per-directory in-flight guard, fill-ratio span selection, 15 new tests |
 
 ## Known Limitations / Future Work
 

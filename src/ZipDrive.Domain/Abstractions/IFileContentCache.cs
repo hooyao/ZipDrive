@@ -29,6 +29,28 @@ public interface IFileContentCache
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Warms a cache entry by pushing an already-decompressed stream into the appropriate
+    /// cache tier without going through the internal extraction pipeline.
+    /// If the entry is already cached, this is a no-op (thundering herd protection applies).
+    /// The handle is immediately released — the entry has RefCount 0 and is eligible for eviction.
+    /// </summary>
+    /// <param name="entry">Entry metadata used for tier routing.</param>
+    /// <param name="cacheKey">Unique cache key for this entry.</param>
+    /// <param name="decompressedStream">Already-decompressed stream to store.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task WarmAsync(
+        ZipEntryInfo entry,
+        string cacheKey,
+        Stream decompressedStream,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns true if a non-expired entry is already cached for the given key. Lock-free.
+    /// Use this to skip prefetch work when an entry is already warm.
+    /// </summary>
+    bool ContainsKey(string cacheKey);
+
+    /// <summary>
     /// Evicts expired entries from all cache tiers.
     /// </summary>
     void EvictExpired();

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
@@ -100,6 +101,8 @@ public class EnduranceTest : IAsyncLifetime
             NullLoggerFactory.Instance);
 
         _vfs = new ZipVirtualFileSystem(archiveTrie, _structureCache, _fileCache, discovery, pathResolver,
+            new NullHostApplicationLifetime(),
+            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
     }
