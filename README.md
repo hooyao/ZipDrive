@@ -28,7 +28,7 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 - **Dual-Tier Caching** — Small files (< 50MB) cached in memory as byte arrays, large files cached on disk via NTFS sparse files — each tier with independent capacity limits and LRU eviction
 - **Streaming ZIP Reader** — Custom ZIP parser with ZIP64 support; parses Central Directory via streaming enumeration without loading the entire index into memory
 - **Automatic Charset Detection** — Correctly displays Japanese, Chinese, Korean, and other non-Latin filenames via statistical encoding detection (UTF.Unknown, a .NET port based on Mozilla's Universal Charset Detector)
-- **Sibling Prefetch** — On first access to a file, ZipDrive proactively warms nearby siblings in a single sequential pass through the ZIP. A centered window of up to 20 files is selected using a fill-ratio algorithm that avoids reading large holes between sparse entries. Subsequent reads of siblings are served entirely from cache with zero disk I/O
+- **Sibling Prefetch** (opt-in) — When enabled, on first access to a file ZipDrive proactively warms nearby siblings in a single sequential pass through the ZIP. Disabled by default — see [How Prefetch Works](#how-prefetch-works) for details and side effects
 - **Thundering Herd Prevention** — Lock-free cache hits with per-key deduplication; 100 concurrent requests for the same uncached file trigger only one decompression, and all readers access completed chunks concurrently
 - **OpenTelemetry Observability** — Opt-in metrics, tracing, and structured logging with Aspire Dashboard support
 - **Background Cache Maintenance** — Automatic LRU eviction and expired entry cleanup with configurable intervals
@@ -112,15 +112,17 @@ ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Ca
 
 ### Prefetch Options
 
+Prefetch settings are nested under `Cache:Prefetch`. See [How Prefetch Works](#how-prefetch-works) for a full explanation.
+
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `Cache:PrefetchEnabled` | `true` | Master on/off switch for sibling prefetch |
-| `Cache:PrefetchOnRead` | `true` | Trigger prefetch on cold file reads |
-| `Cache:PrefetchOnListDirectory` | `true` | Trigger prefetch on directory listings |
-| `Cache:PrefetchFileSizeThresholdMb` | `10` | Siblings larger than this are excluded from prefetch (they route to disk tier) |
-| `Cache:PrefetchMaxFiles` | `20` | Maximum siblings included in one prefetch span |
-| `Cache:PrefetchMaxDirectoryFiles` | `300` | Candidate cap: in very large directories, only the nearest N files by ZIP offset around the trigger are considered |
-| `Cache:PrefetchFillRatioThreshold` | `0.80` | Minimum density (wanted bytes / span bytes) required to accept a span. Lower values allow more hole bytes between files |
+| `Cache:Prefetch:Enabled` | `false` | Master on/off switch. Disabled by default — see side effects below |
+| `Cache:Prefetch:OnRead` | `true` | Prefetch siblings when a file is opened. The recommended trigger — active as soon as `Enabled` is set to `true` |
+| `Cache:Prefetch:OnListDirectory` | `false` | Prefetch siblings when a directory is listed. **Recommended to keep disabled** — image viewers and file managers enumerate sibling directories, causing prefetch across unrelated folders |
+| `Cache:Prefetch:FileSizeThresholdMb` | `10` | Siblings larger than this are excluded from prefetch (they route to disk tier) |
+| `Cache:Prefetch:MaxFiles` | `20` | Maximum siblings included in one prefetch span |
+| `Cache:Prefetch:MaxDirectoryFiles` | `300` | Candidate cap: in very large directories, only the nearest N files by ZIP offset around the trigger are considered |
+| `Cache:Prefetch:FillRatioThreshold` | `0.80` | Minimum density (wanted bytes / span bytes) required to accept a span. Lower values allow more hole bytes between files |
 
 ### OpenTelemetry
 
@@ -141,6 +143,101 @@ docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboa
 ```
 
 Then open `http://localhost:18888`.
+
+## How Prefetch Works
+
+Sibling prefetch is an **opt-in** feature that reduces cold-start latency when you access multiple files in the same ZIP directory. It is **disabled by default** because it can cause unintended side effects with certain software.
+
+### The mechanism
+
+When you open a file inside a ZIP, ZipDrive must decompress it from the archive. Without prefetch, each file triggers a separate seek + decompress cycle. With prefetch enabled, ZipDrive proactively warms nearby siblings in a single pass:
+
+```
+Without prefetch:                     With prefetch:
+
+Open file_003.raw                     Open file_003.raw
+  → seek to file_003, decompress        → seek to file_001 (span start)
+Open file_004.raw                        → decompress file_001..005 in one pass
+  → seek to file_004, decompress        → all siblings now in cache
+Open file_005.raw                     Open file_004.raw
+  → seek to file_005, decompress        → instant cache hit (0ms)
+                                      Open file_005.raw
+3 seeks, 3 decompression cycles         → instant cache hit (0ms)
+
+                                      1 seek, 1 decompression pass
+```
+
+**How the span is selected:**
+
+1. When a file is read (cold miss), ZipDrive looks at all files in the same ZIP directory
+2. Files above the size threshold (`FileSizeThresholdMb`, default 10 MB) are excluded
+3. Up to `MaxFiles` (default 20) siblings nearest to the trigger by ZIP offset are selected
+4. A **fill-ratio** check ensures the span is dense enough — if there are large gaps between files (unused ZIP data), the span is shrunk until at least 80% of the bytes read are wanted files
+5. The selected files are decompressed in a single sequential read and placed in cache
+
+### When prefetch helps
+
+Prefetch is most effective when:
+- You access many small files in the same directory (e.g., image sequences, web assets, game data)
+- Files are physically close together in the ZIP (common — ZIP tools usually write directory contents sequentially)
+- Your access pattern is sequential or semi-sequential
+
+### Side effects and risks
+
+**Prefetch is disabled by default** because the Windows file system API does not distinguish between a user intentionally opening a file and background software probing the drive:
+
+- **File managers** (Windows Explorer, Total Commander) enumerate every directory to show previews, file counts, and metadata — each enumeration can trigger prefetch for that directory's contents
+- **Image viewers** (FastStone, IrfanView) list sibling directories when you open an image — this causes prefetch to fire in every sibling folder, not just the one you're viewing
+- **Search indexers** (Windows Search, Everything) crawl the entire drive — every indexed directory triggers prefetch
+- **Antivirus scanners** scan files on access — each scanned file triggers prefetch for its siblings
+
+The result can be a **cascade of I/O**: one directory listing triggers 20 file decompressions, across dozens of directories, potentially decompressing hundreds of files that are never actually read. This can:
+- **Overflow the cache** — evicting files you actually need to make room for prefetched files nobody asked for
+- **Saturate disk I/O** — continuous decompression competing with actual user reads
+- **Increase CPU usage** — decompression is CPU-bound work
+
+### How to configure it
+
+**To enable prefetch** (recommended only if you control what software accesses the drive):
+
+```bash
+# Minimal: just flip the master switch — OnRead is true by default
+ZipDrive.exe --Cache:Prefetch:Enabled=true ...
+```
+
+Or in `appsettings.jsonc`:
+```jsonc
+"Cache": {
+  "Prefetch": {
+    "Enabled": true
+  }
+}
+```
+
+**To selectively disable triggers** if you see unwanted I/O:
+
+| Symptom | Fix |
+|---------|-----|
+| Browsing folders in Explorer causes heavy I/O | Set `OnListDirectory` to `false` (already the default) |
+| Opening a single file decompresses many siblings | Set `OnRead` to `false` |
+| All prefetch-related I/O must stop | Set `Enabled` to `false` (the default) |
+
+**To fine-tune the scope:**
+
+| Knob | Effect |
+|------|--------|
+| Lower `MaxFiles` (e.g., 5) | Fewer siblings per prefetch — less aggressive |
+| Lower `FileSizeThresholdMb` (e.g., 2) | Skip medium files, only prefetch very small ones |
+| Higher `FillRatioThreshold` (e.g., 0.95) | Require files to be tightly packed — skip sparse directories |
+
+### Troubleshooting
+
+If you observe abnormally high disk I/O or CPU usage after enabling prefetch:
+
+1. **Check if background software is triggering it** — disable `OnListDirectory` first (it's the most common culprit)
+2. **If I/O persists**, disable `OnRead` to rule out prefetch entirely
+3. **Monitor via OpenTelemetry** — the `prefetch.files_warmed` and `prefetch.bytes_read` metrics (meter `ZipDrive.Caching`) show how much work prefetch is doing
+4. **As a last resort**, set `Enabled` to `false` to disable the feature completely
 
 ## Architecture
 

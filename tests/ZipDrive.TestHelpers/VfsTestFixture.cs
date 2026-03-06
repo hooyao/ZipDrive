@@ -61,7 +61,7 @@ public class VfsTestFixture : IAsyncLifetime
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
-            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = RootPath, MaxDiscoveryDepth = 6 });

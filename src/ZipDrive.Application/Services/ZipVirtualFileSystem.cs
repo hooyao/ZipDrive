@@ -158,7 +158,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         };
 
         // Trigger prefetch fire-and-forget after listing completes (FindFiles trigger)
-        if (_prefetchOptions.PrefetchEnabled && _prefetchOptions.PrefetchOnListDirectory &&
+        if (_prefetchOptions.Enabled && _prefetchOptions.OnListDirectory &&
             (result.Status == ArchiveTrieStatus.ArchiveRoot || result.Status == ArchiveTrieStatus.InsideArchive))
         {
             string internalDir = result.Status == ArchiveTrieStatus.ArchiveRoot ? "" : result.InternalPath;
@@ -216,7 +216,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         // Trigger prefetch fire-and-forget only on a cold read — if the entry was already
         // cached, siblings were already warmed by a previous read or prefetch pass.
-        if (!wasCached && _prefetchOptions.PrefetchEnabled && _prefetchOptions.PrefetchOnRead)
+        if (!wasCached && _prefetchOptions.Enabled && _prefetchOptions.OnRead)
         {
             string dirPath = GetDirectoryPath(internalPath);
             _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value);
@@ -335,7 +335,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
             archive.VirtualPath, archive.PhysicalPath, ct).ConfigureAwait(false);
 
         // Build candidate list: non-directory files below size threshold
-        long sizeThreshold = _prefetchOptions.PrefetchFileSizeThresholdBytes;
+        long sizeThreshold = _prefetchOptions.FileSizeThresholdBytes;
         string dirPrefix = string.IsNullOrEmpty(dirInternalPath) ? "" : dirInternalPath + "/";
         List<(string InternalPath, ZipEntryInfo Entry)> allItems = structure.ListDirectory(dirInternalPath)
             .Where(item => !item.Entry.IsDirectory && item.Entry.UncompressedSize <= sizeThreshold)
@@ -347,10 +347,10 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         // Apply MaxDirectoryFiles cap: keep entries nearest to trigger by LocalHeaderOffset
         long pivotOffset = triggerEntry?.LocalHeaderOffset ?? allItems[0].Entry.LocalHeaderOffset;
-        IEnumerable<(string InternalPath, ZipEntryInfo Entry)> capped = allItems.Count > _prefetchOptions.PrefetchMaxDirectoryFiles
+        IEnumerable<(string InternalPath, ZipEntryInfo Entry)> capped = allItems.Count > _prefetchOptions.MaxDirectoryFiles
             ? allItems
                 .OrderBy(x => Math.Abs(x.Entry.LocalHeaderOffset - pivotOffset))
-                .Take(_prefetchOptions.PrefetchMaxDirectoryFiles)
+                .Take(_prefetchOptions.MaxDirectoryFiles)
             : allItems;
 
         // Exclude trigger from span candidates (it's already being read)
@@ -368,8 +368,8 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         PrefetchPlan plan = SpanSelector.Select(
             candidates,
             anchor,
-            _prefetchOptions.PrefetchMaxFiles,
-            _prefetchOptions.PrefetchFillRatioThreshold);
+            _prefetchOptions.MaxFiles,
+            _prefetchOptions.FillRatioThreshold);
 
         if (plan.IsEmpty)
             return;

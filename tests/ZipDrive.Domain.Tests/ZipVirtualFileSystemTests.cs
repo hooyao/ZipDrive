@@ -78,7 +78,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
-            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 6 });
@@ -186,7 +186,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             NullLoggerFactory.Instance);
         var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
             new NullHostApplicationLifetime(),
-            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
         bool? eventValue = null;

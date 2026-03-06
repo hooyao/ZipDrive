@@ -36,21 +36,21 @@ The system SHALL select a contiguous span of sibling entries around a trigger fi
 
 #### Scenario: High-density span selected
 - **WHEN** all siblings are tightly packed in the ZIP with no large holes
-- **THEN** all siblings within `PrefetchMaxFiles` are included in the span
+- **THEN** all siblings within `MaxFiles` are included in the span
 
 #### Scenario: Sparse span shrinks to meet fill ratio
-- **WHEN** a large hole entry exists between two wanted siblings such that fill ratio < `PrefetchFillRatioThreshold`
+- **WHEN** a large hole entry exists between two wanted siblings such that fill ratio < `FillRatioThreshold`
 - **THEN** the endpoint that creates the largest hole is removed
 - **AND** the algorithm repeats until fill ratio meets the threshold or window has one entry
 
 #### Scenario: Large directory is capped before span selection
-- **WHEN** a directory contains more files than `PrefetchMaxDirectoryFiles`
-- **THEN** only the `PrefetchMaxDirectoryFiles` files nearest to the trigger by `LocalHeaderOffset` are considered
+- **WHEN** a directory contains more files than `MaxDirectoryFiles`
+- **THEN** only the `MaxDirectoryFiles` files nearest to the trigger by `LocalHeaderOffset` are considered
 - **AND** span selection runs on this reduced candidate set
 
 #### Scenario: Span capped at MaxFiles
-- **WHEN** the candidate window after directory cap contains more than `PrefetchMaxFiles` entries
-- **THEN** a centered window of `PrefetchMaxFiles` around the trigger is selected before span selection
+- **WHEN** the candidate window after directory cap contains more than `MaxFiles` entries
+- **THEN** a centered window of `MaxFiles` around the trigger is selected before span selection
 
 ---
 
@@ -91,19 +91,24 @@ The system SHALL prevent duplicate concurrent sequential reads of the same direc
 ---
 
 ### Requirement: Prefetch Configuration
-All prefetch behavior SHALL be configurable via `CacheOptions` with defaults that are safe for production use.
+All prefetch behavior SHALL be configurable via `PrefetchOptions` bound from the `Cache:Prefetch` configuration subsection, with defaults that are safe for production use.
 
 #### Scenario: Prefetch disabled by config
-- **WHEN** `Cache:PrefetchEnabled` is set to `false`
+- **WHEN** `Cache:Prefetch:Enabled` is set to `false`
 - **THEN** no prefetch is triggered on any `ReadFileAsync` or `FindFilesAsync` call
 
 #### Scenario: File size threshold filters large files
-- **WHEN** a sibling file's uncompressed size exceeds `PrefetchFileSizeThresholdMb`
+- **WHEN** a sibling file's uncompressed size exceeds `FileSizeThresholdMb`
 - **THEN** that sibling is excluded from prefetch candidates
 
 #### Scenario: Default configuration is safe
 - **WHEN** no prefetch config is specified
-- **THEN** defaults are: `PrefetchEnabled=true`, `PrefetchFileSizeThresholdMb=10`, `PrefetchMaxFiles=20`, `PrefetchMaxDirectoryFiles=300`, `PrefetchFillRatioThreshold=0.80`
+- **THEN** defaults are: `Enabled=false`, `OnRead=true`, `OnListDirectory=false`, `FileSizeThresholdMb=10`, `MaxFiles=20`, `MaxDirectoryFiles=300`, `FillRatioThreshold=0.80`
+
+#### Scenario: Enabling prefetch activates read-triggered prefetch immediately
+- **WHEN** only `Cache:Prefetch:Enabled` is set to `true` (no other overrides)
+- **THEN** read-triggered prefetch is active (because `OnRead` defaults to `true`)
+- **AND** list-triggered prefetch remains inactive (because `OnListDirectory` defaults to `false`)
 
 ---
 

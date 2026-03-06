@@ -71,11 +71,13 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
 
         var prefetchOpts = Options.Create(new PrefetchOptions
         {
-            PrefetchEnabled = true,
-            PrefetchFileSizeThresholdMb = 10,
-            PrefetchMaxFiles = 20,
-            PrefetchMaxDirectoryFiles = 300,
-            PrefetchFillRatioThreshold = 0.80
+            Enabled = true,
+            OnRead = true,
+            OnListDirectory = true,
+            FileSizeThresholdMb = 10,
+            MaxFiles = 20,
+            MaxDirectoryFiles = 300,
+            FillRatioThreshold = 0.80
         });
 
         _vfs = new ZipVirtualFileSystem(
@@ -131,7 +133,7 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
         var vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileCache, discovery, pathResolver,
             new NullHostApplicationLifetime(),
-            Options.Create(new PrefetchOptions { PrefetchEnabled = false }),
+            Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 3 });

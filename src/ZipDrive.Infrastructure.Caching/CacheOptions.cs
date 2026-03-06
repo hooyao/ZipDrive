@@ -138,49 +138,4 @@ public class CacheOptions
     /// Gets the eviction check interval as a TimeSpan (computed property).
     /// </summary>
     public TimeSpan EvictionCheckInterval => TimeSpan.FromSeconds(EvictionCheckIntervalSeconds);
-
-    // === Prefetch Options ===
-
-    /// <summary>
-    /// Gets or sets whether sibling prefetch is enabled.
-    /// When true, reading or listing a file in a ZIP directory speculatively warms
-    /// nearby siblings in a single sequential pass.
-    /// Default: true.
-    /// </summary>
-    public bool PrefetchEnabled { get; set; } = true;
-
-    /// <summary>
-    /// Gets or sets the maximum uncompressed file size in MB eligible for prefetch.
-    /// Files larger than this threshold are excluded from prefetch candidates.
-    /// Default: 10 MB.
-    /// </summary>
-    public int PrefetchFileSizeThresholdMb { get; set; } = 10;
-
-    /// <summary>
-    /// Gets or sets the maximum number of files to include in a single prefetch span.
-    /// This is the per-trigger budget after span selection.
-    /// Default: 20.
-    /// </summary>
-    public int PrefetchMaxFiles { get; set; } = 20;
-
-    /// <summary>
-    /// Gets or sets the maximum number of directory entries to load into the span
-    /// selection algorithm. If a directory has more files, only the entries nearest
-    /// to the trigger file by ZIP offset are considered.
-    /// Default: 300.
-    /// </summary>
-    public int PrefetchMaxDirectoryFiles { get; set; } = 300;
-
-    /// <summary>
-    /// Gets or sets the minimum fill ratio (useful bytes / span bytes) required to
-    /// read the span as a single sequential pass. Spans below this threshold are
-    /// shrunk by removing outlier endpoints until the ratio is met.
-    /// Range: 0.0–1.0. Default: 0.80 (80%).
-    /// </summary>
-    public double PrefetchFillRatioThreshold { get; set; } = 0.80;
-
-    /// <summary>
-    /// Gets the prefetch file size threshold in bytes (computed property).
-    /// </summary>
-    internal long PrefetchFileSizeThresholdBytes => PrefetchFileSizeThresholdMb * 1024L * 1024L;
 }
