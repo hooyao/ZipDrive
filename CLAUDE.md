@@ -490,12 +490,12 @@ OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is 
 {
   "OpenTelemetry": {
     "Endpoint": "http://localhost:18889",
-    "MetricExportIntervalSeconds": 15
+    "MetricExportIntervalSeconds": 5
   }
 }
 ```
 
-`MetricExportIntervalSeconds` controls how often metrics are exported to the OTLP collector (default: 15s). Lower values give smoother dashboard charts; higher values reduce export overhead. If the value is absent or non-positive (≤ 0), it defaults to 15.
+`MetricExportIntervalSeconds` controls how often metrics are exported to the OTLP collector (default: 5s). Lower values give smoother dashboard charts; higher values reduce export overhead. If the value is absent or non-positive (≤ 0), it defaults to 5.
 
 Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889 --OpenTelemetry:MetricExportIntervalSeconds=30`
 

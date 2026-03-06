@@ -98,10 +98,10 @@ builder.ConfigureServices((context, services) =>
 
     if (!string.IsNullOrEmpty(otlpEndpoint))
     {
-        var metricExportIntervalSeconds = context.Configuration.GetValue("OpenTelemetry:MetricExportIntervalSeconds", 15);
+        var metricExportIntervalSeconds = context.Configuration.GetValue("OpenTelemetry:MetricExportIntervalSeconds", 5);
         var metricExportIntervalMs = metricExportIntervalSeconds > 0 && metricExportIntervalSeconds <= int.MaxValue / 1000
             ? metricExportIntervalSeconds * 1000
-            : 15_000;
+            : 5_000;
 
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService("ZipDrive"))

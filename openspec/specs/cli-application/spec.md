@@ -56,7 +56,7 @@ The application SHALL handle Ctrl+C gracefully, unmounting the drive and clearin
 
 ### Requirement: OpenTelemetry OTLP export configuration
 
-The CLI application SHALL support configurable OTLP export for sending telemetry to an OpenTelemetry collector or Aspire Dashboard. The metric export interval SHALL be configurable via `OpenTelemetry:MetricExportIntervalSeconds`, defaulting to 15 seconds.
+The CLI application SHALL support configurable OTLP export for sending telemetry to an OpenTelemetry collector or Aspire Dashboard. The metric export interval SHALL be configurable via `OpenTelemetry:MetricExportIntervalSeconds`, defaulting to 5 seconds.
 
 #### Scenario: Custom OTLP endpoint from configuration
 
@@ -66,7 +66,7 @@ The CLI application SHALL support configurable OTLP export for sending telemetry
 #### Scenario: Default metric export interval
 
 - **WHEN** `OpenTelemetry:MetricExportIntervalSeconds` is absent or zero
-- **THEN** the `PeriodicExportingMetricReader` SHALL use an export interval of 15000 milliseconds
+- **THEN** the `PeriodicExportingMetricReader` SHALL use an export interval of 5000 milliseconds
 
 #### Scenario: Custom metric export interval
 
@@ -119,4 +119,4 @@ The `appsettings.jsonc` SHALL include an `"OpenTelemetry"` configuration section
 
 - **WHEN** the default `appsettings.jsonc` is deployed
 - **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `""` (disabled)
-- **AND** `"MetricExportIntervalSeconds"` defaulting to `15`
+- **AND** `"MetricExportIntervalSeconds"` defaulting to `5`

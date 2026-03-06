@@ -104,6 +104,6 @@
 
     // How often (in seconds) metrics are exported to the OTLP collector.
     // Lower values give smoother dashboard charts; higher values reduce export overhead.
-    "MetricExportIntervalSeconds": 15
+    "MetricExportIntervalSeconds": 5
   }
 }
