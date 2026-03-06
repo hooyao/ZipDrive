@@ -495,9 +495,9 @@ OpenTelemetry is **opt-in**. When `Endpoint` is empty or absent, no OTel SDK is 
 }
 ```
 
-`MetricExportIntervalSeconds` controls how often metrics are exported to the OTLP collector (default: 15s). Lower values give smoother dashboard charts; higher values reduce export overhead. If absent or zero, defaults to 15.
+`MetricExportIntervalSeconds` controls how often metrics are exported to the OTLP collector (default: 15s). Lower values give smoother dashboard charts; higher values reduce export overhead. If the value is absent or non-positive (≤ 0), it defaults to 15.
 
-Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889`
+Or via CLI: `--OpenTelemetry:Endpoint=http://localhost:18889 --OpenTelemetry:MetricExportIntervalSeconds=30`
 
 **Local Visualization**: Run Aspire Dashboard (`docker run -p 18888:18888 -p 18889:18889 mcr.microsoft.com/dotnet/aspire-dashboard`) and open `http://localhost:18888` for traces, metrics, and logs.
 

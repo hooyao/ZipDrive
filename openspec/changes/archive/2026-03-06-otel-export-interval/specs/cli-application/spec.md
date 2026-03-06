@@ -32,8 +32,6 @@ The CLI application SHALL support configurable OTLP export for sending telemetry
 
 ---
 
-## MODIFIED Requirements
-
 ### Requirement: Configuration file includes OpenTelemetry section
 
 The `appsettings.json` SHALL include an `"OpenTelemetry"` configuration section with export interval.

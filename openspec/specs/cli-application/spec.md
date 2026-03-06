@@ -60,7 +60,7 @@ The CLI application SHALL support configurable OTLP export for sending telemetry
 
 #### Scenario: Custom OTLP endpoint from configuration
 
-- **WHEN** `appsettings.json` contains an `"OpenTelemetry"` section with `"Endpoint"` set to a custom URL
+- **WHEN** configuration contains an `"OpenTelemetry"` section with `"Endpoint"` set to a custom URL
 - **THEN** the OTLP exporter SHALL use the configured endpoint
 
 #### Scenario: Default metric export interval
@@ -113,10 +113,10 @@ The CLI application SHALL register `DualTierFileCache` as the `ICache<Stream>` i
 
 ### Requirement: Configuration file includes OpenTelemetry section
 
-The `appsettings.json` SHALL include an `"OpenTelemetry"` configuration section with export interval.
+The `appsettings.jsonc` SHALL include an `"OpenTelemetry"` configuration section with export interval.
 
-#### Scenario: OpenTelemetry section in appsettings.json
+#### Scenario: OpenTelemetry section in appsettings.jsonc
 
-- **WHEN** the default `appsettings.json` is deployed
+- **WHEN** the default `appsettings.jsonc` is deployed
 - **THEN** it SHALL contain an `"OpenTelemetry"` section with `"Endpoint"` defaulting to `""` (disabled)
 - **AND** `"MetricExportIntervalSeconds"` defaulting to `15`
