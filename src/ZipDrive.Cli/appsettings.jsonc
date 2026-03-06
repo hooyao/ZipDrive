@@ -100,6 +100,10 @@
   // OpenTelemetry is opt-in. Leave Endpoint empty to disable (zero overhead).
   // Example: "http://localhost:18889" for Aspire Dashboard.
   "OpenTelemetry": {
-    "Endpoint": ""
+    "Endpoint": "",
+
+    // How often (in seconds) metrics are exported to the OTLP collector.
+    // Lower values give smoother dashboard charts; higher values reduce export overhead.
+    "MetricExportIntervalSeconds": 15
   }
 }

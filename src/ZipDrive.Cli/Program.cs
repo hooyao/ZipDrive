@@ -98,6 +98,9 @@ builder.ConfigureServices((context, services) =>
 
     if (!string.IsNullOrEmpty(otlpEndpoint))
     {
+        var metricExportIntervalSeconds = context.Configuration.GetValue("OpenTelemetry:MetricExportIntervalSeconds", 15);
+        var metricExportIntervalMs = metricExportIntervalSeconds > 0 ? metricExportIntervalSeconds * 1000 : 15_000;
+
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService("ZipDrive"))
             .WithMetrics(m => m
@@ -106,7 +109,14 @@ builder.ConfigureServices((context, services) =>
                 .AddMeter("ZipDrive.Dokan")
                 .AddRuntimeInstrumentation()
                 .AddProcessInstrumentation()
-                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
+                .AddOtlpExporter((exporterOptions, readerOptions) =>
+                {
+                    exporterOptions.Endpoint = new Uri(otlpEndpoint);
+                    readerOptions.PeriodicExportingMetricReaderOptions = new PeriodicExportingMetricReaderOptions
+                    {
+                        ExportIntervalMilliseconds = metricExportIntervalMs
+                    };
+                }))
             .WithTracing(t => t
                 .AddSource("ZipDrive.Caching")
                 .AddSource("ZipDrive.Zip")
