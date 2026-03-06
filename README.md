@@ -236,7 +236,7 @@ If you observe abnormally high disk I/O or CPU usage after enabling prefetch:
 
 1. **Check if background software is triggering it** — disable `OnListDirectory` first (it's the most common culprit)
 2. **If I/O persists**, disable `OnRead` to rule out prefetch entirely
-3. **Monitor via OpenTelemetry** — the `cache.prefetch.files` and `cache.prefetch.bytes` metrics show how much work prefetch is doing
+3. **Monitor via OpenTelemetry** — the `prefetch.files_warmed` and `prefetch.bytes_read` metrics (meter `ZipDrive.Caching`) show how much work prefetch is doing
 4. **As a last resort**, set `Enabled` to `false` to disable the feature completely
 
 ## Architecture

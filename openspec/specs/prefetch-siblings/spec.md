@@ -36,21 +36,21 @@ The system SHALL select a contiguous span of sibling entries around a trigger fi
 
 #### Scenario: High-density span selected
 - **WHEN** all siblings are tightly packed in the ZIP with no large holes
-- **THEN** all siblings within `PrefetchMaxFiles` are included in the span
+- **THEN** all siblings within `MaxFiles` are included in the span
 
 #### Scenario: Sparse span shrinks to meet fill ratio
-- **WHEN** a large hole entry exists between two wanted siblings such that fill ratio < `PrefetchFillRatioThreshold`
+- **WHEN** a large hole entry exists between two wanted siblings such that fill ratio < `FillRatioThreshold`
 - **THEN** the endpoint that creates the largest hole is removed
 - **AND** the algorithm repeats until fill ratio meets the threshold or window has one entry
 
 #### Scenario: Large directory is capped before span selection
-- **WHEN** a directory contains more files than `PrefetchMaxDirectoryFiles`
-- **THEN** only the `PrefetchMaxDirectoryFiles` files nearest to the trigger by `LocalHeaderOffset` are considered
+- **WHEN** a directory contains more files than `MaxDirectoryFiles`
+- **THEN** only the `MaxDirectoryFiles` files nearest to the trigger by `LocalHeaderOffset` are considered
 - **AND** span selection runs on this reduced candidate set
 
 #### Scenario: Span capped at MaxFiles
-- **WHEN** the candidate window after directory cap contains more than `PrefetchMaxFiles` entries
-- **THEN** a centered window of `PrefetchMaxFiles` around the trigger is selected before span selection
+- **WHEN** the candidate window after directory cap contains more than `MaxFiles` entries
+- **THEN** a centered window of `MaxFiles` around the trigger is selected before span selection
 
 ---
 
