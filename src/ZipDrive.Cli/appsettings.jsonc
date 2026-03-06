@@ -68,33 +68,45 @@
     // Sibling prefetch: when a file is read or a directory is listed, nearby small
     // siblings in the same ZIP directory are proactively warmed in a single sequential
     // pass to eliminate cold-start latency for subsequent reads.
-    "PrefetchEnabled": true,
+    //
+    // Disabled by default because some applications (file managers, search indexers,
+    // antivirus scanners) enumerate every directory on mount, which can trigger
+    // massive prefetch I/O and overflow the cache. Enable explicitly if your workload
+    // benefits from it (e.g., reading many small files in sequence).
+    //
+    // To enable: set "Enabled" to true. "OnRead" is already true by default, so
+    // read-triggered prefetch activates immediately — no second toggle needed.
+    "Prefetch": {
+      // Master switch. Set to true to enable sibling prefetch.
+      "Enabled": false,
 
-    // Whether listing a directory (FindFiles) triggers prefetch in addition to file reads.
-    // Set to false to only prefetch on explicit file opens, reducing eager I/O when
-    // browsing with a file manager without actually opening files.
-    "PrefetchOnListDirectory": true,
+      // Prefetch siblings when a file is opened/read (recommended trigger).
+      // Only takes effect when Enabled is true.
+      "OnRead": true,
 
-    // Whether opening/reading a file (ReadFile) triggers prefetch for siblings.
-    // Set to false to disable read-triggered prefetch while keeping list-triggered prefetch.
-    "PrefetchOnRead": true,
+      // Prefetch siblings when a directory is listed (FindFiles).
+      // Only takes effect when Enabled is true. Recommended to keep disabled —
+      // image viewers (e.g., FastStone) list sibling directories, causing
+      // prefetch across unrelated folders.
+      "OnListDirectory": false,
 
-    // Maximum uncompressed size (MB) for a file to be eligible for prefetch.
-    // Files larger than this are skipped (they route to disk tier anyway).
-    "PrefetchFileSizeThresholdMb": 10,
+      // Maximum uncompressed size (MB) for a file to be eligible for prefetch.
+      // Files larger than this are skipped (they route to disk tier anyway).
+      "FileSizeThresholdMb": 10,
 
-    // Maximum number of sibling files to include in one prefetch span.
-    "PrefetchMaxFiles": 20,
+      // Maximum number of sibling files to include in one prefetch span.
+      "MaxFiles": 20,
 
-    // Maximum directory entries to load into the span selection algorithm.
-    // In very large directories, only the nearest PrefetchMaxDirectoryFiles files
-    // by ZIP offset around the trigger are considered.
-    "PrefetchMaxDirectoryFiles": 300,
+      // Maximum directory entries to load into the span selection algorithm.
+      // In very large directories, only the nearest MaxDirectoryFiles files
+      // by ZIP offset around the trigger are considered.
+      "MaxDirectoryFiles": 300,
 
-    // Minimum fill ratio (useful bytes / span bytes) to accept a span as a single
-    // sequential read. Spans below this threshold are shrunk to improve density.
-    // 0.80 = allow up to 20% "hole" bytes between wanted files.
-    "PrefetchFillRatioThreshold": 0.80
+      // Minimum fill ratio (useful bytes / span bytes) to accept a span as a single
+      // sequential read. Spans below this threshold are shrunk to improve density.
+      // 0.80 = allow up to 20% "hole" bytes between wanted files.
+      "FillRatioThreshold": 0.80
+    }
   },
 
   // OpenTelemetry is opt-in. Leave Endpoint empty to disable (zero overhead).

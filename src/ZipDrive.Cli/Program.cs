@@ -91,7 +91,7 @@ builder.ConfigureServices((context, services) =>
     // Bind configuration sections
     services.Configure<MountSettings>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
-    services.Configure<PrefetchOptions>(context.Configuration.GetSection("Cache"));
+    services.Configure<PrefetchOptions>(context.Configuration.GetSection("Cache:Prefetch"));
 
     // OpenTelemetry (opt-in: only when Endpoint is configured)
     var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"];

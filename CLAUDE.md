@@ -464,18 +464,20 @@ When working with the caching layer:
     "TempDirectory": null,                  // null = system temp dir
     "DefaultTtlMinutes": 30,               // Entry expiration (used by ZipVirtualFileSystem + ArchiveStructureCache)
     "EvictionCheckIntervalSeconds": 60,     // CacheMaintenanceService sweep interval
-    "PrefetchEnabled": true,               // Master on/off switch for sibling prefetch
-    "PrefetchOnRead": true,                // Trigger prefetch on cold file reads
-    "PrefetchOnListDirectory": true,       // Trigger prefetch on directory listings
-    "PrefetchFileSizeThresholdMb": 10,     // Max file size for prefetch candidates (larger files skip)
-    "PrefetchMaxFiles": 20,                // Max siblings per prefetch span
-    "PrefetchMaxDirectoryFiles": 300,      // Candidate cap before nearest-offset trim
-    "PrefetchFillRatioThreshold": 0.80     // Min density (wanted bytes / span bytes) to accept a span
+    "Prefetch": {
+      "Enabled": false,                    // Master switch (off by default to avoid runaway I/O)
+      "OnRead": true,                      // Prefetch on file open (active once Enabled is true)
+      "OnListDirectory": false,            // Keep off — image viewers list sibling dirs
+      "FileSizeThresholdMb": 10,           // Max file size for prefetch candidates
+      "MaxFiles": 20,                      // Max siblings per prefetch span
+      "MaxDirectoryFiles": 300,            // Candidate cap before nearest-offset trim
+      "FillRatioThreshold": 0.80           // Min density (wanted bytes / span bytes)
+    }
   }
 }
 ```
 
-All options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, `SmallFileCutoffBytes`, `ChunkSizeBytes`, and `PrefetchFileSizeThresholdBytes` (via `PrefetchOptions`).
+All options are wired and active. `CacheOptions` exposes computed properties `DefaultTtl`, `EvictionCheckInterval`, `MemoryCacheSizeBytes`, `DiskCacheSizeBytes`, `SmallFileCutoffBytes`, `ChunkSizeBytes`. Prefetch options are in a separate `PrefetchOptions` class bound from `Cache:Prefetch`.
 
 **Tuning Guidelines**:
 - Low memory systems: Reduce `MemoryCacheSizeMb`, lower `SmallFileCutoffMb`
