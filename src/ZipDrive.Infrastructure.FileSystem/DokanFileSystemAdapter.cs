@@ -16,19 +16,159 @@ namespace ZipDrive.Infrastructure.FileSystem;
 /// <summary>
 /// Thin adapter translating DokanNet IDokanOperations2 calls to IVirtualFileSystem.
 /// Read-only: all write operations return AccessDenied.
+/// Supports atomic VFS replacement via <see cref="SwapAsync"/> with drain mechanism.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class DokanFileSystemAdapter : IDokanOperations2
 {
-    private readonly IVirtualFileSystem _vfs;
+    private volatile IVirtualFileSystem? _vfs;
+    private bool _draining;
+    private int _activeCount;
+    private TaskCompletionSource? _drainTcs;
+
     private readonly ILogger<DokanFileSystemAdapter> _logger;
     private readonly bool _shortCircuitShellMetadata;
 
-    public DokanFileSystemAdapter(IVirtualFileSystem vfs, IOptions<MountSettings> mountSettings, ILogger<DokanFileSystemAdapter> logger)
+    // NtStatus constant for DeviceBusy — Dokan returns this when the device is temporarily unavailable.
+    private static readonly NtStatus DeviceBusy = (NtStatus)0xC00000AE;
+
+    public DokanFileSystemAdapter(IOptions<MountSettings> mountSettings, ILogger<DokanFileSystemAdapter> logger)
     {
-        _vfs = vfs;
         _logger = logger;
         _shortCircuitShellMetadata = mountSettings.Value.ShortCircuitShellMetadata;
+    }
+
+    /// <summary>
+    /// Sets the initial VFS reference. Must be called before Dokan starts dispatching callbacks.
+    /// </summary>
+    public void SetVfs(IVirtualFileSystem vfs)
+    {
+        _vfs = vfs ?? throw new ArgumentNullException(nameof(vfs));
+    }
+
+    /// <summary>
+    /// Atomically swaps the VFS reference with drain mechanism.
+    /// Activates drain mode → waits for in-flight ops to complete (or timeout) → swaps → deactivates drain.
+    /// Returns the old VFS reference for caller to dispose.
+    /// </summary>
+    public async Task<IVirtualFileSystem?> SwapAsync(IVirtualFileSystem newVfs, TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(newVfs);
+
+        _drainTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Volatile.Write(ref _draining, true);
+
+        // Check if already drained (no in-flight ops)
+        if (Volatile.Read(ref _activeCount) == 0)
+            _drainTcs.TrySetResult();
+
+        var drained = await Task.WhenAny(_drainTcs.Task, Task.Delay(timeout)) == _drainTcs.Task;
+
+        if (!drained)
+        {
+            _logger.LogWarning(
+                "Drain timeout after {Timeout}s, {Count} ops still active. Forcing swap.",
+                timeout.TotalSeconds, Volatile.Read(ref _activeCount));
+        }
+        else
+        {
+            _logger.LogInformation("Drain completed, swapping VFS");
+        }
+
+        var old = Interlocked.Exchange(ref _vfs, newVfs);
+
+        Volatile.Write(ref _draining, false);
+
+        return old;
+    }
+
+    /// <summary>Current number of in-flight Dokan callbacks.</summary>
+    public int ActiveCount => Volatile.Read(ref _activeCount);
+
+    // === Drain guard helpers ===
+
+    /// <summary>
+    /// Attempts to enter the drain guard. Returns the VFS snapshot if allowed, null if draining.
+    /// Caller MUST call ExitGuard() in a finally block if this returns non-null.
+    /// </summary>
+    private IVirtualFileSystem? EnterGuard()
+    {
+        if (Volatile.Read(ref _draining))
+            return null;
+
+        Interlocked.Increment(ref _activeCount);
+
+        // Double-check: drain may have activated between the check and the increment
+        if (Volatile.Read(ref _draining))
+        {
+            if (Interlocked.Decrement(ref _activeCount) == 0)
+                _drainTcs?.TrySetResult();
+            return null;
+        }
+
+        return _vfs;
+    }
+
+    /// <summary>
+    /// Exits the drain guard. Signals drain completion if this was the last in-flight op.
+    /// </summary>
+    private void ExitGuard()
+    {
+        if (Interlocked.Decrement(ref _activeCount) == 0 && Volatile.Read(ref _draining))
+            _drainTcs?.TrySetResult();
+    }
+
+    // === Public guarded methods for managed callers (tests, non-Dokan consumers) ===
+
+    /// <summary>
+    /// Enters the drain guard with async retry. Mirrors Explorer's auto-retry on DeviceBusy.
+    /// Retries for up to ~10 seconds to accommodate drain windows during VFS swap.
+    /// </summary>
+    private async Task<IVirtualFileSystem> EnterGuardAsync(CancellationToken ct)
+    {
+        for (int attempt = 0; attempt < 500; attempt++)
+        {
+            var vfs = EnterGuard();
+            if (vfs is not null) return vfs;
+            await Task.Delay(20, ct);
+        }
+        throw new InvalidOperationException("VFS drain did not complete within retry window (10s)");
+    }
+
+    public async Task<bool> GuardedFileExistsAsync(string path, CancellationToken ct = default)
+    {
+        var vfs = await EnterGuardAsync(ct);
+        try { return await vfs.FileExistsAsync(path, ct); }
+        finally { ExitGuard(); }
+    }
+
+    public async Task<bool> GuardedDirectoryExistsAsync(string path, CancellationToken ct = default)
+    {
+        var vfs = await EnterGuardAsync(ct);
+        try { return await vfs.DirectoryExistsAsync(path, ct); }
+        finally { ExitGuard(); }
+    }
+
+    public async Task<IReadOnlyList<VfsFileInfo>> GuardedListDirectoryAsync(string path, CancellationToken ct = default)
+    {
+        var vfs = await EnterGuardAsync(ct);
+        try { return await vfs.ListDirectoryAsync(path, ct); }
+        finally { ExitGuard(); }
+    }
+
+    public async Task<int> GuardedReadFileAsync(string path, byte[] buffer, long offset, CancellationToken ct = default)
+    {
+        var vfs = await EnterGuardAsync(ct);
+        try { return await vfs.ReadFileAsync(path, buffer, offset, ct); }
+        finally { ExitGuard(); }
+    }
+
+    public async Task<VfsFileInfo> GuardedGetFileInfoAsync(string path, CancellationToken ct = default)
+    {
+        var vfs = await EnterGuardAsync(ct);
+        try { return await vfs.GetFileInfoAsync(path, ct); }
+        finally { ExitGuard(); }
     }
 
     public int DirectoryListingTimeoutResetIntervalMs => 0;
@@ -45,23 +185,27 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
             return DokanResult.FileNotFound;
         }
 
-        string path = fileName.Span.ToString();
-        _logger.LogDebug("CreateFile: {Path} mode={Mode} access={Access}", path, mode, access);
-
-        // Reject any create/write modes
+        // Reject any create/write modes before entering guard
         if (mode is FileMode.CreateNew or FileMode.Create or FileMode.Append)
             return DokanResult.AccessDenied;
 
+        var vfs = EnterGuard();
+        if (vfs is null)
+            return DeviceBusy;
+
         try
         {
-            bool isDir = _vfs.DirectoryExistsAsync(path).GetAwaiter().GetResult();
+            string path = fileName.Span.ToString();
+            _logger.LogDebug("CreateFile: {Path} mode={Mode} access={Access}", path, mode, access);
+
+            bool isDir = vfs.DirectoryExistsAsync(path).GetAwaiter().GetResult();
             if (isDir)
             {
                 info.IsDirectory = true;
                 return DokanResult.Success;
             }
 
-            bool isFile = _vfs.FileExistsAsync(path).GetAwaiter().GetResult();
+            bool isFile = vfs.FileExistsAsync(path).GetAwaiter().GetResult();
             if (isFile)
             {
                 info.IsDirectory = false;
@@ -75,8 +219,12 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         catch (VfsAccessDeniedException) { return DokanResult.AccessDenied; }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "CreateFile error: {Path}", path);
+            _logger.LogError(ex, "CreateFile error: {Path}", fileName.Span.ToString());
             return DokanResult.InternalError;
+        }
+        finally
+        {
+            ExitGuard();
         }
     }
 
@@ -84,19 +232,21 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, NativeMemory<byte> buffer,
         out int bytesRead, long offset, ref DokanFileInfo info)
     {
-        string path = fileName.Span.ToString();
-        _logger.LogDebug("ReadFile: {Path} offset={Offset} length={Length}", path, offset, buffer.Span.Length);
         bytesRead = 0;
-        long startTimestamp = Stopwatch.GetTimestamp();
 
+        var vfs = EnterGuard();
+        if (vfs is null)
+            return DeviceBusy;
+
+        long startTimestamp = Stopwatch.GetTimestamp();
         int requestedLength = buffer.Span.Length;
         byte[] rentedArray = ArrayPool<byte>.Shared.Rent(requestedLength);
         try
         {
-            // ArrayPool may return a larger array than requested. Cap bytesRead
-            // to the native buffer size and copy only valid bytes to avoid
-            // leaking stale ArrayPool data into the Dokan native buffer.
-            int read = _vfs.ReadFileAsync(path, rentedArray, offset).GetAwaiter().GetResult();
+            string path = fileName.Span.ToString();
+            _logger.LogDebug("ReadFile: {Path} offset={Offset} length={Length}", path, offset, buffer.Span.Length);
+
+            int read = vfs.ReadFileAsync(path, rentedArray, offset).GetAwaiter().GetResult();
             bytesRead = Math.Min(read, requestedLength);
 
             if (bytesRead > 0)
@@ -122,12 +272,13 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
                 Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 new KeyValuePair<string, object?>("result", "error"));
 
-            _logger.LogError(ex, "ReadFile error: {Path}", path);
+            _logger.LogError(ex, "ReadFile error: {Path}", fileName.Span.ToString());
             return DokanResult.InternalError;
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(rentedArray);
+            ExitGuard();
         }
     }
 
@@ -135,12 +286,18 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, out IEnumerable<FindFileInformation> files,
         ref DokanFileInfo info)
     {
-        string path = fileName.Span.ToString();
-        _logger.LogDebug("FindFiles: {Path}", path);
+        files = [];
+
+        var vfs = EnterGuard();
+        if (vfs is null)
+            return DeviceBusy;
 
         try
         {
-            IReadOnlyList<VfsFileInfo> entries = _vfs.ListDirectoryAsync(path).GetAwaiter().GetResult();
+            string path = fileName.Span.ToString();
+            _logger.LogDebug("FindFiles: {Path}", path);
+
+            IReadOnlyList<VfsFileInfo> entries = vfs.ListDirectoryAsync(path).GetAwaiter().GetResult();
             files = entries.Select(ConvertToFindFileInfo);
             return DokanResult.Success;
         }
@@ -151,9 +308,13 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "FindFiles error: {Path}", path);
+            _logger.LogError(ex, "FindFiles error: {Path}", fileName.Span.ToString());
             files = [];
             return DokanResult.InternalError;
+        }
+        finally
+        {
+            ExitGuard();
         }
     }
 
@@ -161,12 +322,19 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, ReadOnlyNativeMemory<char> searchPattern,
         out IEnumerable<FindFileInformation> files, ref DokanFileInfo info)
     {
-        string path = fileName.Span.ToString();
-        string pattern = searchPattern.Span.ToString();
-        _logger.LogDebug("FindFilesWithPattern: {Path} pattern={Pattern}", path, pattern);
+        files = [];
+
+        var vfs = EnterGuard();
+        if (vfs is null)
+            return DeviceBusy;
+
         try
         {
-            IReadOnlyList<VfsFileInfo> entries = _vfs.ListDirectoryAsync(path).GetAwaiter().GetResult();
+            string path = fileName.Span.ToString();
+            string pattern = searchPattern.Span.ToString();
+            _logger.LogDebug("FindFilesWithPattern: {Path} pattern={Pattern}", path, pattern);
+
+            IReadOnlyList<VfsFileInfo> entries = vfs.ListDirectoryAsync(path).GetAwaiter().GetResult();
             files = entries
                 .Where(e => DokanHelper.DokanIsNameInExpression(pattern, e.Name, true))
                 .Select(ConvertToFindFileInfo);
@@ -179,9 +347,13 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "FindFilesWithPattern error: {Path} pattern={Pattern}", path, pattern);
+            _logger.LogError(ex, "FindFilesWithPattern error: {Path}", fileName.Span.ToString());
             files = [];
             return DokanResult.InternalError;
+        }
+        finally
+        {
+            ExitGuard();
         }
     }
 
@@ -189,13 +361,18 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ReadOnlyNativeMemory<char> fileName, out ByHandleFileInformation fileInfo,
         ref DokanFileInfo info)
     {
-        string path = fileName.Span.ToString();
-        _logger.LogDebug("GetFileInformation: {Path}", path);
         fileInfo = default;
+
+        var vfs = EnterGuard();
+        if (vfs is null)
+            return DeviceBusy;
 
         try
         {
-            VfsFileInfo vfsInfo = _vfs.GetFileInfoAsync(path).GetAwaiter().GetResult();
+            string path = fileName.Span.ToString();
+            _logger.LogDebug("GetFileInformation: {Path}", path);
+
+            VfsFileInfo vfsInfo = vfs.GetFileInfoAsync(path).GetAwaiter().GetResult();
             fileInfo = new ByHandleFileInformation
             {
                 Attributes = vfsInfo.Attributes | FileAttributes.ReadOnly,
@@ -216,10 +393,16 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetFileInformation error: {Path}", path);
+            _logger.LogError(ex, "GetFileInformation error: {Path}", fileName.Span.ToString());
             return DokanResult.InternalError;
         }
+        finally
+        {
+            ExitGuard();
+        }
     }
+
+    // === Stateless callbacks — no guard needed ===
 
     public NtStatus GetVolumeInformation(
         NativeMemory<char> volumeLabel, out FileSystemFeatures features,
@@ -268,7 +451,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         return DokanResult.Success;
     }
 
-    // === No-op lifecycle methods ===
+    // === No-op lifecycle methods — no guard needed (lightweight, no VFS access) ===
 
     public void Cleanup(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
     {
@@ -280,7 +463,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         _logger.LogDebug("CloseFile: {Path}", fileName.Span.ToString());
     }
 
-    // === Read-only: all write ops return AccessDenied ===
+    // === Read-only: all write ops return AccessDenied — no guard needed ===
 
     public NtStatus WriteFile(ReadOnlyNativeMemory<char> fileName, ReadOnlyNativeMemory<byte> buffer,
         out int bytesWritten, long offset, ref DokanFileInfo info)

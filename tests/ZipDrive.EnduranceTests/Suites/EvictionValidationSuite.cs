@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
     public override int TaskCount => 10;
 
     public EvictionValidationSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -57,7 +58,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
             {
                 if (ct.IsCancellationRequested) return;
                 byte[] buf = new byte[size];
-                int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
+                int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
                 Interlocked.Increment(ref Result.TotalOperations);
                 if (read > 0)
                     VerifyFullFile(archivePath, name, buf, read, "ColdScan", 0);
@@ -77,7 +78,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
 
         // First read
         byte[] buf = new byte[size];
-        int read = await Vfs.ReadFileAsync(filePath, buf, 0, ct);
+        int read = await Adapter.GuardedReadFileAsync(filePath, buf, 0, ct);
         Interlocked.Increment(ref Result.TotalOperations);
         if (read > 0)
             VerifyFullFile(archivePath, name, buf, read, "ReReadAfterTTL", 0);
@@ -87,7 +88,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
 
         // Re-read — should re-materialize from ZIP
         buf = new byte[size];
-        read = await Vfs.ReadFileAsync(filePath, buf, 0, ct);
+        read = await Adapter.GuardedReadFileAsync(filePath, buf, 0, ct);
         Interlocked.Increment(ref Result.TotalOperations);
         if (read > 0)
             VerifyFullFile(archivePath, name, buf, read, "ReReadAfterTTL", 0);
@@ -105,7 +106,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
         {
             var (name, size) = files[rng.Next(files.Count)];
             byte[] buf = new byte[size];
-            int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
+            int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 VerifyFullFile(archivePath, name, buf, read, "BurstIdle", 0);
@@ -133,7 +134,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
                 : coldFiles[rng.Next(coldFiles.Count)];
 
             byte[] buf = new byte[size];
-            int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
+            int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 VerifyFullFile(archivePath, name, buf, read, "InterleavedHotCold", 0);

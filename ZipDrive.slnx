@@ -12,6 +12,7 @@
     <Project Path="tests/ZipDrive.Infrastructure.Archives.Zip.Tests/ZipDrive.Infrastructure.Archives.Zip.Tests.csproj" />
     <Project Path="tests/ZipDrive.Infrastructure.Caching.Tests/ZipDrive.Infrastructure.Caching.Tests.csproj" />
     <Project Path="tests/ZipDrive.TestHelpers/ZipDrive.TestHelpers.csproj" />
+    <Project Path="tests/ZipDrive.Infrastructure.FileSystem.Tests/ZipDrive.Infrastructure.FileSystem.Tests.csproj" />
     <Project Path="tests/ZipDrive.IntegrationTests/ZipDrive.IntegrationTests.csproj" />
     <Project Path="tests/ZipDrive.Benchmarks/ZipDrive.Benchmarks.csproj" />
     <Project Path="tests/ZipDrive.EnduranceTests/ZipDrive.EnduranceTests.csproj" />

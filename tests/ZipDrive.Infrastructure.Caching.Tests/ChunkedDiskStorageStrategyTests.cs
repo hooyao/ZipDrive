@@ -161,9 +161,6 @@ public class ChunkedDiskStorageStrategyTests : IDisposable
     [Fact]
     public void DeleteCacheDirectory_RemovesDirectory()
     {
-        string testDir = Path.Combine(_tempDir, $"ZipDrive-{Environment.ProcessId}");
-        // The strategy constructor already created a per-process dir
-        // Verify by creating a strategy with a known temp dir
         string baseTempDir = Path.Combine(_tempDir, "delete-test");
         Directory.CreateDirectory(baseTempDir);
         var strategy = new ChunkedDiskStorageStrategy(
@@ -171,11 +168,15 @@ public class ChunkedDiskStorageStrategyTests : IDisposable
             chunkSizeBytes: 1024,
             tempDirectory: baseTempDir);
 
-        string expectedDir = Path.Combine(baseTempDir, $"ZipDrive-{Environment.ProcessId}");
-        Directory.Exists(expectedDir).Should().BeTrue();
+        string processDir = Path.Combine(baseTempDir, $"ZipDrive-{Environment.ProcessId}");
+        Directory.Exists(processDir).Should().BeTrue();
+        // Scope subdirectory should exist under process dir
+        var scopeDirs = Directory.GetDirectories(processDir);
+        scopeDirs.Should().HaveCount(1);
 
         strategy.DeleteCacheDirectory();
 
-        Directory.Exists(expectedDir).Should().BeFalse();
+        Directory.Exists(scopeDirs[0]).Should().BeFalse(
+            "the scope subdirectory should be deleted");
     }
 }

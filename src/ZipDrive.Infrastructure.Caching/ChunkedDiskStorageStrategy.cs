@@ -29,7 +29,7 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChunkedDiskStorageStrategy"/> class.
-    /// Creates a per-process subdirectory under the base temp directory.
+    /// Creates a unique subdirectory under the base temp directory to isolate each scope.
     /// </summary>
     public ChunkedDiskStorageStrategy(
         ILogger<ChunkedDiskStorageStrategy> logger,
@@ -42,7 +42,7 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
             : throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes), "Chunk size must be positive.");
 
         string baseDir = tempDirectory ?? Path.GetTempPath();
-        _tempDirectory = Path.Combine(baseDir, $"ZipDrive-{Environment.ProcessId}");
+        _tempDirectory = Path.Combine(baseDir, $"ZipDrive-{Environment.ProcessId}", Guid.NewGuid().ToString("N")[..8]);
 
         if (!Directory.Exists(_tempDirectory))
         {

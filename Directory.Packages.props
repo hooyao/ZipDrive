@@ -10,6 +10,8 @@
     <PackageVersion Include="DokanNet" Version="2.3.0.3" />
     <PackageVersion Include="FluentAssertions" Version="8.1.1" />
     <PackageVersion Include="KTrie" Version="3.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />

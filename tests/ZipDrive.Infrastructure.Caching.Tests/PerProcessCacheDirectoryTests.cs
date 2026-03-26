@@ -32,15 +32,16 @@ public class PerProcessCacheDirectoryTests : IDisposable
             chunkSizeBytes: 1024 * 1024,
             _baseDir);
 
-        string expected = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
-        Directory.Exists(expected).Should().BeTrue("the per-process subdirectory should be created");
+        string processDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
+        Directory.Exists(processDir).Should().BeTrue("the per-process subdirectory should be created");
+        // Each scope gets a unique subdirectory under the process dir
+        Directory.GetDirectories(processDir).Should().HaveCount(1,
+            "a unique scope subdirectory should be created under the process directory");
     }
 
     [Fact]
     public async Task ChunkedDiskStorageStrategy_MaterializeAsync_StoresFilesInProcessSubdirectory()
     {
-        string expectedDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
-
         var strategy = new ChunkedDiskStorageStrategy(
             NullLogger<ChunkedDiskStorageStrategy>.Instance,
             chunkSizeBytes: 1024 * 1024,
@@ -57,8 +58,12 @@ public class PerProcessCacheDirectoryTests : IDisposable
             }),
             CancellationToken.None);
 
-        var files = Directory.GetFiles(expectedDir, "*.zip2vd.chunked");
-        files.Should().HaveCount(1, "cache file should be stored in the process subdirectory");
+        // Find the scope subdirectory under ZipDrive-{pid}
+        string processDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
+        var scopeDirs = Directory.GetDirectories(processDir);
+        scopeDirs.Should().HaveCount(1);
+        var files = Directory.GetFiles(scopeDirs[0], "*.zip2vd.chunked");
+        files.Should().HaveCount(1, "cache file should be stored in the scope subdirectory");
 
         // Cleanup
         strategy.Dispose(stored);
@@ -67,20 +72,24 @@ public class PerProcessCacheDirectoryTests : IDisposable
     [Fact]
     public void ChunkedDiskStorageStrategy_DeleteCacheDirectory_RemovesEntireDirectory()
     {
-        string expectedDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
-
         var strategy = new ChunkedDiskStorageStrategy(
             NullLogger<ChunkedDiskStorageStrategy>.Instance,
             chunkSizeBytes: 1024 * 1024,
             _baseDir);
 
+        // Find the scope subdirectory
+        string processDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
+        var scopeDirs = Directory.GetDirectories(processDir);
+        scopeDirs.Should().HaveCount(1);
+        string scopeDir = scopeDirs[0];
+
         // Create a dummy file in the directory to simulate cache content
-        File.WriteAllText(Path.Combine(expectedDir, "dummy.zip2vd.chunked"), "test");
-        Directory.Exists(expectedDir).Should().BeTrue();
+        File.WriteAllText(Path.Combine(scopeDir, "dummy.zip2vd.chunked"), "test");
+        Directory.Exists(scopeDir).Should().BeTrue();
 
         strategy.DeleteCacheDirectory();
 
-        Directory.Exists(expectedDir).Should().BeFalse("the entire subdirectory should be deleted");
+        Directory.Exists(scopeDir).Should().BeFalse("the scope subdirectory should be deleted");
         Directory.Exists(_baseDir).Should().BeTrue("the base directory should NOT be deleted");
     }
 
@@ -101,9 +110,11 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TimeProvider.System,
             NullLoggerFactory.Instance);
 
-        var dirs = Directory.GetDirectories(_baseDir);
-        dirs.Should().HaveCount(1);
-        Path.GetFileName(dirs[0]).Should().Be($"ZipDrive-{_pid}");
+        // Process-level dir should exist
+        string processDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
+        Directory.Exists(processDir).Should().BeTrue();
+        // Scope-level subdirectory should exist under it
+        Directory.GetDirectories(processDir).Should().HaveCount(1);
     }
 
     [Fact]
@@ -123,14 +134,15 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TimeProvider.System,
             NullLoggerFactory.Instance);
 
-        var dirs = Directory.GetDirectories(_baseDir);
-        dirs.Should().HaveCount(1);
+        string processDir = Path.Combine(_baseDir, $"ZipDrive-{_pid}");
+        Directory.GetDirectories(processDir).Should().HaveCount(1);
 
         cache.Clear();
         cache.DeleteCacheDirectory();
 
-        Directory.GetDirectories(_baseDir).Should().BeEmpty(
-            "DeleteCacheDirectory should remove the per-process subdirectory");
+        // The scope subdirectory should be gone
+        Directory.GetDirectories(processDir).Should().BeEmpty(
+            "DeleteCacheDirectory should remove the scope subdirectory");
     }
 
     [Fact]
@@ -141,11 +153,13 @@ public class PerProcessCacheDirectoryTests : IDisposable
             chunkSizeBytes: 1024 * 1024,
             tempDirectory: null);
 
-        string expected = Path.Combine(Path.GetTempPath(), $"ZipDrive-{_pid}");
+        string processDir = Path.Combine(Path.GetTempPath(), $"ZipDrive-{_pid}");
         try
         {
-            Directory.Exists(expected).Should().BeTrue(
+            Directory.Exists(processDir).Should().BeTrue(
                 "the per-process subdirectory should be created under the system temp directory");
+            Directory.GetDirectories(processDir).Should().NotBeEmpty(
+                "a scope subdirectory should exist under the process directory");
         }
         finally
         {

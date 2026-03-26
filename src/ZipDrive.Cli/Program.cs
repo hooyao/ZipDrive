@@ -130,34 +130,31 @@ builder.ConfigureServices((context, services) =>
         Log.Information("OpenTelemetry disabled (no OpenTelemetry:Endpoint configured)");
     }
 
-    // Shared infrastructure
+    // Shared infrastructure (Singleton — shared across reload scopes)
     services.AddSingleton(TimeProvider.System);
+    services.AddSingleton<IZipReaderFactory, ZipReaderFactory>();
+    services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
+    services.AddSingleton<IFilenameEncodingDetector, FilenameEncodingDetector>();
 
-    // Archive trie (platform-aware case sensitivity)
+    // Archive trie (platform-aware case sensitivity) — Scoped: new instance per reload
     IEqualityComparer<char>? charComparer = OperatingSystem.IsWindows()
         ? CaseInsensitiveCharComparer.Instance
         : null;
-    services.AddSingleton<IArchiveTrie>(new ArchiveTrie(charComparer));
+    services.AddScoped<IArchiveTrie>(_ => new ArchiveTrie(charComparer));
 
-    // Encoding detection (detector self-configures from MountSettings)
-    services.AddSingleton<IFilenameEncodingDetector, FilenameEncodingDetector>();
+    // Application services — Scoped: new instance per reload
+    services.AddScoped<IPathResolver, PathResolver>();
+    services.AddScoped<IArchiveDiscovery, ArchiveDiscovery>();
 
-    // Application services
-    services.AddSingleton<IPathResolver, PathResolver>();
-    services.AddSingleton<IArchiveDiscovery, ArchiveDiscovery>();
-    services.AddSingleton<IZipReaderFactory, ZipReaderFactory>();
+    // Cache infrastructure — Scoped: new instance per reload
+    services.AddScoped<IArchiveStructureStore, ArchiveStructureStore>();
+    services.AddScoped<IArchiveStructureCache, ArchiveStructureCache>();
+    services.AddScoped<IFileContentCache, FileContentCache>();
 
-    // Cache infrastructure
-    services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
-    services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
-    services.AddSingleton<IArchiveStructureCache, ArchiveStructureCache>();
-    services.AddSingleton<IFileContentCache, FileContentCache>();
+    // VFS — Scoped: new instance per reload
+    services.AddScoped<IVirtualFileSystem, ZipVirtualFileSystem>();
 
-    // Cache maintenance (periodic eviction + cleanup)
-    services.AddHostedService<CacheMaintenanceService>();
-
-    // VFS and Dokan
-    services.AddSingleton<IVirtualFileSystem, ZipVirtualFileSystem>();
+    // Dokan adapter (Singleton — lives for entire process, VFS swapped inside)
     services.AddSingleton<DokanFileSystemAdapter>();
     services.AddHostedService<DokanHostedService>();
 });

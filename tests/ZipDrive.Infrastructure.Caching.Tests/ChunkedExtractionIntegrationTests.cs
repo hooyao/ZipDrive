@@ -327,9 +327,10 @@ public class ChunkedExtractionIntegrationTests : IDisposable
 
         // The disk tier should be wired with ChunkedDiskStorageStrategy.
         // We verify indirectly: the cache should initialize without error
-        // and create the per-process subdirectory.
-        string expectedDir = Path.Combine(_tempDir, $"ZipDrive-{Environment.ProcessId}");
-        Directory.Exists(expectedDir).Should().BeTrue();
+        // and create the per-process subdirectory with a scope subdirectory.
+        string processDir = Path.Combine(_tempDir, $"ZipDrive-{Environment.ProcessId}");
+        Directory.Exists(processDir).Should().BeTrue();
+        Directory.GetDirectories(processDir).Should().NotBeEmpty();
 
         cache.Clear();
         cache.DeleteCacheDirectory();
