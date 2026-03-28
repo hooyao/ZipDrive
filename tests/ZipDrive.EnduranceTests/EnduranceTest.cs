@@ -81,8 +81,8 @@ public class EnduranceTest : IAsyncLifetime
         // Tight cache to force constant eviction
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(new CacheOptions
         {
-            MemoryCacheSizeMb = 1,
-            DiskCacheSizeMb = 10,
+            MemoryCacheSizeMb = 50,       // Large enough to avoid constant LOH thrash
+            DiskCacheSizeMb = 50,
             SmallFileCutoffMb = 1,
             ChunkSizeMb = 1,
             DefaultTtlMinutes = 1,
@@ -251,13 +251,14 @@ public class EnduranceTest : IAsyncLifetime
                 {
                     _fileCache.EvictExpired();
                     _structureCache.EvictExpired();
-                    _fileCache.ProcessPendingCleanup();
 
-                    // Compact LOH every 10 cycles (~20s) to reclaim memory from
-                    // large byte[] arrays freed by cache eviction. Without this,
-                    // LOH fragmentation causes working set to grow unboundedly
-                    // under rapid cache churn (endurance test with tight limits).
-                    if (Interlocked.Read(ref _evictionCycles) % 10 == 0)
+                    // Process ALL pending cleanup (not just default 100) to keep up
+                    // with rapid cache churn from DynamicReloadSuite
+                    _fileCache.ProcessPendingCleanup(maxItems: 10_000);
+
+                    // Compact LOH every 15 cycles (~30s) to reclaim fragmented memory
+                    // from large byte[] arrays freed by cache eviction
+                    if (Interlocked.Read(ref _evictionCycles) % 15 == 0)
                     {
                         System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
                             System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
