@@ -157,7 +157,9 @@ builder.ConfigureServices((context, services) =>
     services.AddHostedService<CacheMaintenanceService>();
 
     // VFS and Dokan
-    services.AddSingleton<IVirtualFileSystem, ZipVirtualFileSystem>();
+    services.AddSingleton<ZipVirtualFileSystem>();
+    services.AddSingleton<IVirtualFileSystem>(sp => sp.GetRequiredService<ZipVirtualFileSystem>());
+    services.AddSingleton<IArchiveManager>(sp => sp.GetRequiredService<ZipVirtualFileSystem>());
     services.AddSingleton<DokanFileSystemAdapter>();
     services.AddHostedService<DokanHostedService>();
 });

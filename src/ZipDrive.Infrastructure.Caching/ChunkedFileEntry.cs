@@ -254,7 +254,8 @@ internal sealed class ChunkedFileEntry : IDisposable
         }
         catch
         {
-            // Non-fatal — file may still be locked briefly
+            // Non-fatal — file may still be locked briefly, or the cache directory
+            // may have been deleted during shutdown (DirectoryNotFoundException).
         }
     }
 }

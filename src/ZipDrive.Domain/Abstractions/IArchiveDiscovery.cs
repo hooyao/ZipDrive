@@ -19,4 +19,12 @@ public interface IArchiveDiscovery
         string rootPath,
         int maxDepth = 6,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates an ArchiveDescriptor for a single file, computing VirtualPath
+    /// relative to the given root. Returns null if the file is inaccessible.
+    /// </summary>
+    /// <param name="rootPath">Root directory for computing relative virtual path.</param>
+    /// <param name="filePath">Absolute path to the ZIP file.</param>
+    ArchiveDescriptor? DescribeFile(string rootPath, string filePath);
 }

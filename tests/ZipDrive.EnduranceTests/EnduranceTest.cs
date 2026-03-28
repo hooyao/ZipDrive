@@ -150,6 +150,7 @@ public class EnduranceTest : IAsyncLifetime
                 ReportFailure, _runStopwatch),
             new LatencyMeasurementSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch, latencyRecorder),
+            CreateDynamicReloadSuite(archivePaths),
         };
 
         // Step 3: Launch all suite tasks + 2 maintenance tasks = 100 total
@@ -322,5 +323,32 @@ public class EnduranceTest : IAsyncLifetime
                     await CollectArchivePathsAsync(entryPath, archives);
             }
         }
+    }
+
+    /// <summary>
+    /// Creates a DynamicReloadSuite using a dedicated "reload" subdirectory.
+    /// Copies a few test ZIPs there as reload candidates (isolated from other suites).
+    /// </summary>
+    private DynamicReloadSuite CreateDynamicReloadSuite(List<string> archivePaths)
+    {
+        // Create a reload subdirectory with copies of the first 2 test ZIPs
+        string reloadDir = Path.Combine(_rootPath, "reload");
+        Directory.CreateDirectory(reloadDir);
+
+        var reloadPaths = new List<string>();
+        var sourceZips = Directory.GetFiles(_rootPath, "*.zip", SearchOption.AllDirectories).Take(2);
+        foreach (string sourceZip in sourceZips)
+        {
+            string destName = $"reload_{Path.GetFileName(sourceZip)}";
+            string destPath = Path.Combine(reloadDir, destName);
+            File.Copy(sourceZip, destPath, overwrite: true);
+            reloadPaths.Add(destPath);
+        }
+
+        return new DynamicReloadSuite(
+            _vfs, _vfs, // ZipVirtualFileSystem implements both IVirtualFileSystem and IArchiveManager
+            _manifests, archivePaths, _fileCache, _structureCache,
+            ReportFailure, _runStopwatch,
+            reloadDir, reloadPaths);
     }
 }

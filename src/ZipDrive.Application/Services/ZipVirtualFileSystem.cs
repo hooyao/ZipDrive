@@ -17,7 +17,7 @@ namespace ZipDrive.Application.Services;
 /// Platform-independent virtual file system that mounts ZIP archives as folders.
 /// Orchestrates archive trie, structure cache, file content cache, and ZIP reader.
 /// </summary>
-public sealed class ZipVirtualFileSystem : IVirtualFileSystem
+public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
 {
     private readonly IArchiveTrie _archiveTrie;
     private readonly IArchiveStructureCache _structureCache;
@@ -27,6 +27,10 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly PrefetchOptions _prefetchOptions;
     private readonly ILogger<ZipVirtualFileSystem> _logger;
+
+    // Per-archive ref counting for drain-before-removal
+    private readonly ConcurrentDictionary<string, ArchiveNode> _archiveNodes = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
 
     // Per-directory in-flight guard: prevents duplicate concurrent sequential scans.
     // Key = "archiveVirtualPath:dirInternalPath"
@@ -81,7 +85,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         foreach (ArchiveDescriptor archive in archives)
         {
-            _archiveTrie.AddArchive(archive);
+            await AddArchiveAsync(archive, cancellationToken).ConfigureAwait(false);
         }
 
         IsMounted = true;
@@ -96,11 +100,58 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         _logger.LogInformation("Unmounting VFS");
 
         _structureCache.Clear();
+        _archiveNodes.Clear();
         IsMounted = false;
         MountStateChanged?.Invoke(this, false);
 
         return Task.CompletedTask;
     }
+
+    // ── IArchiveManager ─────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public Task AddArchiveAsync(ArchiveDescriptor archive, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        _archiveTrie.AddArchive(archive);
+        _archiveNodes[archive.VirtualPath] = new ArchiveNode(archive);
+        _logger.LogInformation("Archive added: {VirtualPath}", archive.VirtualPath);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task RemoveArchiveAsync(string archiveKey, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(archiveKey);
+
+        if (!_archiveNodes.TryGetValue(archiveKey, out ArchiveNode? node))
+        {
+            _logger.LogWarning("RemoveArchive: {Key} not found", archiveKey);
+            return;
+        }
+
+        // 1. Drain in-flight operations for this archive
+        _logger.LogInformation("Draining operations for archive: {Key}", archiveKey);
+        await node.DrainAsync(DrainTimeout);
+        if (node.ActiveOps > 0)
+            _logger.LogWarning("Drain timeout: {Key} still has {Count} active ops", archiveKey, node.ActiveOps);
+
+        // 2. Remove from trie (new lookups return NotFound)
+        _archiveTrie.RemoveArchive(archiveKey);
+        _archiveNodes.TryRemove(archiveKey, out _);
+
+        // 3. Invalidate structure cache
+        _structureCache.Invalidate(archiveKey);
+
+        // 4. Remove file content cache entries
+        _fileContentCache.RemoveArchive(archiveKey);
+
+        _logger.LogInformation("Archive removed: {Key}", archiveKey);
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<ArchiveDescriptor> GetRegisteredArchives() =>
+        _archiveNodes.Values.Select(n => n.Descriptor);
 
     /// <inheritdoc />
     public async Task<VfsFileInfo> GetFileInfoAsync(string path, CancellationToken cancellationToken = default)
@@ -109,33 +160,49 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         ArchiveTrieResult result = _pathResolver.Resolve(path);
 
-        return result.Status switch
+        switch (result.Status)
         {
-            ArchiveTrieStatus.VirtualRoot => MakeDirectoryInfo("", ""),
+            case ArchiveTrieStatus.VirtualRoot:
+                return MakeDirectoryInfo("", "");
 
-            ArchiveTrieStatus.VirtualFolder => MakeDirectoryInfo(
-                GetLastSegment(result.VirtualFolderPath!),
-                result.VirtualFolderPath!),
+            case ArchiveTrieStatus.VirtualFolder:
+                return MakeDirectoryInfo(
+                    GetLastSegment(result.VirtualFolderPath!),
+                    result.VirtualFolderPath!);
 
-            ArchiveTrieStatus.ArchiveRoot => new VfsFileInfo
+            case ArchiveTrieStatus.ArchiveRoot:
             {
-                Name = result.Archive!.Name,
-                FullPath = result.Archive.VirtualPath,
-                IsDirectory = true,
-                SizeBytes = result.Archive.SizeBytes,
-                CreationTimeUtc = result.Archive.LastModifiedUtc,
-                LastWriteTimeUtc = result.Archive.LastModifiedUtc,
-                LastAccessTimeUtc = result.Archive.LastModifiedUtc,
-                Attributes = FileAttributes.Directory | FileAttributes.ReadOnly
-            },
+                if (!ArchiveGuard.TryEnter(_archiveNodes, result.Archive!.VirtualPath, out var guard))
+                    throw new VfsFileNotFoundException(path ?? "");
+                using (guard)
+                    return new VfsFileInfo
+                    {
+                        Name = result.Archive!.Name,
+                        FullPath = result.Archive.VirtualPath,
+                        IsDirectory = true,
+                        SizeBytes = result.Archive.SizeBytes,
+                        CreationTimeUtc = result.Archive.LastModifiedUtc,
+                        LastWriteTimeUtc = result.Archive.LastModifiedUtc,
+                        LastAccessTimeUtc = result.Archive.LastModifiedUtc,
+                        Attributes = FileAttributes.Directory | FileAttributes.ReadOnly
+                    };
+            }
 
-            ArchiveTrieStatus.InsideArchive => await GetArchiveEntryInfoAsync(
-                result.Archive!, result.InternalPath, cancellationToken).ConfigureAwait(false),
+            case ArchiveTrieStatus.InsideArchive:
+            {
+                if (!ArchiveGuard.TryEnter(_archiveNodes, result.Archive!.VirtualPath, out var guard))
+                    throw new VfsFileNotFoundException(path ?? "");
+                using (guard)
+                    return await GetArchiveEntryInfoAsync(
+                        result.Archive!, result.InternalPath, cancellationToken).ConfigureAwait(false);
+            }
 
-            ArchiveTrieStatus.NotFound => throw new VfsFileNotFoundException(path ?? ""),
+            case ArchiveTrieStatus.NotFound:
+                throw new VfsFileNotFoundException(path ?? "");
 
-            _ => throw new VfsException($"Unexpected resolution status: {result.Status}")
-        };
+            default:
+                throw new VfsException($"Unexpected resolution status: {result.Status}");
+        }
     }
 
     /// <inheritdoc />
@@ -145,17 +212,30 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         ArchiveTrieResult result = _pathResolver.Resolve(path);
 
-        IReadOnlyList<VfsFileInfo> listing = result.Status switch
+        IReadOnlyList<VfsFileInfo> listing;
+
+        if (result.Status is ArchiveTrieStatus.ArchiveRoot or ArchiveTrieStatus.InsideArchive)
         {
-            ArchiveTrieStatus.VirtualRoot => ListVirtualFolder(""),
-            ArchiveTrieStatus.VirtualFolder => ListVirtualFolder(result.VirtualFolderPath!),
-            ArchiveTrieStatus.ArchiveRoot => await ListArchiveDirectoryAsync(
-                result.Archive!, "", cancellationToken).ConfigureAwait(false),
-            ArchiveTrieStatus.InsideArchive => await ListArchiveDirectoryAsync(
-                result.Archive!, result.InternalPath, cancellationToken).ConfigureAwait(false),
-            ArchiveTrieStatus.NotFound => throw new VfsDirectoryNotFoundException(path ?? ""),
-            _ => throw new VfsException($"Unexpected resolution status: {result.Status}")
-        };
+            if (!ArchiveGuard.TryEnter(_archiveNodes, result.Archive!.VirtualPath, out var guard))
+                throw new VfsDirectoryNotFoundException(path ?? "");
+
+            using (guard)
+            {
+                string internalPath = result.Status == ArchiveTrieStatus.ArchiveRoot ? "" : result.InternalPath;
+                listing = await ListArchiveDirectoryAsync(
+                    result.Archive!, internalPath, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            listing = result.Status switch
+            {
+                ArchiveTrieStatus.VirtualRoot => ListVirtualFolder(""),
+                ArchiveTrieStatus.VirtualFolder => ListVirtualFolder(result.VirtualFolderPath!),
+                ArchiveTrieStatus.NotFound => throw new VfsDirectoryNotFoundException(path ?? ""),
+                _ => throw new VfsException($"Unexpected resolution status: {result.Status}")
+            };
+        }
 
         // Trigger prefetch fire-and-forget after listing completes (FindFiles trigger)
         if (_prefetchOptions.Enabled && _prefetchOptions.OnListDirectory &&
@@ -185,44 +265,50 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         ArchiveDescriptor archive = result.Archive!;
         string internalPath = result.InternalPath;
 
-        // Get archive structure
-        ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
-            archive.VirtualPath, archive.PhysicalPath, cancellationToken).ConfigureAwait(false);
-
-        ZipEntryInfo? entry = structure.GetEntry(internalPath);
-
-        // Also check with trailing slash for directories
-        if (entry == null)
-        {
-            string dirPath = internalPath.EndsWith('/') ? internalPath : internalPath + "/";
-            entry = structure.GetEntry(dirPath);
-        }
-
-        if (entry == null)
+        // Per-archive guard: reject if archive is draining
+        if (!ArchiveGuard.TryEnter(_archiveNodes, archive.VirtualPath, out var guard))
             throw new VfsFileNotFoundException(path ?? "");
 
-        if (entry.Value.IsDirectory)
-            throw new VfsAccessDeniedException(path ?? "");
-
-        // Delegate to file content cache — it owns extraction, caching, and byte retrieval
-        string cacheKey = $"{archive.VirtualPath}:{internalPath}";
-        bool wasCached = _fileContentCache.ContainsKey(cacheKey);
-        if (!wasCached)
-            _logger.LogInformation("Read (miss): {CacheKey} offset={Offset}", cacheKey, offset);
-        else
-            _logger.LogDebug("Read (hit): {CacheKey} offset={Offset}", cacheKey, offset);
-        int bytesRead = await _fileContentCache.ReadAsync(
-            archive.PhysicalPath, entry.Value, cacheKey, buffer, offset, cancellationToken).ConfigureAwait(false);
-
-        // Trigger prefetch fire-and-forget only on a cold read — if the entry was already
-        // cached, siblings were already warmed by a previous read or prefetch pass.
-        if (!wasCached && _prefetchOptions.Enabled && _prefetchOptions.OnRead)
+        using (guard)
         {
-            string dirPath = GetDirectoryPath(internalPath);
-            _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value);
-        }
+            // Get archive structure
+            ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
+                archive.VirtualPath, archive.PhysicalPath, cancellationToken).ConfigureAwait(false);
 
-        return bytesRead;
+            ZipEntryInfo? entry = structure.GetEntry(internalPath);
+
+            // Also check with trailing slash for directories
+            if (entry == null)
+            {
+                string dirPath = internalPath.EndsWith('/') ? internalPath : internalPath + "/";
+                entry = structure.GetEntry(dirPath);
+            }
+
+            if (entry == null)
+                throw new VfsFileNotFoundException(path ?? "");
+
+            if (entry.Value.IsDirectory)
+                throw new VfsAccessDeniedException(path ?? "");
+
+            // Delegate to file content cache — it owns extraction, caching, and byte retrieval
+            string cacheKey = $"{archive.VirtualPath}:{internalPath}";
+            bool wasCached = _fileContentCache.ContainsKey(cacheKey);
+            if (!wasCached)
+                _logger.LogInformation("Read (miss): {CacheKey} offset={Offset}", cacheKey, offset);
+            else
+                _logger.LogDebug("Read (hit): {CacheKey} offset={Offset}", cacheKey, offset);
+            int bytesRead = await _fileContentCache.ReadAsync(
+                archive.PhysicalPath, entry.Value, cacheKey, buffer, offset, cancellationToken).ConfigureAwait(false);
+
+            // Trigger prefetch fire-and-forget only on a cold read
+            if (!wasCached && _prefetchOptions.Enabled && _prefetchOptions.OnRead)
+            {
+                string dirPath = GetDirectoryPath(internalPath);
+                _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value);
+            }
+
+            return bytesRead;
+        }
     }
 
     /// <inheritdoc />
@@ -235,11 +321,17 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         if (result.Status != ArchiveTrieStatus.InsideArchive)
             return false;
 
-        ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
-            result.Archive!.VirtualPath, result.Archive.PhysicalPath, cancellationToken).ConfigureAwait(false);
+        if (!ArchiveGuard.TryEnter(_archiveNodes, result.Archive!.VirtualPath, out var guard))
+            return false; // Archive draining — treat as not found
 
-        ZipEntryInfo? entry = structure.GetEntry(result.InternalPath);
-        return entry.HasValue && !entry.Value.IsDirectory;
+        using (guard)
+        {
+            ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
+                result.Archive!.VirtualPath, result.Archive.PhysicalPath, cancellationToken).ConfigureAwait(false);
+
+            ZipEntryInfo? entry = structure.GetEntry(result.InternalPath);
+            return entry.HasValue && !entry.Value.IsDirectory;
+        }
     }
 
     /// <inheritdoc />
@@ -249,15 +341,25 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         ArchiveTrieResult result = _pathResolver.Resolve(path);
 
-        return result.Status switch
+        switch (result.Status)
         {
-            ArchiveTrieStatus.VirtualRoot => true,
-            ArchiveTrieStatus.VirtualFolder => true,
-            ArchiveTrieStatus.ArchiveRoot => true,
-            ArchiveTrieStatus.InsideArchive => await CheckArchiveDirectoryExistsAsync(
-                result.Archive!, result.InternalPath, cancellationToken).ConfigureAwait(false),
-            _ => false
-        };
+            case ArchiveTrieStatus.VirtualRoot:
+            case ArchiveTrieStatus.VirtualFolder:
+            case ArchiveTrieStatus.ArchiveRoot:
+                return true;
+
+            case ArchiveTrieStatus.InsideArchive:
+            {
+                if (!ArchiveGuard.TryEnter(_archiveNodes, result.Archive!.VirtualPath, out var guard))
+                    return false;
+                using (guard)
+                    return await CheckArchiveDirectoryExistsAsync(
+                        result.Archive!, result.InternalPath, cancellationToken).ConfigureAwait(false);
+            }
+
+            default:
+                return false;
+        }
     }
 
     /// <inheritdoc />
@@ -284,11 +386,16 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         string dirInternalPath,
         ZipEntryInfo? triggerEntry)
     {
+        // Participate in per-archive drain guard
+        if (!ArchiveGuard.TryEnter(_archiveNodes, archive.VirtualPath, out var archiveGuard))
+            return; // Archive draining — skip prefetch
+
         string guardKey = $"{archive.VirtualPath}:{dirInternalPath}";
 
         // In-flight guard: only the first concurrent caller proceeds
         if (!_prefetchInFlight.TryAdd(guardKey, 0))
         {
+            archiveGuard.Dispose(); // Release archive guard
             PrefetchTelemetry.SkippedInFlight.Add(1);
             _logger.LogInformation("Prefetch skipped (already in-flight): {Archive}/{Dir}", archive.VirtualPath, dirInternalPath);
             return;
@@ -296,7 +403,13 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
 
         _logger.LogInformation("Prefetch triggered: {Archive}/{Dir}", archive.VirtualPath, dirInternalPath);
 
-        CancellationToken ct = _appLifetime.ApplicationStopping;
+        // Combine application stopping with per-archive drain token
+        CancellationToken appStopping = _appLifetime.ApplicationStopping;
+        CancellationToken drainToken = _archiveNodes.TryGetValue(archive.VirtualPath, out var node)
+            ? node.DrainToken
+            : CancellationToken.None;
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(appStopping, drainToken);
+        CancellationToken ct = linkedCts.Token;
 
         try
         {
@@ -304,7 +417,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         }
         catch (OperationCanceledException)
         {
-            // Application shutting down — expected, swallow silently
+            // Application shutting down or archive draining — expected, swallow silently
         }
         catch (Exception ex)
         {
@@ -314,6 +427,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem
         finally
         {
             _prefetchInFlight.TryRemove(guardKey, out _);
+            archiveGuard.Dispose(); // Release per-archive drain guard
         }
     }
 

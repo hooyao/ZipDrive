@@ -63,4 +63,17 @@ public interface ICache<T>
     /// Manually trigger eviction of expired entries (only evicts entries with RefCount = 0).
     /// </summary>
     void EvictExpired();
+
+    /// <summary>
+    /// Removes a specific entry by key. If the entry is currently borrowed (RefCount > 0),
+    /// it is removed from the cache dictionary immediately (preventing new borrows), but
+    /// storage cleanup is deferred until the last handle is returned.
+    /// </summary>
+    /// <returns>True if the entry was found and removed from the cache dictionary.</returns>
+    bool TryRemove(string cacheKey);
+
+    /// <summary>
+    /// Returns true if a non-expired entry exists for the given key. Lock-free.
+    /// </summary>
+    bool ContainsKey(string cacheKey);
 }

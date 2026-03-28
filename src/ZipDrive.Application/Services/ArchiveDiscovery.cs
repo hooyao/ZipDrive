@@ -47,6 +47,32 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
         return Task.FromResult<IReadOnlyList<ArchiveDescriptor>>(results);
     }
 
+    /// <inheritdoc />
+    public ArchiveDescriptor? DescribeFile(string rootPath, string filePath)
+    {
+        try
+        {
+            FileInfo fileInfo = new(filePath);
+            if (!fileInfo.Exists)
+                return null;
+
+            string virtualPath = ArchivePathHelper.ToVirtualPath(rootPath, filePath);
+
+            return new ArchiveDescriptor
+            {
+                VirtualPath = virtualPath,
+                PhysicalPath = Path.GetFullPath(filePath),
+                SizeBytes = fileInfo.Length,
+                LastModifiedUtc = fileInfo.LastWriteTimeUtc
+            };
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            _logger.LogWarning(ex, "Cannot access file for descriptor: {Path}", filePath);
+            return null;
+        }
+    }
+
     private void ScanDirectory(
         string rootPath,
         string currentPath,

@@ -179,7 +179,17 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     private void Return(CacheEntry entry)
     {
         entry.DecrementRefCount();
-        _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
+
+        // If entry was removed while borrowed, clean up after last handle returns.
+        if (entry.RefCount == 0 && entry.IsOrphaned)
+        {
+            _pendingCleanup.Enqueue(entry.Stored);
+            _logger.LogDebug("Cleaned up orphaned entry: {Key}", entry.CacheKey);
+        }
+        else
+        {
+            _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
+        }
     }
 
     /// <summary>
@@ -667,4 +677,49 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     /// Gets the number of pending cleanup items.
     /// </summary>
     public int PendingCleanupCount => _pendingCleanup.Count;
+
+    /// <inheritdoc />
+    public bool TryRemove(string cacheKey)
+    {
+        // Remove materialization task FIRST — prevents new threads from joining
+        // an in-flight materialization via GetOrAdd after we remove from _cache.
+        _materializationTasks.TryRemove(cacheKey, out _);
+
+        if (!_cache.TryRemove(cacheKey, out CacheEntry? removed))
+            return false;
+
+        Debug.Assert(
+            !_materializationTasks.ContainsKey(cacheKey),
+            $"TryRemove({cacheKey}): materialization task still present — drain-first invariant violated");
+
+        long size = removed.Stored.SizeBytes;
+        // Size decremented immediately even for borrowed entries. Physical storage
+        // persists until last handle returns, so actual usage temporarily exceeds
+        // reported size. This matches the existing undercount-safe invariant
+        // (see MaterializeAndCacheAsync).
+        Interlocked.Add(ref _currentSizeBytes, -size);
+
+        CacheTelemetry.Evictions.Add(1,
+            _tierTag,
+            new KeyValuePair<string, object?>("reason", "removed"));
+
+        // Always defer cleanup to _pendingCleanup — avoids a narrow TOCTOU race
+        // where BorrowAsync Layer 1 gets a reference via TryGetValue, then TryRemove
+        // disposes storage, then BorrowAsync calls Retrieve on disposed storage.
+        if (removed.RefCount == 0)
+        {
+            _pendingCleanup.Enqueue(removed.Stored);
+        }
+        else
+        {
+            // Active borrows exist — mark as orphaned.
+            // Cleanup happens in Return() when last handle is disposed.
+            removed.MarkOrphaned();
+        }
+
+        _logger.LogInformation("Removed: {Key} ({SizeBytes} bytes, {Tier} tier, RefCount={RefCount})",
+            cacheKey, size, _name, removed.RefCount);
+
+        return true;
+    }
 }

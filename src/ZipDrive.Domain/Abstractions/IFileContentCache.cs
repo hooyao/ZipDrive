@@ -96,4 +96,12 @@ public interface IFileContentCache
     /// Number of entries currently borrowed (protected from eviction).
     /// </summary>
     int BorrowedEntryCount { get; }
+
+    /// <summary>
+    /// Removes all cached file content entries belonging to the specified archive.
+    /// Active borrows continue working; storage cleanup is deferred until handles are returned.
+    /// Returns the number of entries removed.
+    /// </summary>
+    /// <param name="archiveKey">The archive virtual path (e.g., "games/doom.zip").</param>
+    int RemoveArchive(string archiveKey);
 }

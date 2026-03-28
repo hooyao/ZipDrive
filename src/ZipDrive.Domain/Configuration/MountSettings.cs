@@ -39,4 +39,12 @@ public class MountSettings
     /// Detection results below this threshold are rejected. Default is 0.5.
     /// </summary>
     public float EncodingConfidenceThreshold { get; set; } = 0.3f;
+
+    /// <summary>
+    /// Quiet period in seconds for the FileSystemWatcher event consolidator.
+    /// Events are batched and applied after this duration of silence.
+    /// Lower values give faster response; higher values better handle bulk operations.
+    /// Default is 5 seconds.
+    /// </summary>
+    public int DynamicReloadQuietPeriodSeconds { get; set; } = 5;
 }

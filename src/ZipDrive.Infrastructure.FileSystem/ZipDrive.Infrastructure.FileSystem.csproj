@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ZipDrive.Infrastructure.FileSystem.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="DokanNet" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

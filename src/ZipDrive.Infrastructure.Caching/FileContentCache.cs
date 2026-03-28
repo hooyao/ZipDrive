@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
@@ -21,6 +22,11 @@ public sealed class FileContentCache : IFileContentCache
     private readonly long _cutoffBytes;
     private readonly TimeSpan _defaultTtl;
     private readonly ILogger<FileContentCache> _logger;
+
+    // Per-archive key index: archiveKey → set of cache keys belonging to that archive.
+    // Used by RemoveArchive to find which keys to TryRemove from the shared caches.
+    private readonly ConcurrentDictionary<string, HashSet<string>> _archiveKeyIndex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _keyIndexLock = new();
 
     public FileContentCache(
         IZipReaderFactory zipReaderFactory,
@@ -111,6 +117,8 @@ public sealed class FileContentCache : IFileContentCache
         using ICacheHandle<Stream> handle = await cache.BorrowAsync(
             cacheKey, _defaultTtl, factory, cancellationToken).ConfigureAwait(false);
 
+        RegisterArchiveKey(cacheKey);
+
         // Seek and read from the cached random-access stream.
         // Thread-safety: each BorrowAsync call returns a fresh stream instance via
         // IStorageStrategy.Retrieve(), so concurrent callers never share a stream object.
@@ -165,6 +173,8 @@ public sealed class FileContentCache : IFileContentCache
         // Immediate dispose releases RefCount to 0 — entry stays cached but eviction-eligible.
         using ICacheHandle<Stream> handle = await cache.BorrowAsync(
             cacheKey, _defaultTtl, factory, cancellationToken).ConfigureAwait(false);
+
+        RegisterArchiveKey(cacheKey);
     }
 
     /// <inheritdoc />
@@ -221,6 +231,46 @@ public sealed class FileContentCache : IFileContentCache
 
     /// <inheritdoc />
     public int BorrowedEntryCount => _memoryCache.BorrowedEntryCount + _diskCache.BorrowedEntryCount;
+
+    /// <inheritdoc />
+    public int RemoveArchive(string archiveKey)
+    {
+        HashSet<string>? keys;
+        using (_keyIndexLock.EnterScope())
+        {
+            _archiveKeyIndex.Remove(archiveKey, out keys);
+        }
+
+        if (keys == null || keys.Count == 0)
+            return 0;
+
+        int removed = 0;
+        foreach (string key in keys)
+        {
+            if (_memoryCache.TryRemove(key)) removed++;
+            else if (_diskCache.TryRemove(key)) removed++;
+        }
+
+        _logger.LogInformation("RemoveArchive: {ArchiveKey} — removed {Count} cached file entries", archiveKey, removed);
+        return removed;
+    }
+
+    private void RegisterArchiveKey(string cacheKey)
+    {
+        int colonIndex = cacheKey.IndexOf(':');
+        if (colonIndex <= 0) return;
+        string archiveKey = cacheKey[..colonIndex];
+
+        using (_keyIndexLock.EnterScope())
+        {
+            if (!_archiveKeyIndex.TryGetValue(archiveKey, out HashSet<string>? set))
+            {
+                set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _archiveKeyIndex[archiveKey] = set;
+            }
+            set.Add(cacheKey);
+        }
+    }
 
     /// <summary>
     /// Gets the memory tier cache (for testing/diagnostics).
