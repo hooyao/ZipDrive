@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
     public override int TaskCount => 20;
 
     public PartialReadSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -54,7 +55,7 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
 
         var sample = manifest.PartialSamples[rng.Next(manifest.PartialSamples.Count)];
         byte[] buf = new byte[sample.Length];
-        int read = await Vfs.ReadFileAsync(
+        int read = await Adapter.GuardedReadFileAsync(
             $"{archivePath}/{sample.FileName}", buf, sample.Offset, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
@@ -73,7 +74,7 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
 
         long offset = 1024 * 1024 - 32768; // Straddle 1MB boundary
         byte[] buf = new byte[65536];
-        int read = await Vfs.ReadFileAsync($"{archivePath}/{file.name}", buf, offset, ct);
+        int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{file.name}", buf, offset, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         if (read > 0)
@@ -95,7 +96,7 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
 
         long offset = (long)(rng.NextDouble() * maxOffset);
         byte[] buf = new byte[readSize];
-        int read = await Vfs.ReadFileAsync($"{archivePath}/{file.name}", buf, offset, ct);
+        int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{file.name}", buf, offset, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         // No partial sample match expected for arbitrary offsets — just verify no crash
@@ -116,7 +117,7 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
         for (int i = 0; i < 20 && !ct.IsCancellationRequested; i++)
         {
             long offset = (long)(rng.NextDouble() * (file.size - 1));
-            int read = await Vfs.ReadFileAsync(filePath, buf, offset, ct);
+            int read = await Adapter.GuardedReadFileAsync(filePath, buf, offset, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 Interlocked.Increment(ref Result.VerifiedOperations);

@@ -14,6 +14,7 @@ using ZipDrive.Domain.Models;
 using ZipDrive.EnduranceTests.Suites;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.TestHelpers;
 
 namespace ZipDrive.EnduranceTests;
@@ -37,6 +38,7 @@ public class EnduranceTest : IAsyncLifetime
 
     private string _rootPath = "";
     private ZipVirtualFileSystem _vfs = null!;
+    private DokanFileSystemAdapter _adapter = null!;
     private FileContentCache _fileCache = null!;
     private IArchiveStructureCache _structureCache = null!;
     private double _durationHours;
@@ -105,6 +107,9 @@ public class EnduranceTest : IAsyncLifetime
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
+
+        _adapter = new DokanFileSystemAdapter(
+            _vfs, Options.Create(new MountSettings()), NullLogger<DokanFileSystemAdapter>.Instance);
     }
 
     public async Task DisposeAsync()
@@ -136,19 +141,19 @@ public class EnduranceTest : IAsyncLifetime
         var latencyRecorder = new LatencyRecorder();
         var suites = new IEnduranceSuite[]
         {
-            new NormalReadSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new NormalReadSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new PartialReadSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new PartialReadSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new ConcurrencyStressSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new ConcurrencyStressSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new EdgeCaseSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new EdgeCaseSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new EvictionValidationSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new EvictionValidationSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new PathResolutionSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new PathResolutionSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new LatencyMeasurementSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new LatencyMeasurementSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch, latencyRecorder),
             CreateDynamicReloadSuite(archivePaths),
         };
@@ -346,7 +351,7 @@ public class EnduranceTest : IAsyncLifetime
         }
 
         return new DynamicReloadSuite(
-            _vfs, _vfs, // ZipVirtualFileSystem implements both IVirtualFileSystem and IArchiveManager
+            _adapter, _vfs, // adapter for reads, _vfs (IArchiveManager) for lifecycle
             _manifests, archivePaths, _fileCache, _structureCache,
             ReportFailure, _runStopwatch,
             reloadDir, reloadPaths);

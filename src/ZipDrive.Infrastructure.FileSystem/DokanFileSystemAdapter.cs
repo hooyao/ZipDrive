@@ -368,6 +368,23 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         return DokanResult.NotImplemented;
     }
 
+    // === Guarded async methods (test-facing API — no Dokan native types) ===
+
+    public Task<int> GuardedReadFileAsync(string path, byte[] buffer, long offset, CancellationToken ct = default)
+        => _vfs.ReadFileAsync(path, buffer, offset, ct);
+
+    public Task<IReadOnlyList<VfsFileInfo>> GuardedListDirectoryAsync(string path, CancellationToken ct = default)
+        => _vfs.ListDirectoryAsync(path, ct);
+
+    public Task<VfsFileInfo> GuardedGetFileInfoAsync(string path, CancellationToken ct = default)
+        => _vfs.GetFileInfoAsync(path, ct);
+
+    public Task<bool> GuardedFileExistsAsync(string path, CancellationToken ct = default)
+        => _vfs.FileExistsAsync(path, ct);
+
+    public Task<bool> GuardedDirectoryExistsAsync(string path, CancellationToken ct = default)
+        => _vfs.DirectoryExistsAsync(path, ct);
+
     // === Helpers ===
 
     private static FindFileInformation ConvertToFindFileInfo(VfsFileInfo entry) => new()

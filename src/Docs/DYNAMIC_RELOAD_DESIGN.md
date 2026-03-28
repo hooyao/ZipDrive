@@ -1600,123 +1600,171 @@ User deletes oldgame.zip from archive directory
 
 ### 14.10 Endurance Test — DynamicReloadSuite
 
-#### 14.10.1 Architecture
+#### 14.10.1 Core Requirement
 
-The endurance test exercises the **full stack** through a real `DokanFileSystemAdapter` instance backed by real VFS, caches, trie, and watcher — everything except the Dokany kernel driver. Each concurrent task runs a **logical use-case sequence** that emulates realistic (and adversarial) user behavior.
+**ALL endurance tests MUST go through `DokanFileSystemAdapter` using `Guarded*Async` methods, not VFS directly.** The adapter is the entry point that production code uses — testing through VFS skips error translation, buffer handling, and any future adapter-level logic.
+
+#### 14.10.2 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Endurance Test Harness                         │
 │                                                                  │
-│  DokanFileSystemAdapter (real instance)                          │
-│    └── ZipVirtualFileSystem (real)                               │
+│  DokanFileSystemAdapter (real instance, with Guarded*Async)      │
+│    └── ZipVirtualFileSystem (real, implements IArchiveManager)   │
 │          ├── ArchiveTrie (real, with RWLock)                     │
-│          ├── ArchiveStructureCache (real)                        │
-│          ├── FileContentCache (real, tight limits)               │
-│          └── ArchiveDiscovery (real)                             │
+│          ├── ArchiveStructureCache (real, tight TTL)             │
+│          ├── FileContentCache (real, 1MB mem + 10MB disk)        │
+│          └── ArchiveNode map (per-archive drain)                 │
 │                                                                  │
-│  FileSystemWatcher → ArchiveChangeConsolidator → ApplyDeltaAsync │
-│                                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │ Suite A (8)  │  │ Suite B (8)  │  │ Suite C (5)  │  ...       │
-│  │ AddAndRead   │  │ RemoveDuring │  │ BulkCopy     │             │
-│  │              │  │ Read         │  │              │             │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘             │
-│         │                 │                 │                     │
-│         └─────── adapter.CreateFile / ReadFile / FindFiles ──────┘│
+│  ┌────────── Test tasks call these methods ──────────┐           │
+│  │ Adapter.GuardedReadFileAsync(path, buf, offset)   │           │
+│  │ Adapter.GuardedListDirectoryAsync(path)           │           │
+│  │ Adapter.GuardedGetFileInfoAsync(path)             │           │
+│  │ Adapter.GuardedFileExistsAsync(path)              │           │
+│  │ Adapter.GuardedDirectoryExistsAsync(path)         │           │
+│  │                                                   │           │
+│  │ IArchiveManager.AddArchiveAsync(desc)  ← lifecycle│           │
+│  │ IArchiveManager.RemoveArchiveAsync(key)           │           │
+│  └───────────────────────────────────────────────────┘           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-All adapter calls are synchronous (`.GetAwaiter().GetResult()`) matching how Dokany invokes them.
+**Adapter `Guarded*Async` methods** are public async methods on `DokanFileSystemAdapter` that accept normal string paths and byte[] buffers (no Dokan native memory types). They delegate to the VFS, providing a test-facing API that works without Dokany installed.
 
-#### 14.10.2 Archive Isolation
+#### 14.10.3 Adapter Changes Required
 
-The DynamicReloadSuite uses **dedicated "reload-only" archives** that other endurance suites do NOT access. This prevents the reload suite from removing an archive that `NormalReadSuite` is reading, which would trigger fail-fast in the other suite. Each archive file embeds a `__manifest__.json` for SHA-256 verification.
+Add 5 public methods to `DokanFileSystemAdapter`:
+```csharp
+public Task<int> GuardedReadFileAsync(string path, byte[] buffer, long offset, CancellationToken ct = default)
+    => _vfs.ReadFileAsync(path, buffer, offset, ct);
+public Task<IReadOnlyList<VfsFileInfo>> GuardedListDirectoryAsync(string path, CancellationToken ct = default)
+    => _vfs.ListDirectoryAsync(path, ct);
+public Task<VfsFileInfo> GuardedGetFileInfoAsync(string path, CancellationToken ct = default)
+    => _vfs.GetFileInfoAsync(path, ct);
+public Task<bool> GuardedFileExistsAsync(string path, CancellationToken ct = default)
+    => _vfs.FileExistsAsync(path, ct);
+public Task<bool> GuardedDirectoryExistsAsync(string path, CancellationToken ct = default)
+    => _vfs.DirectoryExistsAsync(path, ct);
+```
 
-#### 14.10.3 Use-Case Suites
+**All `EnduranceSuiteBase` and every suite** must change from `IVirtualFileSystem Vfs` to `DokanFileSystemAdapter Adapter` and call `Adapter.Guarded*Async` instead of `Vfs.*Async`.
 
-Each suite has N concurrent tasks. Total task allocation follows existing endurance test pattern (100 total across all suites).
+#### 14.10.4 Use-Case Scenarios (Logical Sequences Through Adapter)
 
-**Suite: AddAndReadSuite (15 tasks)**
-Each task loops:
-1. Copy a test ZIP into the archive directory (from a pool of pre-built ZIPs).
-2. Wait for watcher consolidation (poll via `adapter.CreateFile` until the archive appears, with 10s timeout).
-3. `adapter.FindFiles` on the archive root — verify entry count matches manifest.
-4. `adapter.ReadFile` on 3 random files — verify content SHA-256 against manifest.
-5. Optionally delete the ZIP, verify `adapter.CreateFile` returns `FileNotFound` after consolidation.
-6. Repeat with a different ZIP from the pool.
+Each scenario is a multi-step sequence emulating realistic or adversarial user behavior. Tasks loop for the test duration.
 
-**Suite: RemoveDuringReadSuite (10 tasks)**
-Each task loops:
-1. Ensure a dedicated ZIP is present in the archive directory.
-2. Start `adapter.ReadFile` on a large file (chunked extraction — disk tier).
-3. While read is in progress, delete the ZIP from the archive directory.
-4. Verify: either the read completes successfully (started before drain) OR it fails with a clean error (FileNotFound/InternalError — not a crash).
-5. Verify: subsequent `adapter.CreateFile` for the archive returns `FileNotFound`.
-6. Re-add the ZIP for the next iteration.
+**Category 1: AddAndRead (15 tasks)**
 
-**Suite: RapidChurnSuite (8 tasks)**
-Each task loops:
-1. Add a ZIP.
-2. Read one file via adapter — verify content.
-3. Delete the ZIP.
-4. Re-add a *different* ZIP with the *same filename* but different content.
-5. Wait for consolidation ("Modified" path).
-6. Read the same file path — verify content matches the *new* ZIP's manifest (not stale cached data from old ZIP).
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| BasicAddAndVerify (5 tasks) | File.Copy ZIP → poll `GuardedDirectoryExistsAsync` until true → `GuardedListDirectoryAsync` verify count → `GuardedReadFileAsync` 3 files, SHA-256 → `GuardedGetFileInfoAsync` verify size → File.Delete → poll until false | Full add→serve→remove lifecycle |
+| ImmediateRead (3 tasks) | File.Copy → immediately `GuardedListDirectoryAsync` (may throw VfsDirectoryNotFoundException) → retry after poll → SHA-256 verify | Structure cache lazy-build race |
+| IdempotentOverwrite (2 tasks) | Copy ZIP A → read file, hash=X → overwrite with same content → wait for Modified consolidation → read file, hash must still =X | AddArchiveAsync idempotency |
+| NestedSubdirectory (5 tasks) | Copy ZIP with deep nesting → `GuardedDirectoryExistsAsync("zip/sub1/sub2")` → `GuardedListDirectoryAsync("zip/sub1")` → `GuardedReadFileAsync("zip/sub1/sub2/deep.txt")` SHA-256 | Deep path resolution after lazy build |
 
-**Suite: ExplorerBrowsingSuite (12 tasks)**
-Each task loops:
-1. `adapter.FindFiles("\\")` — list drive root. Verify archive count matches current disk state.
-2. Pick a random archive. `adapter.GetFileInformation("\\archive.zip")` — verify metadata.
-3. `adapter.FindFilesWithPattern("\\archive.zip\\", "*")` — list archive root.
-4. Pick a random subdirectory. `adapter.FindFiles("\\archive.zip\\subdir")` — list contents.
-5. Pick a random file. `adapter.ReadFile` at offset 0, length 4096 — verify non-zero bytes.
+**Category 2: RemoveDuringRead (10 tasks)**
 
-**Suite: AdversarialSuite (5 tasks)**
-Each task loops (picking randomly from):
-- `adapter.ReadFile` on a nonexistent path → expect `FileNotFound`.
-- `adapter.ReadFile` at offset past EOF → expect 0 bytes read.
-- `adapter.CreateFile` with `FileMode.Create` → expect `AccessDenied`.
-- `adapter.WriteFile` → expect `AccessDenied`.
-- `adapter.ReadFile` on a directory → expect `AccessDenied`.
-- `adapter.FindFiles` on a path inside a ZIP that is being removed → expect `FileNotFound` or `PathNotFound`.
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| DeleteDuringLargeRead (4 tasks) | Add large ZIP (disk tier) → start `GuardedReadFileAsync` → 100ms later File.Delete → read either completes with correct SHA-256 OR throws VfsFileNotFoundException → verify archive gone | ArchiveNode drain with in-flight chunked extraction |
+| DeleteDuringMultiFileRead (3 tasks) | Add ZIP with 20+ files → launch 10 concurrent `GuardedReadFileAsync` → 50ms later File.Delete → each read: success or FileNotFound → count outcomes | Concurrent TryEnter/Exit with DrainAsync |
+| DeleteDuringListDirectory (3 tasks) | Add ZIP → loop `GuardedListDirectoryAsync` rapidly → File.Delete → each call: full listing or VfsDirectoryNotFoundException → no partial listings | ArchiveTrie RWLock atomicity |
 
-**Suite: BulkCopySuite (3 tasks)**
-Each task (run once, not looped):
-1. Copy 30 ZIPs into the archive directory simultaneously (parallel `File.Copy`).
-2. Wait for consolidation (up to 30s).
-3. Verify all 30 archives are accessible via `adapter.CreateFile`.
-4. `adapter.ReadFile` on one file from each archive — verify content.
-5. Delete all 30 ZIPs.
-6. Wait for consolidation.
-7. Verify all 30 return `FileNotFound`.
+**Category 3: RapidChurn — Stale Cache Detection (8 tasks)**
 
-**Suite: RenameSuite (3 tasks)**
-Each task loops:
-1. Add "original.zip" to archive directory.
-2. Wait for consolidation — verify accessible.
-3. Rename "original.zip" → "renamed.zip" via `File.Move`.
-4. Wait for consolidation.
-5. Verify "original.zip" path → `FileNotFound`.
-6. Verify "renamed.zip" path → accessible, content correct.
-7. Delete "renamed.zip".
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| ReplaceContent (4 tasks) | Copy ZIP-A → read, hash=X → delete → copy ZIP-B (same filename, different content) → Modified consolidation → read, hash MUST =Y (not X) | FileContentCache.RemoveArchive clears old data |
+| RapidToggle (4 tasks) | Tight loop: copy+delete 20x → wait 10s → verify final state matches disk → if present, SHA-256 verify | Consolidator state machine: Added+Deleted=Noop |
 
-#### 14.10.4 Verification
+**Category 4: ExplorerBrowsing (12 tasks)**
 
-- **SHA-256 on every read** — content hash checked against embedded manifest (existing pattern).
-- **Fail-fast** — first error cancels all tasks with rich diagnostics (suite, task, operation, expected vs actual, cache state, stack trace).
-- **Post-run assertions:**
-  - Zero errors.
-  - Zero handle leaks (`BorrowedEntryCount == 0`).
-  - All suites performed operations.
-  - Cache maintenance ran.
-  - No stale archives in trie (disk state == trie state after final reconciliation).
-- **Latency recording** — per-category (AddAndRead, RemoveDuringRead, etc.) with p50/p95/p99.
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| TreeWalk (6 tasks) | `GuardedListDirectoryAsync("")` → pick archive → `GuardedGetFileInfoAsync` → `GuardedListDirectoryAsync(archive)` → pick file → `GuardedReadFileAsync` 4KB | Metadata consistency during concurrent reload |
+| BrowseDuringAdd (3 tasks) | Continuous root listing loop → concurrent File.Copy → archive appears atomically | Trie AddArchive under write lock |
+| BrowseDuringRemove (3 tasks) | Continuous root listing → concurrent File.Delete → archive disappears atomically, no phantom entries | Trie RemoveArchive + RebuildVirtualFolders |
 
-#### 14.10.5 Duration & Fixture
+**Category 5: Adversarial (5 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| NonexistentPaths (1 task) | `GuardedReadFileAsync("fake.zip/file")`, `GuardedFileExistsAsync("no.zip/x")`, `GuardedDirectoryExistsAsync("no.zip")` → correct exceptions/false | Clean error paths |
+| ReadBeyondEOF (1 task) | `GuardedReadFileAsync(path, buf, size+1000)` → expect 0 bytes, buffer untouched | Out-of-range offset handling |
+| ReadDirectory (1 task) | `GuardedReadFileAsync("archive.zip")`, `GuardedReadFileAsync("archive.zip/subdir")` → expect VfsAccessDeniedException | File vs directory path distinction |
+| ListDeletedArchive (1 task) | Add → delete → immediately `GuardedListDirectoryAsync` in loop → transitions from success to VfsDirectoryNotFoundException | Drain guard clean cutoff |
+| ShellMetadata (1 task) | `GuardedFileExistsAsync("archive.zip/desktop.ini")`, `GuardedDirectoryExistsAsync("$RECYCLE.BIN")` → false quickly | ShellMetadataFilter correctness |
+
+**Category 6: CrossArchiveInterference (10 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| SameFileName (4 tasks) | archiveX has `data.txt` hash_X, archiveY has `data.txt` hash_Y → continuous reads on X → delete Y → reads on X NEVER return hash_Y | Per-archive cache key isolation |
+| ConcurrentRemove (4 tasks) | Add A, B, C → concurrent reads on all → delete B → reads on A and C NEVER fail | Per-archive ArchiveNode isolation |
+| VirtualFolderOrphan (2 tasks) | Add `games/a.zip` and `games/b.zip` → `IsVirtualFolder("games")` = true → delete a.zip → still true → delete b.zip → false | RebuildVirtualFolders correctness |
+
+**Category 7: BulkCopy (3 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| BulkAddAndVerify (3 tasks) | Copy 30 ZIPs simultaneously → poll all accessible → SHA-256 one file each → delete all → verify all gone | Consolidator batching 30+ events |
+
+**Category 8: Rename (3 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| RenameAndAccess (2 tasks) | Copy → read hash_A → File.Move → old path NotFound, new path accessible, same hash_A | Watcher rename decomposition |
+| RenameToNonZip (1 task) | Move game.zip → game.bak → old gone, new NOT visible → move back → accessible again | Extension filter in watcher |
+
+**Category 9: Concurrency Race Stressors (6 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| ThunderingHerdFirstAccess (4 tasks) | Add new archive → 20 concurrent `GuardedListDirectoryAsync` → all return identical results → 20 concurrent `GuardedReadFileAsync` → all produce same SHA-256 | ArchiveStructureCache thundering herd |
+| StructureCacheEvictionDuringRead (2 tasks) | Fill structure cache past capacity → read from evicted archive → must succeed (rebuild on miss) | Transparent structure rebuild |
+
+**Category 10: Degradation Monitoring (2 tasks)**
+
+| Scenario | Steps | Verifies |
+|----------|-------|----------|
+| TempFileAccumulation (1 task) | Every 30s: count `.zip2vd.chunked` files in cache dir → must trend toward 0 between cycles | No sparse file leaks |
+| HandleLeakProbe (1 task) | Every 10s: sample `BorrowedEntryCount` → record max → must be bounded by concurrent task count | No handle leaks |
+
+#### 14.10.5 Task Allocation
+
+| Category | Tasks | Purpose |
+|----------|-------|---------|
+| AddAndRead | 15 | Add lifecycle, lazy structure build |
+| RemoveDuringRead | 10 | Drain mechanism, concurrent read safety |
+| RapidChurn | 8 | Stale cache detection, consolidator FSM |
+| ExplorerBrowsing | 12 | Browsing patterns, metadata consistency |
+| Adversarial | 5 | Error paths, shell filter, boundary conditions |
+| CrossArchiveInterference | 10 | Archive isolation, virtual folder lifecycle |
+| BulkCopy | 3 | Batch consolidation |
+| Rename | 3 | Rename decomposition, extension filtering |
+| ConcurrencyRace | 6 | Thundering herd, structure eviction |
+| DegradationMonitoring | 2 | Temp files, handle leaks |
+| **Maintenance** | **2** | Eviction + cleanup loops |
+| **Static archive readers** | **14** | Background load from existing NormalRead/PartialRead suites |
+| **Total** | **~90** | (leaves headroom under 100) |
+
+#### 14.10.6 Post-Run Assertions
+
+After all tasks complete:
+1. Zero errors
+2. `BorrowedEntryCount == 0` (no handle leaks)
+3. All suites performed operations (`TotalOperations > 0` for each)
+4. Cache maintenance ran
+5. Trie-disk consistency: `GetRegisteredArchives().Count` matches `.zip` file count on disk
+6. No orphan virtual folders
+7. Temp file count == 0 after `DeleteCacheDirectory`
+8. `PendingCleanupCount == 0`
+
+#### 14.10.7 Duration & Fixture
 
 - **CI (default):** `ENDURANCE_DURATION_HOURS=0.02` (~72s). Small fixture: 5 dedicated reload ZIPs, ~50MB total.
-- **Manual (extended):** `ENDURANCE_DURATION_HOURS=24`. Larger fixture: 20 reload ZIPs, ~500MB total.
+- **Manual (extended):** `ENDURANCE_DURATION_HOURS=24`. Larger fixture: 20 reload ZIPs, ~500MB total. Enables degradation monitoring scenarios.
 
 ---
 

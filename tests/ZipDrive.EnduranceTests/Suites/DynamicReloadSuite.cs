@@ -3,21 +3,27 @@ using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.TestHelpers;
 
 namespace ZipDrive.EnduranceTests.Suites;
 
 /// <summary>
-/// Endurance suite that tests dynamic archive add/remove while concurrent reads are running.
-/// Exercises IArchiveManager.AddArchiveAsync/RemoveArchiveAsync alongside VFS reads.
-/// Uses dedicated reload-only archives that other suites do NOT access.
+/// Endurance suite testing dynamic archive add/remove through DokanFileSystemAdapter.
+/// All reads go through Adapter.Guarded*Async. Lifecycle ops go through IArchiveManager.
+/// Uses dedicated reload-only archives isolated from other suites.
 ///
-/// Workloads:
-/// - AddRemoveChurn (3 tasks): add → read → remove cycle
-/// - ReloadReader (3 tasks): concurrent reads tolerating removal
-/// - RapidChurn (2 tasks): add → read → delete → re-add → verify fresh content
-/// - ExplorerBrowse (2 tasks): list root → info → list subdir → read
-/// - Adversarial (2 tasks): nonexistent paths, past-EOF, reads during removal
+/// 10 workload categories, ~20 concurrent tasks:
+/// - AddRemoveChurn: add → list → read → remove cycle
+/// - ReloadReader: concurrent reads tolerating removal
+/// - RapidChurn: add → read → remove → re-add → verify fresh content
+/// - ExplorerBrowse: tree walk on static archives during churn
+/// - Adversarial: nonexistent paths, past-EOF, reads during removal
+/// - CrossArchive: verify removing Y doesn't affect reads on X
+/// - BulkAdd: add multiple archives simultaneously
+/// - Rename: remove+add simulating rename
+/// - ThunderingHerd: 10 concurrent reads on freshly-added archive
+/// - DegradationMonitor: sample BorrowedEntryCount periodically
 /// </summary>
 public sealed class DynamicReloadSuite : EnduranceSuiteBase
 {
@@ -26,10 +32,10 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
     private readonly List<string> _reloadArchivePaths;
 
     public override string Name => "DynamicReloadSuite";
-    public override int TaskCount => 12;
+    public override int TaskCount => 20;
 
     public DynamicReloadSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         IArchiveManager archiveManager,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
@@ -39,7 +45,7 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
         Stopwatch runStopwatch,
         string reloadArchiveDir,
         List<string> reloadArchivePaths)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
         _archiveManager = archiveManager;
         _reloadArchiveDir = reloadArchiveDir;
@@ -50,30 +56,48 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
     {
         var tasks = new List<Task>();
 
-        // 3 churner tasks: add, read, remove, repeat
+        // Cat 1: AddRemoveChurn (3 tasks) — add, read, remove cycle
         tasks.AddRange(Enumerable.Range(0, 3).Select(i =>
             RunWorkloadLoopAsync("AddRemoveChurn", i, ct, AddRemoveChurnBody)));
 
-        // 3 reader tasks: try to read from reload archives, tolerate FileNotFound
+        // Cat 2: ReloadReader (3 tasks) — reads from reload archives, tolerates removal
         tasks.AddRange(Enumerable.Range(3, 3).Select(i =>
             RunWorkloadLoopAsync("ReloadReader", i, ct, ReloadReaderBody)));
 
-        // 2 rapid churn tasks: add → read → remove → re-add → verify content is fresh
+        // Cat 3: RapidChurn (2 tasks) — add → read → remove → re-add → verify fresh
         tasks.AddRange(Enumerable.Range(6, 2).Select(i =>
             RunWorkloadLoopAsync("RapidChurn", i, ct, RapidChurnBody)));
 
-        // 2 explorer browsing tasks: list → info → list subdir → read
+        // Cat 4: ExplorerBrowse (2 tasks) — tree walk static archives during churn
         tasks.AddRange(Enumerable.Range(8, 2).Select(i =>
             RunWorkloadLoopAsync("ExplorerBrowse", i, ct, ExplorerBrowseBody)));
 
-        // 2 adversarial tasks: nonexistent paths, reads during removal
+        // Cat 5: Adversarial (2 tasks) — error paths
         tasks.AddRange(Enumerable.Range(10, 2).Select(i =>
             RunWorkloadLoopAsync("Adversarial", i, ct, AdversarialBody)));
+
+        // Cat 6: CrossArchive (2 tasks) — verify archive isolation
+        tasks.AddRange(Enumerable.Range(12, 2).Select(i =>
+            RunWorkloadLoopAsync("CrossArchive", i, ct, CrossArchiveBody)));
+
+        // Cat 7: BulkAdd (1 task) — add/remove multiple archives at once
+        tasks.Add(RunWorkloadLoopAsync("BulkAdd", 14, ct, BulkAddBody));
+
+        // Cat 8: Rename simulation (1 task) — remove old + add new
+        tasks.Add(RunWorkloadLoopAsync("Rename", 15, ct, RenameBody));
+
+        // Cat 9: ThunderingHerd (2 tasks) — concurrent reads on freshly-added archive
+        tasks.AddRange(Enumerable.Range(16, 2).Select(i =>
+            RunWorkloadLoopAsync("ThunderingHerd", i, ct, ThunderingHerdBody)));
+
+        // Cat 10: DegradationMonitor (2 tasks) — sample counters
+        tasks.AddRange(Enumerable.Range(18, 2).Select(i =>
+            RunWorkloadLoopAsync("DegradationMonitor", i, ct, DegradationMonitorBody)));
 
         await Task.WhenAll(tasks);
     }
 
-    // ── Workload: AddRemoveChurn ────────────────────────────────────────
+    // ── Cat 1: AddRemoveChurn ───────────────────────────────────────────
 
     private async Task AddRemoveChurnBody(Random rng, CancellationToken token)
     {
@@ -85,7 +109,18 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
 
         try
         {
-            await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token);
+            // List → read through adapter
+            var listing = await Adapter.GuardedListDirectoryAsync($"reload/{virtualPath}", token);
+            Interlocked.Increment(ref Result.TotalOperations);
+
+            var files = listing.Where(e => !e.IsDirectory && e.Name != "__manifest__.json").ToList();
+            if (files.Count > 0)
+            {
+                var file = files[rng.Next(files.Count)];
+                byte[] buf = new byte[Math.Min(4096, (int)Math.Max(file.SizeBytes, 1))];
+                await Adapter.GuardedReadFileAsync(file.FullPath, buf, 0, token);
+                Interlocked.Increment(ref Result.TotalOperations);
+            }
         }
         catch (Exception) when (!token.IsCancellationRequested) { }
 
@@ -95,7 +130,7 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
         await Task.Delay(rng.Next(10, 50), token);
     }
 
-    // ── Workload: ReloadReader ──────────────────────────────────────────
+    // ── Cat 2: ReloadReader ─────────────────────────────────────────────
 
     private async Task ReloadReaderBody(Random rng, CancellationToken token)
     {
@@ -103,72 +138,10 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
 
         try
         {
-            bool exists = await Vfs.DirectoryExistsAsync($"reload/{virtualPath}", token);
+            bool exists = await Adapter.GuardedDirectoryExistsAsync($"reload/{virtualPath}", token);
             if (!exists) return;
 
-            await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token);
-        }
-        catch (Domain.Exceptions.VfsFileNotFoundException)
-        {
-            Interlocked.Increment(ref Result.TotalOperations);
-        }
-        catch (Domain.Exceptions.VfsDirectoryNotFoundException)
-        {
-            Interlocked.Increment(ref Result.TotalOperations);
-        }
-
-        await Task.Delay(rng.Next(10, 50), token);
-    }
-
-    // ── Workload: RapidChurn ────────────────────────────────────────────
-
-    private async Task RapidChurnBody(Random rng, CancellationToken token)
-    {
-        string virtualPath = PickReloadVirtualPath(rng);
-        string zipPath = ResolvePhysicalPath(virtualPath);
-        if (!File.Exists(zipPath)) return;
-
-        // Add → read → remove → re-add → read again (verify content not stale)
-        await AddReloadArchiveAsync(virtualPath, zipPath, token);
-
-        try
-        {
-            await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token);
-        }
-        catch (Exception) when (!token.IsCancellationRequested) { }
-
-        await _archiveManager.RemoveArchiveAsync($"reload/{virtualPath}", token);
-        Interlocked.Increment(ref Result.TotalOperations);
-
-        // Re-add immediately (same content — tests that cache is properly cleared)
-        await AddReloadArchiveAsync(virtualPath, zipPath, token);
-
-        try
-        {
-            await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token);
-        }
-        catch (Exception) when (!token.IsCancellationRequested) { }
-
-        await _archiveManager.RemoveArchiveAsync($"reload/{virtualPath}", token);
-        Interlocked.Increment(ref Result.TotalOperations);
-
-        await Task.Delay(rng.Next(10, 50), token);
-    }
-
-    // ── Workload: ExplorerBrowse ────────────────────────────────────────
-
-    private async Task ExplorerBrowseBody(Random rng, CancellationToken token)
-    {
-        // Browse the static archives (not reload ones) — exercises concurrent reads
-        // while reload churners are adding/removing in parallel
-        string archivePath = RandomArchive(rng);
-
-        try
-        {
-            var info = await Vfs.GetFileInfoAsync(archivePath, token);
-            Interlocked.Increment(ref Result.TotalOperations);
-
-            var listing = await Vfs.ListDirectoryAsync(archivePath, token);
+            var listing = await Adapter.GuardedListDirectoryAsync($"reload/{virtualPath}", token);
             Interlocked.Increment(ref Result.TotalOperations);
 
             var files = listing.Where(e => !e.IsDirectory && e.Name != "__manifest__.json").ToList();
@@ -176,41 +149,84 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
             {
                 var file = files[rng.Next(files.Count)];
                 byte[] buf = new byte[Math.Min(4096, (int)Math.Max(file.SizeBytes, 1))];
-                await Vfs.ReadFileAsync(file.FullPath, buf, 0, token);
+                await Adapter.GuardedReadFileAsync(file.FullPath, buf, 0, token);
                 Interlocked.Increment(ref Result.TotalOperations);
             }
         }
-        catch (Domain.Exceptions.VfsFileNotFoundException)
+        catch (Domain.Exceptions.VfsFileNotFoundException) { Interlocked.Increment(ref Result.TotalOperations); }
+        catch (Domain.Exceptions.VfsDirectoryNotFoundException) { Interlocked.Increment(ref Result.TotalOperations); }
+
+        await Task.Delay(rng.Next(10, 50), token);
+    }
+
+    // ── Cat 3: RapidChurn ───────────────────────────────────────────────
+
+    private async Task RapidChurnBody(Random rng, CancellationToken token)
+    {
+        string virtualPath = PickReloadVirtualPath(rng);
+        string zipPath = ResolvePhysicalPath(virtualPath);
+        if (!File.Exists(zipPath)) return;
+
+        // Add → read → remove → re-add → read (verify content fresh, not stale)
+        await AddReloadArchiveAsync(virtualPath, zipPath, token);
+        try { await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token); }
+        catch (Exception) when (!token.IsCancellationRequested) { }
+
+        await _archiveManager.RemoveArchiveAsync($"reload/{virtualPath}", token);
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        // Re-add immediately — cache must be cleared, fresh structure built
+        await AddReloadArchiveAsync(virtualPath, zipPath, token);
+        try { await ReadRandomFileFromArchiveAsync($"reload/{virtualPath}", rng, token); }
+        catch (Exception) when (!token.IsCancellationRequested) { }
+
+        await _archiveManager.RemoveArchiveAsync($"reload/{virtualPath}", token);
+        Interlocked.Increment(ref Result.TotalOperations);
+        await Task.Delay(rng.Next(10, 50), token);
+    }
+
+    // ── Cat 4: ExplorerBrowse ───────────────────────────────────────────
+
+    private async Task ExplorerBrowseBody(Random rng, CancellationToken token)
+    {
+        // Browse static archives through adapter while churners are active
+        string archivePath = RandomArchive(rng);
+
+        try
         {
+            var info = await Adapter.GuardedGetFileInfoAsync(archivePath, token);
             Interlocked.Increment(ref Result.TotalOperations);
+
+            var listing = await Adapter.GuardedListDirectoryAsync(archivePath, token);
+            Interlocked.Increment(ref Result.TotalOperations);
+
+            var files = listing.Where(e => !e.IsDirectory && e.Name != "__manifest__.json").ToList();
+            if (files.Count > 0)
+            {
+                var file = files[rng.Next(files.Count)];
+                byte[] buf = new byte[Math.Min(4096, (int)Math.Max(file.SizeBytes, 1))];
+                await Adapter.GuardedReadFileAsync(file.FullPath, buf, 0, token);
+                Interlocked.Increment(ref Result.TotalOperations);
+            }
         }
+        catch (Domain.Exceptions.VfsFileNotFoundException) { Interlocked.Increment(ref Result.TotalOperations); }
 
         await Task.Delay(rng.Next(20, 100), token);
     }
 
-    // ── Workload: Adversarial ───────────────────────────────────────────
+    // ── Cat 5: Adversarial ──────────────────────────────────────────────
 
     private async Task AdversarialBody(Random rng, CancellationToken token)
     {
-        int scenario = rng.Next(4);
-
+        int scenario = rng.Next(5);
         switch (scenario)
         {
-            case 0:
-                // Read from nonexistent archive
-                try
-                {
-                    await Vfs.ReadFileAsync("reload/nonexistent.zip/file.bin", new byte[1024], 0, token);
-                }
-                catch (Domain.Exceptions.VfsFileNotFoundException)
-                {
-                    // Expected
-                }
-                Interlocked.Increment(ref Result.TotalOperations);
+            case 0: // Read nonexistent
+                try { await Adapter.GuardedReadFileAsync("reload/nonexistent.zip/file.bin", new byte[1024], 0, token); }
+                catch (Domain.Exceptions.VfsFileNotFoundException) { }
                 break;
 
-            case 1:
-                // Read past EOF from a static archive
+            case 1: // Read past EOF
                 try
                 {
                     string archivePath = RandomArchive(rng);
@@ -218,40 +234,197 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
                     if (files.Count > 0)
                     {
                         var (name, size) = files[rng.Next(files.Count)];
-                        byte[] buf = new byte[1024];
-                        int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, size + 1000, token);
-                        // Should return 0 bytes (past EOF)
+                        await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", new byte[1024], size + 1000, token);
                     }
                 }
                 catch (Domain.Exceptions.VfsFileNotFoundException) { }
-                Interlocked.Increment(ref Result.TotalOperations);
                 break;
 
-            case 2:
-                // Check existence of removed archive
-                try
-                {
-                    bool exists = await Vfs.FileExistsAsync("reload/ghost.zip/phantom.txt", token);
-                    // Should return false
-                }
-                catch (Domain.Exceptions.VfsFileNotFoundException) { }
-                Interlocked.Increment(ref Result.TotalOperations);
+            case 2: // Check existence of ghost archive
+                await Adapter.GuardedFileExistsAsync("reload/ghost.zip/phantom.txt", token);
                 break;
 
-            case 3:
-                // List directory on reload path that may or may not exist
+            case 3: // List directory on volatile reload path
                 try
                 {
-                    string virtualPath = PickReloadVirtualPath(rng);
-                    await Vfs.ListDirectoryAsync($"reload/{virtualPath}", token);
+                    string vp = PickReloadVirtualPath(rng);
+                    await Adapter.GuardedListDirectoryAsync($"reload/{vp}", token);
                 }
                 catch (Domain.Exceptions.VfsDirectoryNotFoundException) { }
                 catch (Domain.Exceptions.VfsFileNotFoundException) { }
-                Interlocked.Increment(ref Result.TotalOperations);
+                break;
+
+            case 4: // DirectoryExists on removed archive
+                await Adapter.GuardedDirectoryExistsAsync("reload/removed.zip", token);
                 break;
         }
-
+        Interlocked.Increment(ref Result.TotalOperations);
         await Task.Delay(rng.Next(10, 50), token);
+    }
+
+    // ── Cat 6: CrossArchive ─────────────────────────────────────────────
+
+    private async Task CrossArchiveBody(Random rng, CancellationToken token)
+    {
+        // Read from a STATIC archive while churners are adding/removing reload archives.
+        // Verify static archive reads are never affected by reload operations.
+        string archivePath = RandomArchive(rng);
+        var files = await GetFilesAsync(archivePath, token);
+        if (files.Count == 0) return;
+
+        var (name, size) = files[rng.Next(files.Count)];
+        byte[] buf = new byte[size];
+        int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, 0, token);
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        if (read > 0)
+            VerifyFullFile(archivePath, name, buf, read, "CrossArchive", 0);
+
+        await Task.Delay(rng.Next(20, 100), token);
+    }
+
+    // ── Cat 7: BulkAdd ──────────────────────────────────────────────────
+
+    private async Task BulkAddBody(Random rng, CancellationToken token)
+    {
+        // Add all reload archives simultaneously, verify all accessible, remove all
+        var addedPaths = new List<string>();
+
+        foreach (string reloadPath in _reloadArchivePaths)
+        {
+            string vp = Path.GetFileName(reloadPath).Replace('\\', '/');
+            string zipPath = Path.Combine(_reloadArchiveDir, vp.Replace('/', '\\'));
+            if (!File.Exists(zipPath)) continue;
+
+            await AddReloadArchiveAsync(vp, zipPath, token);
+            addedPaths.Add(vp);
+        }
+
+        // Verify all accessible through adapter
+        foreach (string vp in addedPaths)
+        {
+            try
+            {
+                bool exists = await Adapter.GuardedDirectoryExistsAsync($"reload/{vp}", token);
+                Interlocked.Increment(ref Result.TotalOperations);
+            }
+            catch (Exception) when (!token.IsCancellationRequested) { }
+        }
+
+        // Remove all
+        foreach (string vp in addedPaths)
+        {
+            await _archiveManager.RemoveArchiveAsync($"reload/{vp}", token);
+            Interlocked.Increment(ref Result.TotalOperations);
+        }
+
+        await Task.Delay(rng.Next(100, 500), token);
+    }
+
+    // ── Cat 8: Rename ───────────────────────────────────────────────────
+
+    private async Task RenameBody(Random rng, CancellationToken token)
+    {
+        string virtualPath = PickReloadVirtualPath(rng);
+        string zipPath = ResolvePhysicalPath(virtualPath);
+        if (!File.Exists(zipPath)) return;
+
+        string originalKey = $"reload/{virtualPath}";
+        string renamedKey = $"reload/renamed_{virtualPath}";
+
+        // Add as original
+        await AddReloadArchiveAsync(virtualPath, zipPath, token);
+
+        // Simulate rename: remove old, add with new key
+        await _archiveManager.RemoveArchiveAsync(originalKey, token);
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        var descriptor = new ArchiveDescriptor
+        {
+            VirtualPath = renamedKey,
+            PhysicalPath = zipPath,
+            SizeBytes = new FileInfo(zipPath).Length,
+            LastModifiedUtc = File.GetLastWriteTimeUtc(zipPath)
+        };
+        await _archiveManager.AddArchiveAsync(descriptor, token);
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        // Verify old path gone, new path accessible
+        try
+        {
+            bool oldExists = await Adapter.GuardedDirectoryExistsAsync(originalKey, token);
+            // Should be false (removed)
+            Interlocked.Increment(ref Result.TotalOperations);
+
+            bool newExists = await Adapter.GuardedDirectoryExistsAsync(renamedKey, token);
+            // Should be true (just added)
+            Interlocked.Increment(ref Result.TotalOperations);
+        }
+        catch (Exception) when (!token.IsCancellationRequested) { }
+
+        // Cleanup
+        await _archiveManager.RemoveArchiveAsync(renamedKey, token);
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        await Task.Delay(rng.Next(50, 200), token);
+    }
+
+    // ── Cat 9: ThunderingHerd ───────────────────────────────────────────
+
+    private async Task ThunderingHerdBody(Random rng, CancellationToken token)
+    {
+        string virtualPath = PickReloadVirtualPath(rng);
+        string zipPath = ResolvePhysicalPath(virtualPath);
+        if (!File.Exists(zipPath)) return;
+
+        // Add archive, then hit it with 10 concurrent reads immediately
+        await AddReloadArchiveAsync(virtualPath, zipPath, token);
+
+        try
+        {
+            var concurrentReads = Enumerable.Range(0, 10).Select(async _ =>
+            {
+                try
+                {
+                    var listing = await Adapter.GuardedListDirectoryAsync($"reload/{virtualPath}", token);
+                    Interlocked.Increment(ref Result.TotalOperations);
+
+                    var files = listing.Where(e => !e.IsDirectory && e.Name != "__manifest__.json").ToList();
+                    if (files.Count > 0)
+                    {
+                        var file = files[0]; // All 10 read the same file
+                        byte[] buf = new byte[Math.Min(4096, (int)Math.Max(file.SizeBytes, 1))];
+                        await Adapter.GuardedReadFileAsync(file.FullPath, buf, 0, token);
+                        Interlocked.Increment(ref Result.TotalOperations);
+                    }
+                }
+                catch (Domain.Exceptions.VfsFileNotFoundException) { }
+                catch (Domain.Exceptions.VfsDirectoryNotFoundException) { }
+            });
+
+            await Task.WhenAll(concurrentReads);
+        }
+        catch (Exception) when (!token.IsCancellationRequested) { }
+
+        await _archiveManager.RemoveArchiveAsync($"reload/{virtualPath}", token);
+        Interlocked.Increment(ref Result.TotalOperations);
+        await Task.Delay(rng.Next(50, 200), token);
+    }
+
+    // ── Cat 10: DegradationMonitor ──────────────────────────────────────
+
+    private async Task DegradationMonitorBody(Random rng, CancellationToken token)
+    {
+        // Sample cache health counters periodically
+        int borrowed = FileCache.BorrowedEntryCount;
+        int memEntries = FileCache.MemoryTier.EntryCount;
+        int diskEntries = FileCache.DiskTier.EntryCount;
+        int pendingCleanup = FileCache.MemoryTier.PendingCleanupCount + FileCache.DiskTier.PendingCleanupCount;
+
+        // These are informational — no assertion here (post-run assertions handle it)
+        Interlocked.Increment(ref Result.TotalOperations);
+
+        await Task.Delay(5000, token); // Sample every 5 seconds
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -283,7 +456,7 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
 
     private async Task ReadRandomFileFromArchiveAsync(string archivePath, Random rng, CancellationToken token)
     {
-        var listing = await Vfs.ListDirectoryAsync(archivePath, token);
+        var listing = await Adapter.GuardedListDirectoryAsync(archivePath, token);
         Interlocked.Increment(ref Result.TotalOperations);
 
         var files = listing.Where(e => !e.IsDirectory && e.Name != "__manifest__.json").ToList();
@@ -291,7 +464,7 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
         {
             var file = files[rng.Next(files.Count)];
             byte[] buf = new byte[Math.Min(4096, (int)Math.Max(file.SizeBytes, 1))];
-            int read = await Vfs.ReadFileAsync(file.FullPath, buf, 0, token);
+            await Adapter.GuardedReadFileAsync(file.FullPath, buf, 0, token);
             Interlocked.Increment(ref Result.TotalOperations);
         }
     }

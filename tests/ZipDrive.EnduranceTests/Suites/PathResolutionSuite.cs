@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
     public override int TaskCount => 8;
 
     public PathResolutionSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -48,14 +49,14 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
     private async Task ExistenceCheckAsync(Random rng, CancellationToken ct)
     {
         string archivePath = RandomArchive(rng);
-        await Vfs.DirectoryExistsAsync(archivePath, ct);
+        await Adapter.GuardedDirectoryExistsAsync(archivePath, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         var files = await GetFilesAsync(archivePath, ct);
         foreach (var (name, _) in files.Take(5))
         {
             if (ct.IsCancellationRequested) return;
-            await Vfs.FileExistsAsync($"{archivePath}/{name}", ct);
+            await Adapter.GuardedFileExistsAsync($"{archivePath}/{name}", ct);
             Interlocked.Increment(ref Result.TotalOperations);
         }
     }
@@ -67,7 +68,7 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
         if (files.Count == 0) return;
 
         var (name, _) = files[rng.Next(files.Count)];
-        await Vfs.GetFileInfoAsync($"{archivePath}/{name}", ct);
+        await Adapter.GuardedGetFileInfoAsync($"{archivePath}/{name}", ct);
         Interlocked.Increment(ref Result.TotalOperations);
         Interlocked.Increment(ref Result.VerifiedOperations);
     }
@@ -83,7 +84,7 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
     {
         if (depth > 5 || ct.IsCancellationRequested) return;
 
-        var entries = await Vfs.ListDirectoryAsync(path, ct);
+        var entries = await Adapter.GuardedListDirectoryAsync(path, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         foreach (var entry in entries.Where(e => e.IsDirectory).Take(3))
@@ -99,7 +100,7 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
         string archivePath = RandomArchive(rng);
         string fakePath = $"{archivePath}/__does_not_exist_{rng.Next()}.bin";
 
-        bool exists = await Vfs.FileExistsAsync(fakePath, ct);
+        bool exists = await Adapter.GuardedFileExistsAsync(fakePath, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         // Should not exist
