@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
@@ -25,7 +24,8 @@ public sealed class FileContentCache : IFileContentCache
 
     // Per-archive key index: archiveKey → set of cache keys belonging to that archive.
     // Used by RemoveArchive to find which keys to TryRemove from the shared caches.
-    private readonly ConcurrentDictionary<string, HashSet<string>> _archiveKeyIndex = new(StringComparer.OrdinalIgnoreCase);
+    // All access is serialized under _keyIndexLock — plain Dictionary is sufficient.
+    private readonly Dictionary<string, HashSet<string>> _archiveKeyIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _keyIndexLock = new();
 
     public FileContentCache(
@@ -235,12 +235,16 @@ public sealed class FileContentCache : IFileContentCache
     /// <inheritdoc />
     public int RemoveArchive(string archiveKey)
     {
-        HashSet<string>? keys;
+        HashSet<string>? keys = null;
         using (_keyIndexLock.EnterScope())
         {
-            _archiveKeyIndex.Remove(archiveKey, out keys);
+            if (_archiveKeyIndex.TryGetValue(archiveKey, out keys))
+                _archiveKeyIndex.Remove(archiveKey);
         }
 
+        // Iteration outside lock is safe: we own the HashSet after removing it from
+        // the dictionary. Concurrent RegisterArchiveKey for the same archiveKey creates
+        // a new HashSet, not this one.
         if (keys == null || keys.Count == 0)
             return 0;
 

@@ -178,17 +178,20 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     /// </summary>
     private void Return(CacheEntry entry)
     {
-        entry.DecrementRefCount();
+        // Use the return value of Interlocked.Decrement — reading entry.RefCount
+        // separately would race with concurrent handle disposals.
+        int newRefCount = entry.DecrementRefCount();
 
         // If entry was removed while borrowed, clean up after last handle returns.
-        if (entry.RefCount == 0 && entry.IsOrphaned)
+        // Exactly one thread sees newRefCount == 0 (Interlocked.Decrement guarantee).
+        if (newRefCount == 0 && entry.IsOrphaned)
         {
             _pendingCleanup.Enqueue(entry.Stored);
             _logger.LogDebug("Cleaned up orphaned entry: {Key}", entry.CacheKey);
         }
         else
         {
-            _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
+            _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, newRefCount);
         }
     }
 
@@ -683,7 +686,12 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     {
         // Remove materialization task FIRST — prevents new threads from joining
         // an in-flight materialization via GetOrAdd after we remove from _cache.
-        _materializationTasks.TryRemove(cacheKey, out _);
+        if (_materializationTasks.TryRemove(cacheKey, out _))
+        {
+            _logger.LogWarning(
+                "TryRemove({Key}): materialization task was in-flight — drain-first invariant may have been violated",
+                cacheKey);
+        }
 
         if (!_cache.TryRemove(cacheKey, out CacheEntry? removed))
             return false;

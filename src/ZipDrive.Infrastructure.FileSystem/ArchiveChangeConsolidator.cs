@@ -104,7 +104,9 @@ internal sealed class ArchiveChangeConsolidator : IAsyncDisposable
             return;
         }
 
-        _ = FlushAsync();
+        _ = FlushAsync().ContinueWith(
+            t => _logger.LogError(t.Exception, "Unhandled exception in consolidator flush"),
+            TaskContinuationOptions.OnlyOnFaulted);
     }
 
     private async Task FlushAsync()

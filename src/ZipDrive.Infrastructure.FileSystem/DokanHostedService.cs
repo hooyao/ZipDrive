@@ -229,7 +229,7 @@ public sealed class DokanHostedService : BackgroundService
     {
         if (!IsValidZipEvent(e.FullPath)) return;
 
-        string virtualPath = ArchivePathHelper.ToVirtualPath(_mountSettings.ArchiveDirectory, e.FullPath);
+        if (!TryGetVirtualPath(e.FullPath, out string? virtualPath)) return;
         if (!IsWithinDepthLimit(virtualPath)) return;
 
         _logger.LogDebug("FileSystemWatcher: Created {Path}", e.Name);
@@ -240,7 +240,7 @@ public sealed class DokanHostedService : BackgroundService
     {
         if (!IsValidZipEvent(e.FullPath)) return;
 
-        string virtualPath = ArchivePathHelper.ToVirtualPath(_mountSettings.ArchiveDirectory, e.FullPath);
+        if (!TryGetVirtualPath(e.FullPath, out string? virtualPath)) return;
         if (!IsWithinDepthLimit(virtualPath)) return;
 
         _logger.LogDebug("FileSystemWatcher: Deleted {Path}", e.Name);
@@ -258,7 +258,9 @@ public sealed class DokanHostedService : BackgroundService
             if (Directory.Exists(e.FullPath))
             {
                 _logger.LogDebug("FileSystemWatcher: Directory renamed {Old} → {New}", e.OldName, e.Name);
-                _ = Task.Run(FullReconciliationAsync);
+                _ = Task.Run(FullReconciliationAsync).ContinueWith(
+                    t => _logger.LogError(t.Exception, "Reconciliation faulted"),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
             return;
         }
@@ -266,16 +268,14 @@ public sealed class DokanHostedService : BackgroundService
         _logger.LogDebug("FileSystemWatcher: Renamed {Old} → {New}", e.OldName, e.Name);
 
         // Only emit events for .zip paths
-        if (oldIsZip)
+        if (oldIsZip && TryGetVirtualPath(e.OldFullPath, out string? oldVirtualPath))
         {
-            string oldVirtualPath = ArchivePathHelper.ToVirtualPath(_mountSettings.ArchiveDirectory, e.OldFullPath);
             if (IsWithinDepthLimit(oldVirtualPath))
                 _consolidator?.OnDeleted(oldVirtualPath);
         }
 
-        if (newIsZip)
+        if (newIsZip && TryGetVirtualPath(e.FullPath, out string? newVirtualPath))
         {
-            string newVirtualPath = ArchivePathHelper.ToVirtualPath(_mountSettings.ArchiveDirectory, e.FullPath);
             if (IsWithinDepthLimit(newVirtualPath))
                 _consolidator?.OnCreated(newVirtualPath);
         }
@@ -284,7 +284,9 @@ public sealed class DokanHostedService : BackgroundService
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
         _logger.LogWarning(e.GetException(), "FileSystemWatcher buffer overflow — running full reconciliation");
-        _ = Task.Run(FullReconciliationAsync);
+        _ = Task.Run(FullReconciliationAsync).ContinueWith(
+                    t => _logger.LogError(t.Exception, "Reconciliation faulted"),
+                    TaskContinuationOptions.OnlyOnFaulted);
     }
 
     // === Event Filtering ===
@@ -297,6 +299,21 @@ public sealed class DokanHostedService : BackgroundService
     private static bool IsValidZipEvent(string fullPath)
     {
         return IsZipExtension(fullPath);
+    }
+
+    private bool TryGetVirtualPath(string fullPath, out string virtualPath)
+    {
+        try
+        {
+            virtualPath = ArchivePathHelper.ToVirtualPath(_mountSettings.ArchiveDirectory, fullPath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to compute virtual path for {Path}", fullPath);
+            virtualPath = "";
+            return false;
+        }
     }
 
     private bool IsWithinDepthLimit(string virtualPath)
@@ -333,10 +350,10 @@ public sealed class DokanHostedService : BackgroundService
     {
         string fullPath = Path.Combine(_mountSettings.ArchiveDirectory, virtualPath.Replace('/', '\\'));
 
-        // File-readability probe with exponential backoff
+        // File-readability probe with exponential backoff (capped at ~10s total
+        // to avoid blocking the flush callback for too long)
         TimeSpan[] delays = [
-            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4),
-            TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(16), TimeSpan.FromSeconds(30)
+            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)
         ];
 
         for (int attempt = 0; attempt <= delays.Length; attempt++)
@@ -356,7 +373,7 @@ public sealed class DokanHostedService : BackgroundService
             }
         }
 
-        _logger.LogWarning("File still inaccessible after retries, skipping: {Path}", virtualPath);
+        _logger.LogWarning("File still inaccessible after retries, skipping (will be picked up by next reconciliation): {Path}", virtualPath);
     }
 
     // === Full Reconciliation ===

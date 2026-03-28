@@ -77,8 +77,11 @@ internal sealed class CacheEntry : ICacheEntry
     /// <summary>
     /// Atomically decrements the reference count.
     /// Called when the handle is disposed.
+    /// Returns the new reference count value (from Interlocked.Decrement).
+    /// Callers must use the return value for orphan cleanup decisions —
+    /// reading RefCount separately is racy.
     /// </summary>
-    public void DecrementRefCount() => Interlocked.Decrement(ref _refCount);
+    public int DecrementRefCount() => Interlocked.Decrement(ref _refCount);
 
     /// <summary>
     /// Gets whether this entry has been orphaned (removed while borrowed).

@@ -95,11 +95,19 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Hard stop: clears archive nodes without draining. In-flight operations may
+    /// call Exit() on detached nodes (safe — operates on the object, not the dictionary).
+    /// This is acceptable because StopAsync in DokanHostedService removes the Dokan mount
+    /// point first, which stops new Dokan callbacks from arriving.
+    /// </remarks>
     public Task UnmountAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Unmounting VFS");
 
         _structureCache.Clear();
+        foreach (var node in _archiveNodes.Values)
+            node.Dispose();
         _archiveNodes.Clear();
         IsMounted = false;
         MountStateChanged?.Invoke(this, false);
@@ -139,6 +147,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
         // 2. Remove from trie (new lookups return NotFound)
         _archiveTrie.RemoveArchive(archiveKey);
         _archiveNodes.TryRemove(archiveKey, out _);
+        node.Dispose(); // Release CancellationTokenSource
 
         // 3. Invalidate structure cache
         _structureCache.Invalidate(archiveKey);

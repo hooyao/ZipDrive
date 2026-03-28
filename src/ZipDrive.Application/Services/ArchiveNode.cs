@@ -6,8 +6,11 @@ namespace ZipDrive.Application.Services;
 /// <summary>
 /// Tracks in-flight operations for a single archive.
 /// Used by VFS to drain operations before removal.
+/// NOTE: DrainAsync is expected to be called by a single caller (RemoveArchiveAsync
+/// via ApplyDeltaAsync). The double-drain guard handles accidental re-entry but
+/// concurrent DrainAsync calls from different threads are not supported.
 /// </summary>
-internal sealed class ArchiveNode
+internal sealed class ArchiveNode : IDisposable
 {
     public ArchiveDescriptor Descriptor { get; }
 
@@ -15,6 +18,7 @@ internal sealed class ArchiveNode
     private volatile bool _draining;
     private TaskCompletionSource? _drainTcs;
     private CancellationTokenSource? _drainCts;
+    private bool _disposed;
 
     public ArchiveNode(ArchiveDescriptor descriptor) =>
         Descriptor = descriptor ?? throw new ArgumentNullException(nameof(descriptor));
@@ -60,6 +64,7 @@ internal sealed class ArchiveNode
     /// <summary>
     /// Initiates drain: no new operations accepted.
     /// Returns a task that completes when all in-flight operations finish (or timeout).
+    /// Single-caller assumption: called only from RemoveArchiveAsync (serialized by ApplyDeltaAsync).
     /// </summary>
     public async Task DrainAsync(TimeSpan timeout)
     {
@@ -92,5 +97,12 @@ internal sealed class ArchiveNode
         using var cts = new CancellationTokenSource(timeout);
         try { await _drainTcs.Task.WaitAsync(cts.Token); }
         catch (OperationCanceledException) { /* timeout — proceed anyway */ }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _drainCts?.Dispose();
     }
 }
