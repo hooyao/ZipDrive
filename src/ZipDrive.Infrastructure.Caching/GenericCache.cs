@@ -186,7 +186,10 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         // Exactly one thread sees newRefCount == 0 (Interlocked.Decrement guarantee).
         if (newRefCount == 0 && entry.IsOrphaned)
         {
-            _pendingCleanup.Enqueue(entry.Stored);
+            if (_storageStrategy.RequiresAsyncCleanup)
+                _pendingCleanup.Enqueue(entry.Stored);
+            else
+                _storageStrategy.Dispose(entry.Stored);
             _logger.LogDebug("Cleaned up orphaned entry: {Key}", entry.CacheKey);
         }
         else
@@ -711,12 +714,17 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             _tierTag,
             new KeyValuePair<string, object?>("reason", "removed"));
 
-        // Always defer cleanup to _pendingCleanup — avoids a narrow TOCTOU race
-        // where BorrowAsync Layer 1 gets a reference via TryGetValue, then TryRemove
-        // disposes storage, then BorrowAsync calls Retrieve on disposed storage.
+        // For strategies requiring async cleanup (disk tier): defer to _pendingCleanup
+        // to avoid blocking and to provide a time window for accidental borrows.
+        // For strategies NOT requiring async cleanup (memory tier): dispose immediately
+        // since Dispose is a no-op (byte[] released to GC). Deferring memory-tier
+        // entries causes unbounded queue growth and memory pressure under rapid churn.
         if (removed.RefCount == 0)
         {
-            _pendingCleanup.Enqueue(removed.Stored);
+            if (_storageStrategy.RequiresAsyncCleanup)
+                _pendingCleanup.Enqueue(removed.Stored);
+            else
+                _storageStrategy.Dispose(removed.Stored);
         }
         else
         {

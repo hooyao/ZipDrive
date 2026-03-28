@@ -40,8 +40,8 @@ public class GenericCacheTryRemoveTests : IDisposable
         cache.ContainsKey("key1").Should().BeFalse();
         cache.CurrentSizeBytes.Should().Be(sizeBefore - data.Length);
         cache.EntryCount.Should().Be(0);
-        // Cleanup deferred to pending queue
-        cache.PendingCleanupCount.Should().Be(1);
+        // Memory tier: cleanup is immediate (Dispose is no-op, byte[] released to GC)
+        cache.PendingCleanupCount.Should().Be(0);
     }
 
     // TC-GC-02: Remove non-existent key
@@ -93,8 +93,9 @@ public class GenericCacheTryRemoveTests : IDisposable
         // Dispose handle — triggers orphan cleanup
         handle.Dispose();
 
-        // Now storage is queued for cleanup
-        cache.PendingCleanupCount.Should().Be(cleanupBefore + 1);
+        // Memory tier: orphan cleanup is immediate (Dispose is no-op)
+        // For disk tier, this would enqueue to _pendingCleanup instead
+        cache.PendingCleanupCount.Should().Be(cleanupBefore);
     }
 
     // TC-GC-04: Remove key with in-progress materialization
