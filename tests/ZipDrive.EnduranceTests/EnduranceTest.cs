@@ -252,6 +252,17 @@ public class EnduranceTest : IAsyncLifetime
                     _fileCache.EvictExpired();
                     _structureCache.EvictExpired();
                     _fileCache.ProcessPendingCleanup();
+
+                    // Compact LOH every 10 cycles (~20s) to reclaim memory from
+                    // large byte[] arrays freed by cache eviction. Without this,
+                    // LOH fragmentation causes working set to grow unboundedly
+                    // under rapid cache churn (endurance test with tight limits).
+                    if (Interlocked.Read(ref _evictionCycles) % 10 == 0)
+                    {
+                        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                    }
                 }
                 catch (Exception ex)
                 {
