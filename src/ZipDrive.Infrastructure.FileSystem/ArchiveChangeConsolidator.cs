@@ -17,6 +17,7 @@ internal sealed class ArchiveChangeConsolidator : IAsyncDisposable
     private readonly Timer _timer;
     private long _lastEventTicks;
     private volatile bool _disposed;
+    private volatile Task? _inflightFlush;
 
     public ArchiveChangeConsolidator(
         TimeSpan quietPeriod,
@@ -104,7 +105,7 @@ internal sealed class ArchiveChangeConsolidator : IAsyncDisposable
             return;
         }
 
-        _ = FlushAsync().ContinueWith(
+        _inflightFlush = FlushAsync().ContinueWith(
             t => _logger.LogError(t.Exception, "Unhandled exception in consolidator flush"),
             TaskContinuationOptions.OnlyOnFaulted);
     }
@@ -142,6 +143,14 @@ internal sealed class ArchiveChangeConsolidator : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
         await _timer.DisposeAsync();
+
+        // Await any in-flight flush to prevent _onFlush from running after caller tears down state
+        var flush = _inflightFlush;
+        if (flush != null)
+        {
+            try { await flush; }
+            catch { /* already logged by ContinueWith */ }
+        }
     }
 }
 

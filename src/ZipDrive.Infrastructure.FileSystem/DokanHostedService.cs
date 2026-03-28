@@ -29,6 +29,7 @@ public sealed class DokanHostedService : BackgroundService
     private DokanInstance? _dokanInstance;
     private FileSystemWatcher? _watcher;
     private ArchiveChangeConsolidator? _consolidator;
+    private CancellationToken _stoppingToken;
 
     private static readonly string[] ZipExtensions = [".zip"];
 
@@ -52,6 +53,7 @@ public sealed class DokanHostedService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _stoppingToken = stoppingToken;
         try
         {
             _logger.LogInformation("Starting ZipDrive VFS...");
@@ -369,7 +371,7 @@ public sealed class DokanHostedService : BackgroundService
             {
                 _logger.LogDebug("File not yet readable, retrying in {Delay}s: {Path}",
                     delays[attempt].TotalSeconds, virtualPath);
-                await Task.Delay(delays[attempt]);
+                await Task.Delay(delays[attempt], _stoppingToken);
             }
         }
 

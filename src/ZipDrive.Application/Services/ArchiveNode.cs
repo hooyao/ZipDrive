@@ -18,7 +18,7 @@ internal sealed class ArchiveNode : IDisposable
     private volatile bool _draining;
     private TaskCompletionSource? _drainTcs;
     private CancellationTokenSource? _drainCts;
-    private bool _disposed;
+    private int _disposed; // 0 = active, 1 = disposed (Interlocked for thread safety)
 
     public ArchiveNode(ArchiveDescriptor descriptor) =>
         Descriptor = descriptor ?? throw new ArgumentNullException(nameof(descriptor));
@@ -30,7 +30,22 @@ internal sealed class ArchiveNode : IDisposable
     /// Cancellation token that is cancelled when drain starts.
     /// Pass this to fire-and-forget operations (e.g., prefetch) so they abort promptly.
     /// </summary>
-    public CancellationToken DrainToken => (_drainCts ??= new CancellationTokenSource()).Token;
+    public CancellationToken DrainToken
+    {
+        get
+        {
+            // Thread-safe lazy init — exactly one CTS is published
+            if (_drainCts != null) return _drainCts.Token;
+            var newCts = new CancellationTokenSource();
+            var existing = Interlocked.CompareExchange(ref _drainCts, newCts, null);
+            if (existing != null)
+            {
+                newCts.Dispose();
+                return existing.Token;
+            }
+            return newCts.Token;
+        }
+    }
 
     /// <summary>
     /// Attempts to enter this archive for an operation.
@@ -101,8 +116,7 @@ internal sealed class ArchiveNode : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _drainCts?.Dispose();
     }
 }

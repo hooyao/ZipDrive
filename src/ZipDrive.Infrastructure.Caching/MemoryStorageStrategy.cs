@@ -69,7 +69,9 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
         ArgumentNullException.ThrowIfNull(stored);
 
         var pooled = (PooledBuffer)stored.Data;
-        Pool.Return(pooled.Array);
+        // Idempotent: only return to pool once (guards against double-dispose)
+        if (Interlocked.Exchange(ref pooled._returned, 1) == 0)
+            Pool.Return(pooled.Array, clearArray: true);
     }
 
     /// <inheritdoc />
@@ -82,6 +84,7 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
     {
         public byte[] Array { get; }
         public int Length { get; }
+        internal int _returned; // 0 = not returned, 1 = returned to pool
 
         public PooledBuffer(byte[] array, int length)
         {
