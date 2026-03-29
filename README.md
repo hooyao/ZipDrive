@@ -1,5 +1,5 @@
 [![CI](https://github.com/hooyao/ZipDrive/actions/workflows/ci.yml/badge.svg)](https://github.com/hooyao/ZipDrive/actions/workflows/ci.yml)
-[![Release](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml/badge.svg)](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml)
+[![Release](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/hooyao/ZipDrive/actions/workflows/release.yml)
 
 # ZipDrive
 
