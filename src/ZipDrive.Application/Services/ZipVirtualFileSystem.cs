@@ -142,10 +142,9 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     {
         ArgumentNullException.ThrowIfNull(archive);
         _archiveTrie.AddArchive(archive);
-        // Use GetOrAdd to preserve existing node if in-flight operations hold it.
-        // Only RemoveArchiveAsync should replace/dispose nodes.
-        _archiveNodes.GetOrAdd(archive.VirtualPath, _ => new ArchiveNode(archive));
-        Interlocked.Add(ref _totalArchiveBytes, archive.SizeBytes);
+        bool added = _archiveNodes.TryAdd(archive.VirtualPath, new ArchiveNode(archive));
+        if (added)
+            Interlocked.Add(ref _totalArchiveBytes, archive.SizeBytes);
         _logger.LogInformation("Archive added: {VirtualPath}", archive.VirtualPath);
         return Task.CompletedTask;
     }
