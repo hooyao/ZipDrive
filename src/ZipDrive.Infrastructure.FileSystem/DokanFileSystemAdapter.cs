@@ -227,9 +227,13 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         ref uint volumeSerialNumber, ref DokanFileInfo info)
     {
         _logger.LogDebug("GetVolumeInformation");
-        volumeLabel.SetString("ZipDrive");
-        fileSystemName.SetString("ZipDriveFS");
-        maximumComponentLength = 256;
+        VfsVolumeInfo vol = _vfs.GetVolumeInfo();
+        volumeLabel.SetString(vol.VolumeLabel);
+        // Report as "NTFS" so Windows path resolution works for elevated processes (Dokany #947).
+        // A custom name like "ZipDriveFS" causes "path does not exist" when launching EXEs that
+        // require administrator elevation from the mounted drive.
+        fileSystemName.SetString("NTFS");
+        maximumComponentLength = 255;
         features = FileSystemFeatures.CasePreservedNames
                  | FileSystemFeatures.UnicodeOnDisk
                  | FileSystemFeatures.ReadOnlyVolume;
@@ -241,9 +245,10 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
         out long totalNumberOfFreeBytes, ref DokanFileInfo info)
     {
         _logger.LogDebug("GetDiskFreeSpace");
+        VfsVolumeInfo vol = _vfs.GetVolumeInfo();
         freeBytesAvailable = 0;
         totalNumberOfFreeBytes = 0;
-        totalNumberOfBytes = 0; // Read-only, no meaningful total
+        totalNumberOfBytes = vol.TotalBytes;
         return DokanResult.Success;
     }
 

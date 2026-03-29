@@ -84,6 +84,7 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
             archiveTrie, structureCache, _fileCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             prefetchOpts,
             NullLogger<ZipVirtualFileSystem>.Instance);
 
@@ -133,6 +134,7 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
         var vfs = new ZipVirtualFileSystem(
             archiveTrie, structureCache, fileCache, discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 

@@ -78,6 +78,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings { UseFolderNameAsVolumeLabel = true }),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
@@ -186,6 +187,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             NullLoggerFactory.Instance);
         var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
@@ -440,11 +442,72 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
     // === Volume info ===
 
     [Fact]
-    public void GetVolumeInfo_ReturnsReadOnlyZipDriveFS()
+    public void GetVolumeInfo_ReturnsNtfsReadOnly()
     {
         var vol = _vfs.GetVolumeInfo();
 
-        vol.FileSystemName.Should().Be("ZipDriveFS");
+        vol.FileSystemName.Should().Be("NTFS");
         vol.IsReadOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void GetVolumeInfo_VolumeLabelIsFolderName()
+    {
+        var vol = _vfs.GetVolumeInfo();
+
+        string expectedLabel = Path.GetFileName(_tempRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))!;
+        vol.VolumeLabel.Should().Be(expectedLabel);
+    }
+
+    [Fact]
+    public void GetVolumeInfo_TotalBytesIsSumOfArchiveSizes()
+    {
+        var vol = _vfs.GetVolumeInfo();
+
+        vol.TotalBytes.Should().BeGreaterThan(0, "mounted archives have non-zero sizes");
+        vol.FreeBytes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetVolumeInfo_LongFolderName_TruncatedTo32Chars()
+    {
+        // Create a temp dir with a 40-char folder name
+        string longName = new string('A', 40);
+        string longRoot = Path.Combine(Path.GetTempPath(), longName);
+        Directory.CreateDirectory(longRoot);
+        try
+        {
+            // Create a minimal ZIP so discovery finds something
+            string zipPath = Path.Combine(longRoot, "test.zip");
+            using (ZipFile.Open(zipPath, ZipArchiveMode.Create)) { }
+
+            var trie = new ArchiveTrie(CaseInsensitiveCharComparer.Instance);
+            var resolver = new PathResolver(trie);
+            var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
+            var readerFactory = new ZipReaderFactory();
+            var cacheOpts = Options.Create(new CacheOptions { MemoryCacheSizeMb = 64, DiskCacheSizeMb = 64 });
+            var detector = new FilenameEncodingDetector(Options.Create(new MountSettings()), NullLogger<FilenameEncodingDetector>.Instance);
+            var structureStore = new ArchiveStructureStore(new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+            var structCache = new ArchiveStructureCache(structureStore, readerFactory, TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, detector);
+            var fc = new FileContentCache(readerFactory, cacheOpts, new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+
+            var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
+                new NullHostApplicationLifetime(),
+                Options.Create(new MountSettings { UseFolderNameAsVolumeLabel = true }),
+                Options.Create(new PrefetchOptions { Enabled = false }),
+                NullLogger<ZipVirtualFileSystem>.Instance);
+
+            await vfs.MountAsync(new VfsMountOptions { RootPath = longRoot, MaxDiscoveryDepth = 1 });
+
+            var vol = vfs.GetVolumeInfo();
+            vol.VolumeLabel.Should().HaveLength(32);
+            vol.VolumeLabel.Should().Be(longName[..32]);
+
+            await vfs.UnmountAsync();
+        }
+        finally
+        {
+            try { Directory.Delete(longRoot, true); } catch { }
+        }
     }
 }

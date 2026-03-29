@@ -118,7 +118,8 @@ public class CacheBehaviorTests
     public async Task VolumeInfo_ReturnsReadOnly()
     {
         var vol = _fixture.Vfs.GetVolumeInfo();
-        vol.FileSystemName.Should().Be("ZipDriveFS");
+        vol.FileSystemName.Should().Be("NTFS");
         vol.IsReadOnly.Should().BeTrue();
+        vol.TotalBytes.Should().BeGreaterThan(0);
     }
 }

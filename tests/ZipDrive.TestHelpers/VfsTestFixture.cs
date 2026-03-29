@@ -61,6 +61,7 @@ public class VfsTestFixture : IAsyncLifetime
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 

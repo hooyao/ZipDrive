@@ -25,8 +25,14 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     private readonly IArchiveDiscovery _discovery;
     private readonly IPathResolver _pathResolver;
     private readonly IHostApplicationLifetime _appLifetime;
+    private readonly MountSettings _mountSettings;
     private readonly PrefetchOptions _prefetchOptions;
     private readonly ILogger<ZipVirtualFileSystem> _logger;
+    private string _volumeLabel = "ZipDrive";
+    private long _totalArchiveBytes;
+
+    // NTFS volume labels are limited to 32 characters
+    private const int MaxVolumeLabelLength = 32;
 
     // Per-archive ref counting for drain-before-removal
     private readonly ConcurrentDictionary<string, ArchiveNode> _archiveNodes = new(StringComparer.OrdinalIgnoreCase);
@@ -51,6 +57,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
         IArchiveDiscovery discovery,
         IPathResolver pathResolver,
         IHostApplicationLifetime appLifetime,
+        IOptions<MountSettings> mountSettings,
         IOptions<PrefetchOptions> prefetchOptions,
         ILogger<ZipVirtualFileSystem> logger)
     {
@@ -60,6 +67,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
         _discovery = discovery;
         _pathResolver = pathResolver;
         _appLifetime = appLifetime;
+        _mountSettings = mountSettings.Value;
         _prefetchOptions = prefetchOptions.Value;
         _logger = logger;
     }
@@ -88,6 +96,17 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
             await AddArchiveAsync(archive, cancellationToken).ConfigureAwait(false);
         }
 
+        string label = _mountSettings.UseFolderNameAsVolumeLabel
+            ? Path.GetFileName(options.RootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "ZipDrive"
+            : "ZipDrive";
+        if (label.Length > MaxVolumeLabelLength)
+        {
+            _logger.LogWarning("Volume label truncated from {Length} to {Max} chars: \"{Original}\"",
+                label.Length, MaxVolumeLabelLength, label);
+            label = label[..MaxVolumeLabelLength];
+        }
+        _volumeLabel = label;
+
         IsMounted = true;
         MountStateChanged?.Invoke(this, true);
 
@@ -109,6 +128,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
         foreach (var node in _archiveNodes.Values)
             node.Dispose();
         _archiveNodes.Clear();
+        Interlocked.Exchange(ref _totalArchiveBytes, 0);
         IsMounted = false;
         MountStateChanged?.Invoke(this, false);
 
@@ -122,9 +142,9 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     {
         ArgumentNullException.ThrowIfNull(archive);
         _archiveTrie.AddArchive(archive);
-        // Use GetOrAdd to preserve existing node if in-flight operations hold it.
-        // Only RemoveArchiveAsync should replace/dispose nodes.
-        _archiveNodes.GetOrAdd(archive.VirtualPath, _ => new ArchiveNode(archive));
+        bool added = _archiveNodes.TryAdd(archive.VirtualPath, new ArchiveNode(archive));
+        if (added)
+            Interlocked.Add(ref _totalArchiveBytes, archive.SizeBytes);
         _logger.LogInformation("Archive added: {VirtualPath}", archive.VirtualPath);
         return Task.CompletedTask;
     }
@@ -149,6 +169,7 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
         // 2. Remove from trie (new lookups return NotFound)
         _archiveTrie.RemoveArchive(archiveKey);
         _archiveNodes.TryRemove(archiveKey, out _);
+        Interlocked.Add(ref _totalArchiveBytes, -node.Descriptor.SizeBytes);
         node.Dispose(); // Release CancellationTokenSource
 
         // 3. Invalidate structure cache
@@ -376,11 +397,16 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     /// <inheritdoc />
     public VfsVolumeInfo GetVolumeInfo()
     {
+        long totalBytes = Interlocked.Read(ref _totalArchiveBytes);
+
+        _logger.LogDebug("GetVolumeInfo: label={Label} totalBytes={TotalBytes:N0}",
+            _volumeLabel, totalBytes);
+
         return new VfsVolumeInfo
         {
-            VolumeLabel = "ZipDrive",
-            FileSystemName = "ZipDriveFS",
-            TotalBytes = 0,
+            VolumeLabel = _volumeLabel,
+            FileSystemName = "NTFS",
+            TotalBytes = totalBytes,
             FreeBytes = 0,
             IsReadOnly = true
         };

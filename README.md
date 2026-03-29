@@ -99,6 +99,7 @@ ZipDrive.exe --Mount:ArchiveDirectory="D:\my-zips" --Mount:MountPoint="Z:\" --Ca
 | `Mount:ShortCircuitShellMetadata` | `true` | Skip Windows shell metadata probes (desktop.ini, thumbs.db, etc.) to avoid unnecessary ZIP parsing |
 | `Mount:FallbackEncoding` | `utf-8` | Fallback encoding for non-UTF8 filenames when auto-detection fails. Accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`) |
 | `Mount:EncodingConfidenceThreshold` | `0.5` | Minimum confidence (0.0-1.0) for charset auto-detection. Lower values accept more guesses |
+| `Mount:UseFolderNameAsVolumeLabel` | `false` | When `true`, the mounted drive's volume label shows the archive directory folder name (e.g., `D:\my-zips` → "my-zips"). When `false`, the label is "ZipDrive" |
 
 ### Cache Options
 
