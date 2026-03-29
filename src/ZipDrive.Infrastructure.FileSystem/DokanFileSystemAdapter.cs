@@ -228,8 +228,11 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
     {
         _logger.LogDebug("GetVolumeInformation");
         volumeLabel.SetString("ZipDrive");
+        // Report as "NTFS" so Windows path resolution works for elevated processes (Dokany #947).
+        // A custom name like "ZipDriveFS" causes "path does not exist" when launching EXEs that
+        // require administrator elevation from the mounted drive.
         fileSystemName.SetString("NTFS");
-        maximumComponentLength = 256;
+        maximumComponentLength = 255;
         features = FileSystemFeatures.CasePreservedNames
                  | FileSystemFeatures.UnicodeOnDisk
                  | FileSystemFeatures.ReadOnlyVolume;
