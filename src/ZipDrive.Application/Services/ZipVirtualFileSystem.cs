@@ -31,6 +31,9 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
     private string _volumeLabel = "ZipDrive";
     private long _totalArchiveBytes;
 
+    // NTFS volume labels are limited to 32 characters
+    private const int MaxVolumeLabelLength = 32;
+
     // Per-archive ref counting for drain-before-removal
     private readonly ConcurrentDictionary<string, ArchiveNode> _archiveNodes = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
@@ -93,9 +96,16 @@ public sealed class ZipVirtualFileSystem : IVirtualFileSystem, IArchiveManager
             await AddArchiveAsync(archive, cancellationToken).ConfigureAwait(false);
         }
 
-        _volumeLabel = _mountSettings.UseFolderNameAsVolumeLabel
+        string label = _mountSettings.UseFolderNameAsVolumeLabel
             ? Path.GetFileName(options.RootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "ZipDrive"
             : "ZipDrive";
+        if (label.Length > MaxVolumeLabelLength)
+        {
+            _logger.LogWarning("Volume label truncated from {Length} to {Max} chars: \"{Original}\"",
+                label.Length, MaxVolumeLabelLength, label);
+            label = label[..MaxVolumeLabelLength];
+        }
+        _volumeLabel = label;
 
         IsMounted = true;
         MountStateChanged?.Invoke(this, true);
