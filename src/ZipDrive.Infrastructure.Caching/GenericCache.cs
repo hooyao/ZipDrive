@@ -428,20 +428,26 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 _tierTag,
                 new KeyValuePair<string, object?>("reason", reason));
 
-            if (_storageStrategy.RequiresAsyncCleanup)
+            // A concurrent BorrowAsync may have incremented RefCount between
+            // the pre-check and TryRemove. Handle the same way as TryRemove:
+            // mark orphaned and defer cleanup to Return().
+            if (removed.RefCount > 0)
             {
-                // Queue for background cleanup (non-blocking)
+                removed.MarkOrphaned();
+                _logger.LogDebug("Evicted entry borrowed concurrently, marked orphaned: {Key}", key);
+            }
+            else if (_storageStrategy.RequiresAsyncCleanup)
+            {
                 _pendingCleanup.Enqueue(removed.Stored);
+            }
+            else
+            {
+                _storageStrategy.Dispose(removed.Stored);
             }
 
             _logger.LogInformation(
                 "Evicted: {Key} ({SizeBytes} bytes, {Tier} tier, reason: {Reason})",
                 key, evictedBytes, _name, reason);
-
-            if (!_storageStrategy.RequiresAsyncCleanup)
-            {
-                _storageStrategy.Dispose(removed.Stored);
-            }
 
             return true;
         }
