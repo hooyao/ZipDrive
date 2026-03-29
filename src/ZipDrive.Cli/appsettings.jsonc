@@ -37,7 +37,11 @@
     // Minimum confidence (0.0–1.0) the charset detector must reach before accepting
     // its result. 0.3 is a sweet spot for most archives. If filenames still appear
     // garbled, try lowering this value to accept less confident guesses.
-    "EncodingConfidenceThreshold": 0.3
+    "EncodingConfidenceThreshold": 0.3,
+
+    // When true, the mounted drive's volume label shows the archive directory folder name
+    // (e.g., "D:\my-zips" → "my-zips"). When false, the label is "ZipDrive".
+    "UseFolderNameAsVolumeLabel": false
   },
 
   // Two-tier cache: small files in memory, large files on disk (memory-mapped).

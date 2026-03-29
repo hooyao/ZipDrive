@@ -104,6 +104,7 @@ public class EnduranceTest : IAsyncLifetime
 
         _vfs = new ZipVirtualFileSystem(archiveTrie, _structureCache, _fileCache, discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });

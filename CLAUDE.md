@@ -350,7 +350,7 @@ DokanNet integration for Windows file system mounting.
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
 - `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
-- `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, `EncodingConfidenceThreshold`, and `DynamicReloadQuietPeriodSeconds`
+- `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, `EncodingConfidenceThreshold`, `DynamicReloadQuietPeriodSeconds`, and `UseFolderNameAsVolumeLabel`
 - **ArchiveChangeConsolidator**: Queues `FileSystemWatcher` events, consolidates into net deltas after configurable quiet period (`DynamicReloadQuietPeriodSeconds`). State machine: Created+Deleted=Noop, Deleted+Created=Modified. Atomic flush via `Interlocked.Exchange`. `DisposeAsync` awaits in-flight flush.
 - **IArchiveManager**: Interface separating archive lifecycle (`AddArchiveAsync`, `RemoveArchiveAsync`, `GetRegisteredArchives`) from file system operations (ISP). Implemented by `ZipVirtualFileSystem`.
 - **DokanFileSystemAdapter.Guarded*Async**: Five public async methods for test consumption without Dokany runtime (`GuardedReadFileAsync`, `GuardedListDirectoryAsync`, `GuardedGetFileInfoAsync`, `GuardedFileExistsAsync`, `GuardedDirectoryExistsAsync`).
@@ -455,12 +455,13 @@ When working with the caching layer:
     "ShortCircuitShellMetadata": true,
     "FallbackEncoding": "utf-8",
     "EncodingConfidenceThreshold": 0.5,
-    "DynamicReloadQuietPeriodSeconds": 5
+    "DynamicReloadQuietPeriodSeconds": 5,
+    "UseFolderNameAsVolumeLabel": false
   }
 }
 ```
 
-`MountSettings` is a pure DTO in `Domain.Configuration` (no framework dependencies). The `FallbackEncoding` accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`, `euc-kr`). The `EncodingConfidenceThreshold` controls how confident the charset detector must be before accepting a result (0.0-1.0).
+`MountSettings` is a pure DTO in `Domain.Configuration` (no framework dependencies). The `FallbackEncoding` accepts any .NET encoding name (e.g., `shift_jis`, `gb2312`, `euc-kr`). The `EncodingConfidenceThreshold` controls how confident the charset detector must be before accepting a result (0.0-1.0). The `UseFolderNameAsVolumeLabel` controls the mounted drive's volume label: when `true`, it uses the archive directory's folder name; when `false` (default), it shows "ZipDrive". The drive's total size always reflects the sum of all mounted ZIP file sizes (maintained via `Interlocked` counter for O(1) reads).
 
 ### CacheOptions (`appsettings.jsonc` → "Cache" section)
 

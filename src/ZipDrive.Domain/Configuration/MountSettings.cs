@@ -47,4 +47,11 @@ public class MountSettings
     /// Default is 5 seconds.
     /// </summary>
     public int DynamicReloadQuietPeriodSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// When true, the mounted drive's volume label is set to the archive directory folder name
+    /// (e.g., "D:\my-zips" → "my-zips"). When false, the label is "ZipDrive".
+    /// Default is false.
+    /// </summary>
+    public bool UseFolderNameAsVolumeLabel { get; set; } = false;
 }

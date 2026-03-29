@@ -78,6 +78,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings { UseFolderNameAsVolumeLabel = true }),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
@@ -186,6 +187,7 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
             NullLoggerFactory.Instance);
         var vfs = new ZipVirtualFileSystem(trie, structCache, fc, discovery, resolver,
             new NullHostApplicationLifetime(),
+            Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
 
@@ -440,11 +442,29 @@ public class ZipVirtualFileSystemTests : IAsyncLifetime, IDisposable
     // === Volume info ===
 
     [Fact]
-    public void GetVolumeInfo_ReturnsReadOnlyZipDriveFS()
+    public void GetVolumeInfo_ReturnsNtfsReadOnly()
     {
         var vol = _vfs.GetVolumeInfo();
 
-        vol.FileSystemName.Should().Be("ZipDriveFS");
+        vol.FileSystemName.Should().Be("NTFS");
         vol.IsReadOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void GetVolumeInfo_VolumeLabelIsFolderName()
+    {
+        var vol = _vfs.GetVolumeInfo();
+
+        string expectedLabel = Path.GetFileName(_tempRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))!;
+        vol.VolumeLabel.Should().Be(expectedLabel);
+    }
+
+    [Fact]
+    public void GetVolumeInfo_TotalBytesIsSumOfArchiveSizes()
+    {
+        var vol = _vfs.GetVolumeInfo();
+
+        vol.TotalBytes.Should().BeGreaterThan(0, "mounted archives have non-zero sizes");
+        vol.FreeBytes.Should().Be(0);
     }
 }
