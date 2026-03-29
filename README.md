@@ -47,6 +47,8 @@ ZipDrive turns any directory of ZIP files into a browsable Windows drive letter.
 
 The easiest way: **drag a folder onto `ZipDrive.exe`** in Windows Explorer. All ZIP files in that folder are mounted at `R:\` (configurable in `appsettings.jsonc`).
 
+![Drag and drop a folder onto ZipDrive.exe to mount](Animation.gif)
+
 ### Using the Command Line
 
 ```bash
