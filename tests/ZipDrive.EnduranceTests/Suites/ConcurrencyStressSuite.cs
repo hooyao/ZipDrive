@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class ConcurrencyStressSuite : EnduranceSuiteBase
     public override int TaskCount => 20;
 
     public ConcurrencyStressSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -56,7 +57,7 @@ public sealed class ConcurrencyStressSuite : EnduranceSuiteBase
         var readers = Enumerable.Range(0, 20).Select(async _ =>
         {
             byte[] buf = new byte[size];
-            int read = await Vfs.ReadFileAsync(filePath, buf, 0, ct);
+            int read = await Adapter.GuardedReadFileAsync(filePath, buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 VerifyFullFile(archivePath, name, buf, read, "ThunderingHerd", 0);
@@ -90,7 +91,7 @@ public sealed class ConcurrencyStressSuite : EnduranceSuiteBase
         var readers = targets.Select(async t =>
         {
             byte[] buf = new byte[t.size];
-            int read = await Vfs.ReadFileAsync(t.filePath, buf, 0, ct);
+            int read = await Adapter.GuardedReadFileAsync(t.filePath, buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 VerifyFullFile(t.archivePath, t.fileName, buf, read, "ParallelMaterialization", 0);
@@ -105,7 +106,7 @@ public sealed class ConcurrencyStressSuite : EnduranceSuiteBase
         string archivePath = RandomArchive(rng);
         var readers = Enumerable.Range(0, 5).Select(async _ =>
         {
-            await Vfs.ListDirectoryAsync(archivePath, ct);
+            await Adapter.GuardedListDirectoryAsync(archivePath, ct);
             Interlocked.Increment(ref Result.TotalOperations);
         }).ToArray();
 

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
     public override int TaskCount => 25;
 
     public NormalReadSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -56,7 +57,7 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
 
         var (name, size) = files[rng.Next(files.Count)];
         byte[] buf = new byte[size];
-        int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
+        int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, 0, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         if (read > 0)
@@ -77,7 +78,7 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
 
         while (!ct.IsCancellationRequested)
         {
-            int read = await Vfs.ReadFileAsync(filePath, chunk, offset, ct);
+            int read = await Adapter.GuardedReadFileAsync(filePath, chunk, offset, ct);
             if (read == 0) break;
             if (offset + read <= fullContent.Length)
                 Array.Copy(chunk, 0, fullContent, offset, read);
@@ -103,7 +104,7 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
         for (int i = 0; i < 10 && !ct.IsCancellationRequested; i++)
         {
             byte[] buf = new byte[size];
-            int read = await Vfs.ReadFileAsync(filePath, buf, 0, ct);
+            int read = await Adapter.GuardedReadFileAsync(filePath, buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
             if (read > 0)
                 VerifyFullFile(archivePath, name, buf, read, "HotFileHammerer", 0);

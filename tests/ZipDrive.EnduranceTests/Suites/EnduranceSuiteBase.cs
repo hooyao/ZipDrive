@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using Xunit.Abstractions;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.TestHelpers;
 
 namespace ZipDrive.EnduranceTests.Suites;
@@ -14,7 +15,7 @@ namespace ZipDrive.EnduranceTests.Suites;
 /// </summary>
 public abstract class EnduranceSuiteBase : IEnduranceSuite
 {
-    protected readonly IVirtualFileSystem Vfs;
+    protected readonly DokanFileSystemAdapter Adapter;
     protected readonly ConcurrentDictionary<string, ZipManifest> Manifests;
     protected readonly List<string> ArchivePaths;
     protected readonly FileContentCache FileCache;
@@ -27,7 +28,7 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
     public abstract int TaskCount { get; }
 
     protected EnduranceSuiteBase(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
@@ -35,7 +36,7 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
     {
-        Vfs = vfs;
+        Adapter = adapter;
         Manifests = manifests;
         ArchivePaths = archivePaths;
         FileCache = fileCache;
@@ -175,7 +176,7 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
     protected async Task<List<(string name, long size)>> GetFilesAsync(
         string archivePath, CancellationToken ct)
     {
-        var contents = await Vfs.ListDirectoryAsync(archivePath, ct);
+        var contents = await Adapter.GuardedListDirectoryAsync(archivePath, ct);
         return contents
             .Where(e => !e.IsDirectory && e.Name != "__manifest__.json")
             .Select(e => (e.Name, e.SizeBytes))

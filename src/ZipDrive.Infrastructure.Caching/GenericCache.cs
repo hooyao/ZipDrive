@@ -178,8 +178,24 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     /// </summary>
     private void Return(CacheEntry entry)
     {
-        entry.DecrementRefCount();
-        _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, entry.RefCount);
+        // Use the return value of Interlocked.Decrement — reading entry.RefCount
+        // separately would race with concurrent handle disposals.
+        int newRefCount = entry.DecrementRefCount();
+
+        // If entry was removed while borrowed, clean up after last handle returns.
+        // Exactly one thread sees newRefCount == 0 (Interlocked.Decrement guarantee).
+        if (newRefCount == 0 && entry.IsOrphaned)
+        {
+            if (_storageStrategy.RequiresAsyncCleanup)
+                _pendingCleanup.Enqueue(entry.Stored);
+            else
+                _storageStrategy.Dispose(entry.Stored);
+            _logger.LogDebug("Cleaned up orphaned entry: {Key}", entry.CacheKey);
+        }
+        else
+        {
+            _logger.LogDebug("Returned: {Key} (RefCount={RefCount})", entry.CacheKey, newRefCount);
+        }
     }
 
     /// <summary>
@@ -412,20 +428,26 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 _tierTag,
                 new KeyValuePair<string, object?>("reason", reason));
 
-            if (_storageStrategy.RequiresAsyncCleanup)
+            // A concurrent BorrowAsync may have incremented RefCount between
+            // the pre-check and TryRemove. Handle the same way as TryRemove:
+            // mark orphaned and defer cleanup to Return().
+            if (removed.RefCount > 0)
             {
-                // Queue for background cleanup (non-blocking)
+                removed.MarkOrphaned();
+                _logger.LogDebug("Evicted entry borrowed concurrently, marked orphaned: {Key}", key);
+            }
+            else if (_storageStrategy.RequiresAsyncCleanup)
+            {
                 _pendingCleanup.Enqueue(removed.Stored);
+            }
+            else
+            {
+                _storageStrategy.Dispose(removed.Stored);
             }
 
             _logger.LogInformation(
                 "Evicted: {Key} ({SizeBytes} bytes, {Tier} tier, reason: {Reason})",
                 key, evictedBytes, _name, reason);
-
-            if (!_storageStrategy.RequiresAsyncCleanup)
-            {
-                _storageStrategy.Dispose(removed.Stored);
-            }
 
             return true;
         }
@@ -667,4 +689,59 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
     /// Gets the number of pending cleanup items.
     /// </summary>
     public int PendingCleanupCount => _pendingCleanup.Count;
+
+    /// <inheritdoc />
+    public bool TryRemove(string cacheKey)
+    {
+        // Remove materialization task FIRST — prevents new threads from joining
+        // an in-flight materialization via GetOrAdd after we remove from _cache.
+        if (_materializationTasks.TryRemove(cacheKey, out _))
+        {
+            _logger.LogWarning(
+                "TryRemove({Key}): materialization task was in-flight — drain-first invariant may have been violated",
+                cacheKey);
+        }
+
+        if (!_cache.TryRemove(cacheKey, out CacheEntry? removed))
+            return false;
+
+        // Note: _materializationTasks may contain a NEW entry for this key if a concurrent
+        // BorrowAsync started between our TryRemove of the task and now. This is expected
+        // under rapid churn (DynamicReloadSuite). The ghost entry expires via TTL.
+
+        long size = removed.Stored.SizeBytes;
+        // Size decremented immediately even for borrowed entries. Physical storage
+        // persists until last handle returns, so actual usage temporarily exceeds
+        // reported size. This matches the existing undercount-safe invariant
+        // (see MaterializeAndCacheAsync).
+        Interlocked.Add(ref _currentSizeBytes, -size);
+
+        CacheTelemetry.Evictions.Add(1,
+            _tierTag,
+            new KeyValuePair<string, object?>("reason", "removed"));
+
+        // For strategies requiring async cleanup (disk tier): defer to _pendingCleanup
+        // to avoid blocking and to provide a time window for accidental borrows.
+        // For strategies NOT requiring async cleanup (memory tier): dispose immediately
+        // since Dispose is a no-op (byte[] released to GC). Deferring memory-tier
+        // entries causes unbounded queue growth and memory pressure under rapid churn.
+        if (removed.RefCount == 0)
+        {
+            if (_storageStrategy.RequiresAsyncCleanup)
+                _pendingCleanup.Enqueue(removed.Stored);
+            else
+                _storageStrategy.Dispose(removed.Stored);
+        }
+        else
+        {
+            // Active borrows exist — mark as orphaned.
+            // Cleanup happens in Return() when last handle is disposed.
+            removed.MarkOrphaned();
+        }
+
+        _logger.LogInformation("Removed: {Key} ({SizeBytes} bytes, {Tier} tier, RefCount={RefCount})",
+            cacheKey, size, _name, removed.RefCount);
+
+        return true;
+    }
 }

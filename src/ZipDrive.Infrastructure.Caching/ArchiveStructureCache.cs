@@ -358,12 +358,13 @@ public sealed class ArchiveStructureCache : IArchiveStructureCache
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(archiveKey);
 
-        _logger.LogWarning(
-            "Invalidate called for {ArchiveKey} but direct removal is not supported. " +
-            "Entry will expire based on TTL.",
-            archiveKey);
+        bool removed = _cache.TryRemove(archiveKey);
+        if (removed)
+            _logger.LogInformation("Invalidated structure cache for {ArchiveKey}", archiveKey);
+        else
+            _logger.LogDebug("Invalidate: {ArchiveKey} not found in cache (already expired or never cached)", archiveKey);
 
-        return false;
+        return removed;
     }
 
     /// <inheritdoc />

@@ -278,3 +278,97 @@ After all tasks complete (or fail-fast drain), the test SHALL validate global in
 #### Scenario: Fail-fast error surfaced
 - **WHEN** fail-fast was triggered during the run
 - **THEN** the test fails with the formatted `EnduranceFailure` diagnostic output
+
+<!-- Added by dynamic-reload-v2 change -->
+
+## ADDED Requirements
+
+### Requirement: DynamicReloadSuite tests through DokanFileSystemAdapter
+The endurance test SHALL build a complete DokanFileSystemAdapter instance backed by real VFS, caches, trie, and watcher. All test operations SHALL go through the adapter (not VFS directly).
+
+#### Scenario: Adapter-based testing
+- **WHEN** the endurance test runs
+- **THEN** all read/list/stat operations are invoked via DokanFileSystemAdapter methods (CreateFile, ReadFile, FindFiles, GetFileInformation)
+
+### Requirement: Concurrent logical use-case tasks
+The DynamicReloadSuite SHALL run multiple concurrent tasks, each executing a logical use-case sequence. Suites:
+
+1. **AddAndReadSuite (15 tasks)**: Copy ZIP → wait for watcher → FindFiles → ReadFile → verify SHA-256
+2. **RemoveDuringReadSuite (10 tasks)**: Start ReadFile → delete ZIP → verify clean error or completion
+3. **RapidChurnSuite (8 tasks)**: Add → read → delete → re-add different ZIP same name → verify new content
+4. **ExplorerBrowsingSuite (12 tasks)**: FindFiles root → GetFileInformation → FindFiles subdirs → ReadFile
+5. **AdversarialSuite (5 tasks)**: Nonexistent paths, past-EOF reads, write attempts, reads during removal
+6. **BulkCopySuite (3 tasks)**: Copy 30 ZIPs simultaneously → verify all accessible → delete all
+7. **RenameSuite (3 tasks)**: Add → rename → verify old=NotFound, new=accessible
+
+#### Scenario: All suites complete without errors
+- **WHEN** the endurance test runs for the configured duration
+- **THEN** zero errors, zero handle leaks (BorrowedEntryCount == 0), all suites performed operations
+
+### Requirement: Dedicated reload-only archives
+The DynamicReloadSuite SHALL use dedicated archives that other endurance suites do NOT access. This prevents the reload suite from disrupting concurrent read suites.
+
+#### Scenario: Archive isolation
+- **WHEN** the DynamicReloadSuite removes an archive
+- **THEN** no other suite's task fails because of the removal
+
+### Requirement: SHA-256 verification on every read
+Every ReadFile in the DynamicReloadSuite SHALL verify content against the embedded __manifest__.json SHA-256 hash.
+
+#### Scenario: Content integrity after reload
+- **WHEN** a ZIP is removed and re-added, then read
+- **THEN** the content matches the new ZIP's manifest (not stale cached data from the old ZIP)
+
+### Requirement: Fail-fast with diagnostics
+The first error SHALL cancel all tasks immediately with rich diagnostics: suite name, task ID, operation, expected vs actual, cache state, stack trace.
+
+#### Scenario: Error cancels all tasks
+- **WHEN** any task encounters an unexpected error
+- **THEN** all 56 tasks are cancelled within 1 second and diagnostics are printed
+## MODIFIED Requirements
+
+### Requirement: All endurance suites use DokanFileSystemAdapter
+EnduranceSuiteBase SHALL accept `DokanFileSystemAdapter` (not `IVirtualFileSystem`). All VFS calls in all suites SHALL go through `Adapter.Guarded*Async` methods.
+
+#### Scenario: NormalReadSuite reads through adapter
+- **WHEN** NormalReadSuite reads a file
+- **THEN** it calls `Adapter.GuardedReadFileAsync` (not `Vfs.ReadFileAsync`)
+
+#### Scenario: All suites construct with adapter
+- **WHEN** any endurance suite is constructed
+- **THEN** it accepts `DokanFileSystemAdapter adapter` as its first parameter
+
+### Requirement: EnduranceTest fixture builds adapter
+EnduranceTest.InitializeAsync SHALL construct a `DokanFileSystemAdapter` instance and pass it to all suite constructors.
+
+#### Scenario: Adapter constructed without Dokany
+- **WHEN** the endurance test initializes
+- **THEN** `DokanFileSystemAdapter` is constructed with real VFS + MountSettings + NullLogger (no Dokan runtime needed)
+
+## ADDED Requirements
+
+### Requirement: DynamicReloadSuite exercises logical user scenarios through adapter
+The DynamicReloadSuite SHALL implement 10 categories of concurrent logical scenarios, each calling `Adapter.Guarded*Async` for reads and `IArchiveManager` for lifecycle. Categories: AddAndRead, RemoveDuringRead, RapidChurn, ExplorerBrowsing, Adversarial, CrossArchiveInterference, BulkCopy, Rename, ConcurrencyRace, DegradationMonitoring.
+
+#### Scenario: AddAndRead lifecycle through adapter
+- **WHEN** a ZIP is added and a task reads through adapter
+- **THEN** `GuardedDirectoryExistsAsync` transitions from false to true, `GuardedReadFileAsync` returns correct SHA-256
+
+#### Scenario: RemoveDuringRead produces clean outcome
+- **WHEN** `RemoveArchiveAsync` is called while `GuardedReadFileAsync` is in progress
+- **THEN** the read either completes with correct SHA-256 OR throws VfsFileNotFoundException (never crashes, never returns corrupt data)
+
+#### Scenario: RapidChurn detects stale cache
+- **WHEN** archive A is replaced by archive B (same filename, different content)
+- **THEN** `GuardedReadFileAsync` after replacement returns hash matching B's manifest (not A's stale data)
+
+#### Scenario: CrossArchive isolation
+- **WHEN** archiveY is removed while archiveX is being read (both contain same filename)
+- **THEN** reads from archiveX continue with correct hash_X, never return hash_Y
+
+### Requirement: Post-run assertions detect degradation
+After all tasks complete, the endurance test SHALL verify: zero errors, BorrowedEntryCount == 0, PendingCleanupCount == 0, trie-disk consistency, no orphan virtual folders, temp file count == 0.
+
+#### Scenario: Handle leak detection
+- **WHEN** the endurance test completes
+- **THEN** `BorrowedEntryCount == 0` and no `.zip2vd.chunked` temp files remain

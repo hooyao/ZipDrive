@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
 
-**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch, and sibling prefetch with coalescing batch reader implemented. 347 total tests passing. 24-hour soak test validated with 100 concurrent tasks, partial-read SHA-256 verification, and latency measurement.
+**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch, and sibling prefetch with coalescing batch reader implemented. Per-archive dynamic reload with FileSystemWatcher, event consolidation, and drain guard. 389 total tests passing. 12-hour soak test validated with DynamicReloadSuite (10 workload categories through DokanFileSystemAdapter), partial-read SHA-256 verification, and latency measurement.
 
 ## Development Workflow Requirements
 
@@ -218,12 +218,13 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 **Architecture**: Generic cache with pluggable storage strategies, borrow/return pattern, and dual-tier routing
 - **GenericCache<T>**: Single cache implementation with reference counting and `System.Diagnostics.Metrics` instrumentation
 - **FileContentCache**: Owns ZIP extraction, tier routing, and caching. Routes to memory or disk tier based on `CacheOptions.SmallFileCutoffMb` (default 50MB)
-- **MemoryStorageStrategy**: `byte[]` storage for small files (< 50MB)
+- **MemoryStorageStrategy**: Dedicated `ArrayPool<byte>` with `PooledBuffer` wrapper for small files (< 50MB). Returns arrays with `clearArray: true` on disposal to prevent stale data.
 - **ChunkedDiskStorageStrategy**: Incremental chunk-based extraction for large files (≥ 50MB). Decompresses in configurable chunks (default 10MB) to NTFS sparse files. `MaterializeAsync` returns after the first chunk (~50ms), background task continues extracting. Replaces the former `DiskStorageStrategy`.
 - **ChunkedFileEntry**: Tracks chunk state via `int[]` with `Volatile` reads/writes + `TaskCompletionSource<bool>[]` for per-chunk completion signaling. Owns the sparse backing file, background extraction task, and `CancellationTokenSource`.
 - **ChunkedStream**: `Stream` subclass returned by `ChunkedDiskStorageStrategy.Retrieve()`. Maps reads to chunks, blocks on unextracted regions via `EnsureChunkReadyAsync()` safety gate. Each borrower gets an independent instance with its own `FileStream` (unbuffered via `bufferSize: 1` to prevent stale reads from sparse file regions being written by the background extractor).
 - **ObjectStorageStrategy<T>**: Direct object storage for metadata caching
 - **CacheTelemetry**: Static metrics (counters, histograms, observable gauges) and ActivitySource for tracing. Includes chunked extraction metrics (`cache.chunks.extracted`, `cache.chunks.waits`, `cache.chunks.wait_duration`, `cache.chunks.extraction_duration`).
+- **GenericCache.TryRemove()**: Targeted entry removal with orphan tracking. If `RefCount > 0`, marks entry as orphaned; cleanup defers to `Return()` when last handle disposes. Used by `FileContentCache.RemoveArchive()` for per-archive cache cleanup during dynamic reload.
 
 **Why Custom Cache (not built-in MemoryCache)?**
 - Built-in `MemoryCache` lacks pluggable eviction policies
@@ -349,7 +350,10 @@ DokanNet integration for Windows file system mounting.
 - `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
 - `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
-- `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, and `EncodingConfidenceThreshold`
+- `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, `EncodingConfidenceThreshold`, and `DynamicReloadQuietPeriodSeconds`
+- **ArchiveChangeConsolidator**: Queues `FileSystemWatcher` events, consolidates into net deltas after configurable quiet period (`DynamicReloadQuietPeriodSeconds`). State machine: Created+Deleted=Noop, Deleted+Created=Modified. Atomic flush via `Interlocked.Exchange`. `DisposeAsync` awaits in-flight flush.
+- **IArchiveManager**: Interface separating archive lifecycle (`AddArchiveAsync`, `RemoveArchiveAsync`, `GetRegisteredArchives`) from file system operations (ISP). Implemented by `ZipVirtualFileSystem`.
+- **DokanFileSystemAdapter.Guarded*Async**: Five public async methods for test consumption without Dokany runtime (`GuardedReadFileAsync`, `GuardedListDirectoryAsync`, `GuardedGetFileInfoAsync`, `GuardedFileExistsAsync`, `GuardedDirectoryExistsAsync`).
 
 **ReadFile Buffer Pooling**: `DokanFileSystemAdapter.ReadFile()` uses `ArrayPool<byte>.Shared.Rent()` to avoid per-read `byte[]` allocations. The rented array may be larger than the Dokan native buffer, so `bytesRead` is capped to `buffer.Span.Length` and only valid bytes are copied via `AsSpan(0, bytesRead).CopyTo(buffer.Span)`. The array is returned in a `finally` block. **Do NOT return the rented array via `buffer.ReturnArray(rentedArray, copyBack: true)`** — when `copyBack` is `true` the API copies the entire rented array back to the native buffer (no byte-count parameter), which leaks stale `ArrayPool` data beyond `bytesRead`.
 
@@ -390,6 +394,9 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 | **Bytes-First Decoding** | `ZipCentralDirectoryEntry.FileNameBytes` | Defer string decode until encoding is known |
 | **Arg Rewriting** | `ArgPreprocessor` | Translate bare positional args to named config keys for drag-and-drop |
+| **Per-Archive Drain** | `ArchiveNode`, `ArchiveGuard` | TryEnter/Exit ref counting with DrainAsync for clean archive removal |
+| **Event Consolidation** | `ArchiveChangeConsolidator` | Batch FileSystemWatcher events, atomic flush via Interlocked.Exchange |
+| **Interface Segregation** | `IArchiveManager` | Archive lifecycle separate from IVirtualFileSystem |
 
 ## Critical Concurrency Rules
 
@@ -403,6 +410,8 @@ When working with the caching layer:
 6. **Borrow/Return pattern is mandatory** - Always dispose `ICacheHandle<T>` to allow eviction
 7. **Entries with RefCount > 0 are protected** - Never evict borrowed entries
 8. **ChunkedStream readers must use unbuffered FileStream** - `bufferSize: 1` prevents stale reads from sparse file regions written by the background extractor (the internal FileStream buffer can cache zeros from unwritten regions before the chunk is extracted)
+9. **ArchiveTrie uses ReaderWriterLockSlim** - Reads (every Dokan callback) take shared lock; writes (add/remove) take exclusive lock. `ListFolder` materializes results inside the lock.
+10. **ArchiveNode drain prevents new operations** - `TryEnter()` returns false during drain. Prefetch must hold the guard and use `DrainToken` for cancellation.
 
 ## Testing Strategy
 
@@ -445,7 +454,8 @@ When working with the caching layer:
     "MaxDiscoveryDepth": 6,
     "ShortCircuitShellMetadata": true,
     "FallbackEncoding": "utf-8",
-    "EncodingConfidenceThreshold": 0.5
+    "EncodingConfidenceThreshold": 0.5,
+    "DynamicReloadQuietPeriodSeconds": 5
   }
 }
 ```
@@ -625,6 +635,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
 | Drag-and-Drop Launch | ✅ Complete | `ArgPreprocessor` rewrites bare args, `DokanHostedService` validates directory + press-any-key UX |
 | Sibling Prefetch | ✅ Complete | `SpanSelector` + coalescing batch reader; fire-and-forget on cold reads and directory listings, per-directory in-flight guard, fill-ratio span selection, 15 new tests |
+| Dynamic Reload | ✅ Complete | Per-archive add/remove with FileSystemWatcher, ArchiveChangeConsolidator, ArchiveNode drain guard, GenericCache.TryRemove, FileContentCache.RemoveArchive, IArchiveManager, DynamicReloadSuite endurance test |
 
 ## Known Limitations / Future Work
 
@@ -639,6 +650,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - [x] ZIP64 support (files > 4GB, archives > 65535 entries) - **Implemented**
 - [ ] LZMA compression support
 - [ ] Direct-read for Store-compressed entries (bypass extraction for uncompressed files in ZIP)
+- [x] Dynamic archive add/remove during runtime (per-archive reload) - **Implemented**
 
 ## Code Style Conventions
 
@@ -664,6 +676,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 - **ZIP Structure Cache**: [`src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md`](src/Docs/ZIP_STRUCTURE_CACHE_DESIGN.md)
 - **Streaming ZIP Reader**: [`src/Docs/STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
 - **Concurrency Details**: [`src/Docs/CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md)
+- **Dynamic Reload Architecture**: [`src/Docs/DYNAMIC_RELOAD_DESIGN.md`](src/Docs/DYNAMIC_RELOAD_DESIGN.md)
 - **Implementation Checklist**: [`src/Docs/IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md)
 
 ## Performance Targets
@@ -689,6 +702,7 @@ ZipDrive is considered complete when:
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
 - [x] Background cache maintenance with configurable interval
 - [ ] All performance targets met
-- [x] No memory leaks (validated with 24-hour soak test, 100 concurrent tasks, zero handle leaks)
+- [x] No memory leaks (validated with 12-hour soak test, 100 concurrent tasks, zero handle leaks)
+- [x] Dynamic reload with zero disruption to unaffected archives (12-hour endurance test, DynamicReloadSuite with 10 workload categories)
 - [x] Comprehensive documentation written
 - [x] Single-file release build (`dotnet publish` with `PublishSingleFile`)

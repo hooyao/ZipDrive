@@ -55,4 +55,10 @@ public sealed class ArchiveStructureStore : IArchiveStructureStore
 
     /// <inheritdoc />
     public int BorrowedEntryCount => _inner.BorrowedEntryCount;
+
+    /// <inheritdoc />
+    public bool TryRemove(string cacheKey) => _inner.TryRemove(cacheKey);
+
+    /// <inheritdoc />
+    public bool ContainsKey(string cacheKey) => _inner.ContainsKey(cacheKey);
 }

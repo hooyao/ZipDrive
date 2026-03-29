@@ -14,6 +14,7 @@ using ZipDrive.Domain.Models;
 using ZipDrive.EnduranceTests.Suites;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.TestHelpers;
 
 namespace ZipDrive.EnduranceTests;
@@ -37,6 +38,7 @@ public class EnduranceTest : IAsyncLifetime
 
     private string _rootPath = "";
     private ZipVirtualFileSystem _vfs = null!;
+    private DokanFileSystemAdapter _adapter = null!;
     private FileContentCache _fileCache = null!;
     private IArchiveStructureCache _structureCache = null!;
     private double _durationHours;
@@ -79,8 +81,8 @@ public class EnduranceTest : IAsyncLifetime
         // Tight cache to force constant eviction
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(new CacheOptions
         {
-            MemoryCacheSizeMb = 1,
-            DiskCacheSizeMb = 10,
+            MemoryCacheSizeMb = 50,       // Large enough to avoid constant LOH thrash
+            DiskCacheSizeMb = 50,
             SmallFileCutoffMb = 1,
             ChunkSizeMb = 1,
             DefaultTtlMinutes = 1,
@@ -105,6 +107,9 @@ public class EnduranceTest : IAsyncLifetime
             Options.Create(new PrefetchOptions { Enabled = false }),
             NullLogger<ZipVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
+
+        _adapter = new DokanFileSystemAdapter(
+            _vfs, Options.Create(new MountSettings()), NullLogger<DokanFileSystemAdapter>.Instance);
     }
 
     public async Task DisposeAsync()
@@ -136,20 +141,21 @@ public class EnduranceTest : IAsyncLifetime
         var latencyRecorder = new LatencyRecorder();
         var suites = new IEnduranceSuite[]
         {
-            new NormalReadSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new NormalReadSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new PartialReadSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new PartialReadSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new ConcurrencyStressSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new ConcurrencyStressSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new EdgeCaseSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new EdgeCaseSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new EvictionValidationSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new EvictionValidationSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new PathResolutionSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new PathResolutionSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch),
-            new LatencyMeasurementSuite(_vfs, _manifests, archivePaths, _fileCache, _structureCache,
+            new LatencyMeasurementSuite(_adapter, _manifests, archivePaths, _fileCache, _structureCache,
                 ReportFailure, _runStopwatch, latencyRecorder),
+            CreateDynamicReloadSuite(archivePaths),
         };
 
         // Step 3: Launch all suite tasks + 2 maintenance tasks = 100 total
@@ -245,7 +251,19 @@ public class EnduranceTest : IAsyncLifetime
                 {
                     _fileCache.EvictExpired();
                     _structureCache.EvictExpired();
-                    _fileCache.ProcessPendingCleanup();
+
+                    // Process ALL pending cleanup (not just default 100) to keep up
+                    // with rapid cache churn from DynamicReloadSuite
+                    _fileCache.ProcessPendingCleanup(maxItems: 10_000);
+
+                    // Compact LOH every 15 cycles (~30s) to reclaim fragmented memory
+                    // from large byte[] arrays freed by cache eviction
+                    if (Interlocked.Read(ref _evictionCycles) % 15 == 0)
+                    {
+                        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -322,5 +340,32 @@ public class EnduranceTest : IAsyncLifetime
                     await CollectArchivePathsAsync(entryPath, archives);
             }
         }
+    }
+
+    /// <summary>
+    /// Creates a DynamicReloadSuite using a dedicated "reload" subdirectory.
+    /// Copies a few test ZIPs there as reload candidates (isolated from other suites).
+    /// </summary>
+    private DynamicReloadSuite CreateDynamicReloadSuite(List<string> archivePaths)
+    {
+        // Create a reload subdirectory with copies of the first 2 test ZIPs
+        string reloadDir = Path.Combine(_rootPath, "reload");
+        Directory.CreateDirectory(reloadDir);
+
+        var reloadPaths = new List<string>();
+        var sourceZips = Directory.GetFiles(_rootPath, "*.zip", SearchOption.AllDirectories).Take(2);
+        foreach (string sourceZip in sourceZips)
+        {
+            string destName = $"reload_{Path.GetFileName(sourceZip)}";
+            string destPath = Path.Combine(reloadDir, destName);
+            File.Copy(sourceZip, destPath, overwrite: true);
+            reloadPaths.Add(destPath);
+        }
+
+        return new DynamicReloadSuite(
+            _adapter, _vfs, // adapter for reads, _vfs (IArchiveManager) for lifecycle
+            _manifests, archivePaths, _fileCache, _structureCache,
+            ReportFailure, _runStopwatch,
+            reloadDir, reloadPaths);
     }
 }

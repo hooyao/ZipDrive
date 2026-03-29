@@ -36,6 +36,12 @@ internal sealed class CacheEntry : ICacheEntry
     private int _refCount;
 
     /// <summary>
+    /// Whether this entry was removed from the cache dictionary while borrowed.
+    /// When true, the last handle return triggers storage cleanup.
+    /// </summary>
+    private volatile bool _orphaned;
+
+    /// <summary>
     /// Gets the current reference count. Thread-safe read.
     /// </summary>
     public int RefCount => Volatile.Read(ref _refCount);
@@ -71,8 +77,21 @@ internal sealed class CacheEntry : ICacheEntry
     /// <summary>
     /// Atomically decrements the reference count.
     /// Called when the handle is disposed.
+    /// Returns the new reference count value (from Interlocked.Decrement).
+    /// Callers must use the return value for orphan cleanup decisions —
+    /// reading RefCount separately is racy.
     /// </summary>
-    public void DecrementRefCount() => Interlocked.Decrement(ref _refCount);
+    public int DecrementRefCount() => Interlocked.Decrement(ref _refCount);
+
+    /// <summary>
+    /// Gets whether this entry has been orphaned (removed while borrowed).
+    /// </summary>
+    public bool IsOrphaned => _orphaned;
+
+    /// <summary>
+    /// Marks this entry as orphaned. Called by TryRemove when RefCount > 0.
+    /// </summary>
+    public void MarkOrphaned() => _orphaned = true;
 
     /// <summary>
     /// Gets the expiration timestamp for this entry.

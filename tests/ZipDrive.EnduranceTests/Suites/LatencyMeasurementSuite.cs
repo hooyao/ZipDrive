@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Xunit.Abstractions;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -20,7 +21,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
     public override int TaskCount => 5;
 
     public LatencyMeasurementSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
@@ -28,7 +29,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch,
         LatencyRecorder recorder)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
         _recorder = recorder;
     }
@@ -69,7 +70,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
 
         byte[] buf = new byte[size];
         Stopwatch sw = Stopwatch.StartNew();
-        int read = await Vfs.ReadFileAsync(filePath, buf, 0, ct);
+        int read = await Adapter.GuardedReadFileAsync(filePath, buf, 0, ct);
         sw.Stop();
 
         Interlocked.Increment(ref Result.TotalOperations);
@@ -96,7 +97,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
         if (_seenFiles.TryAdd(filePath, true))
         {
             byte[] warmup = new byte[file.size];
-            await Vfs.ReadFileAsync(filePath, warmup, 0, ct);
+            await Adapter.GuardedReadFileAsync(filePath, warmup, 0, ct);
         }
 
         // Now measure random offset read
@@ -104,7 +105,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
         byte[] buf = new byte[65536];
 
         Stopwatch sw = Stopwatch.StartNew();
-        int read = await Vfs.ReadFileAsync(filePath, buf, offset, ct);
+        int read = await Adapter.GuardedReadFileAsync(filePath, buf, offset, ct);
         sw.Stop();
 
         Interlocked.Increment(ref Result.TotalOperations);
@@ -124,7 +125,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
         byte[] buf = new byte[sample.Length];
 
         Stopwatch sw = Stopwatch.StartNew();
-        int read = await Vfs.ReadFileAsync(
+        int read = await Adapter.GuardedReadFileAsync(
             $"{archivePath}/{sample.FileName}", buf, sample.Offset, ct);
         sw.Stop();
 

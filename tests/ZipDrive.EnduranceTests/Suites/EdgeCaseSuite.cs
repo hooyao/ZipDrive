@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ZipDrive.Domain.Abstractions;
+using ZipDrive.Infrastructure.FileSystem;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.TestHelpers;
 
@@ -16,14 +17,14 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
     public override int TaskCount => 10;
 
     public EdgeCaseSuite(
-        IVirtualFileSystem vfs,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
         IArchiveStructureCache structureCache,
         Action<EnduranceFailure> reportFailure,
         Stopwatch runStopwatch)
-        : base(vfs, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
+        : base(adapter, manifests, archivePaths, fileCache, structureCache, reportFailure, runStopwatch)
     {
     }
 
@@ -61,7 +62,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
             if (emptyEntry == null) continue;
 
             byte[] buf = new byte[1];
-            int read = await Vfs.ReadFileAsync(
+            int read = await Adapter.GuardedReadFileAsync(
                 $"{archivePath}/{emptyEntry.FileName}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
 
@@ -83,7 +84,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
             if (entry == null) continue;
 
             byte[] buf = new byte[1];
-            int read = await Vfs.ReadFileAsync(
+            int read = await Adapter.GuardedReadFileAsync(
                 $"{archivePath}/{entry.FileName}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
 
@@ -106,7 +107,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
 
         // Read at exact EOF offset — should return 0 bytes
         byte[] buf = new byte[1024];
-        int read = await Vfs.ReadFileAsync($"{archivePath}/{name}", buf, size, ct);
+        int read = await Adapter.GuardedReadFileAsync($"{archivePath}/{name}", buf, size, ct);
         Interlocked.Increment(ref Result.TotalOperations);
 
         if (read == 0)
@@ -126,7 +127,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
             if (entry == null) continue;
 
             byte[] buf = new byte[entry.UncompressedSize];
-            int read = await Vfs.ReadFileAsync(
+            int read = await Adapter.GuardedReadFileAsync(
                 $"{archivePath}/{entry.FileName}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
 
@@ -149,7 +150,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
             if (entry == null) continue;
 
             byte[] buf = new byte[entry.UncompressedSize];
-            int read = await Vfs.ReadFileAsync(
+            int read = await Adapter.GuardedReadFileAsync(
                 $"{archivePath}/{entry.FileName}", buf, 0, ct);
             Interlocked.Increment(ref Result.TotalOperations);
 
