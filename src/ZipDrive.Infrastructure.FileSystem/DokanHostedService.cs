@@ -99,7 +99,7 @@ public sealed class DokanHostedService : BackgroundService
             var dokanBuilder = new DokanInstanceBuilder(_dokan)
                 .ConfigureOptions(options =>
                 {
-                    options.Options = DokanOptions.WriteProtection | DokanOptions.FixedDrive;
+                    options.Options = DokanOptions.WriteProtection | DokanOptions.FixedDrive | DokanOptions.MountManager;
                     options.MountPoint = _mountSettings.MountPoint;
                 });
 

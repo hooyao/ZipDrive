@@ -228,7 +228,7 @@ public sealed class DokanFileSystemAdapter : IDokanOperations2
     {
         _logger.LogDebug("GetVolumeInformation");
         volumeLabel.SetString("ZipDrive");
-        fileSystemName.SetString("ZipDriveFS");
+        fileSystemName.SetString("NTFS");
         maximumComponentLength = 256;
         features = FileSystemFeatures.CasePreservedNames
                  | FileSystemFeatures.UnicodeOnDisk
