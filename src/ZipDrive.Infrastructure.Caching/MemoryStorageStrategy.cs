@@ -55,12 +55,24 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Returns an independent copy of the cached data. This prevents a race
+    /// where the evictor returns the pooled array (with clearArray:true) while
+    /// a concurrent reader still holds a MemoryStream over the same array.
+    /// The copy cost (~memcpy) is negligible vs I/O and is bounded by
+    /// SmallFileCutoffMb (default 50MB, typical files much smaller).
+    /// </remarks>
     public Stream Retrieve(StoredEntry stored)
     {
         ArgumentNullException.ThrowIfNull(stored);
 
         var pooled = (PooledBuffer)stored.Data;
-        return new MemoryStream(pooled.Array, 0, pooled.Length, writable: false);
+        // Copy to an independent byte[] so the reader is immune to pool recycling.
+        // Without this copy, Pool.Return(clearArray:true) can zero the array while
+        // a concurrent MemoryStream is still reading from it.
+        byte[] copy = new byte[pooled.Length];
+        Buffer.BlockCopy(pooled.Array, 0, copy, 0, pooled.Length);
+        return new MemoryStream(copy, 0, pooled.Length, writable: false);
     }
 
     /// <inheritdoc />
