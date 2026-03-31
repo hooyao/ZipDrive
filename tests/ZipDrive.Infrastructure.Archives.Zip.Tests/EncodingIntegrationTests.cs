@@ -4,6 +4,8 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ZipDrive.Application.Services;
+using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
 using ZipDrive.Domain.Configuration;
 using ZipDrive.Infrastructure.Archives.Zip;
@@ -213,16 +215,23 @@ public class EncodingIntegrationTests : IDisposable
             Microsoft.Extensions.Logging.Abstractions.NullLogger<FilenameEncodingDetector>.Instance);
 
         var readerFactory = new ZipReaderFactory();
+        var metadataStore = new ZipFormatMetadataStore();
+        var zipBuilder = new ZipStructureBuilder(readerFactory, detector, metadataStore,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var formatRegistry = new FormatRegistry(
+            [zipBuilder], Array.Empty<IArchiveEntryExtractor>(), Array.Empty<IPrefetchStrategy>());
+
         var evictionPolicy = new LruEvictionPolicy();
         var structureStore = new ArchiveStructureStore(
             evictionPolicy, TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Options.Create(new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
 
         var cache = new ArchiveStructureCache(
-            structureStore, readerFactory, TimeProvider.System, cacheOpts,
-            NullLogger<ArchiveStructureCache>.Instance, detector);
+            structureStore, formatRegistry,
+            TimeProvider.System, cacheOpts,
+            NullLogger<ArchiveStructureCache>.Instance);
 
-        return await cache.GetOrBuildAsync("test", zipPath);
+        return await cache.GetOrBuildAsync("test", zipPath, "zip");
     }
 
     #endregion

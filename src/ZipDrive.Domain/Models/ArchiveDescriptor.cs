@@ -28,6 +28,12 @@ public sealed class ArchiveDescriptor
     public required DateTime LastModifiedUtc { get; init; }
 
     /// <summary>
+    /// Archive format identifier (e.g., "zip", "rar").
+    /// Set during discovery by IFormatRegistry.DetectFormat.
+    /// </summary>
+    public string FormatId { get; init; } = "zip";
+
+    /// <summary>
     /// Display name derived from virtual path (e.g., "doom.zip").
     /// </summary>
     public string Name => VirtualPath.Contains('/')

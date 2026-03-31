@@ -1,8 +1,7 @@
 using FluentAssertions;
-using ZipDrive.Application.Services;
-using ZipDrive.Domain.Models;
+using Xunit;
 
-namespace ZipDrive.Domain.Tests;
+namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
 
 public sealed class SpanSelectorTests
 {
@@ -53,7 +52,7 @@ public sealed class SpanSelectorTests
         ZipEntryInfo trigger = entries[2]; // center
         List<ZipEntryInfo> candidates = entries.Where(e => e.LocalHeaderOffset != trigger.LocalHeaderOffset).ToList();
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
 
         plan.IsEmpty.Should().BeFalse();
         plan.Entries.Count.Should().Be(4); // all 4 non-trigger siblings
@@ -67,7 +66,7 @@ public sealed class SpanSelectorTests
         ZipEntryInfo trigger = entries[5];
         List<ZipEntryInfo> candidates = entries.Where(e => e.LocalHeaderOffset != trigger.LocalHeaderOffset).ToList();
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 4, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 4, fillRatioThreshold: 0.80);
 
         plan.Entries.Count.Should().BeLessThanOrEqualTo(4);
         plan.IsEmpty.Should().BeFalse();
@@ -110,7 +109,7 @@ public sealed class SpanSelectorTests
         // Candidates are a and c (not trigger); span a-c has fill=200/8200 < 80%
         var candidates = new List<ZipEntryInfo> { a, c };
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
 
         // Span a..c has 2.4% fill ratio. After shrinking: one of a or c is removed.
         // The remaining window will be a single entry, which is fine (loop stops at count=1).
@@ -129,7 +128,7 @@ public sealed class SpanSelectorTests
         ZipEntryInfo trigger = b;
         var candidates = new List<ZipEntryInfo> { a, c };
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.65);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.65);
 
         plan.Entries.Count.Should().Be(2);
         plan.Entries.Should().Contain(a).And.Contain(c);
@@ -149,7 +148,7 @@ public sealed class SpanSelectorTests
         List<ZipEntryInfo> candidates = entries.Where(e => e.LocalHeaderOffset != trigger.LocalHeaderOffset).ToList();
         // candidates: offsets 0,1000,2000,3000,5000,6000,7000,8000
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 4, fillRatioThreshold: 0.0);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 4, fillRatioThreshold: 0.0);
 
         // Trigger at offset 4000 inserts between offset 3000 and 5000 in the sorted candidates list.
         // Centered window of 4 around that insertion point should contain offsets near 4000.
@@ -167,7 +166,7 @@ public sealed class SpanSelectorTests
     public void Select_NoCandidates_ReturnsEmpty()
     {
         ZipEntryInfo trigger = Entry(0, 100);
-        PrefetchPlan plan = SpanSelector.Select([], trigger, maxFiles: 10, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select([], trigger, maxFiles: 10, fillRatioThreshold: 0.80);
         plan.IsEmpty.Should().BeTrue();
     }
 
@@ -176,7 +175,7 @@ public sealed class SpanSelectorTests
     {
         var candidates = new List<ZipEntryInfo> { Entry(0, 100), Entry(100, 100) };
         ZipEntryInfo trigger = Entry(200, 100);
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 0, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 0, fillRatioThreshold: 0.80);
         plan.IsEmpty.Should().BeTrue();
     }
 
@@ -188,7 +187,7 @@ public sealed class SpanSelectorTests
         ZipEntryInfo trigger = Entry(100_000, 10); // far away
         var candidates = new List<ZipEntryInfo> { a };
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.99);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.99);
 
         plan.IsEmpty.Should().BeFalse();
         plan.Entries.Count.Should().Be(1);
@@ -204,7 +203,7 @@ public sealed class SpanSelectorTests
         var candidates = new List<ZipEntryInfo> { a, b };
 
         // fill = 200 / (200+100) ≈ 66.7% — below 80%, so one entry removed. Two-entry window shrinks to 1.
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
 
         plan.Entries.Count.Should().Be(1);
         plan.SpanStart.Should().Be(plan.Entries[0].LocalHeaderOffset);
@@ -219,7 +218,7 @@ public sealed class SpanSelectorTests
         ZipEntryInfo trigger = Entry(1000, 100);
         var candidates = new List<ZipEntryInfo> { a, b };
 
-        PrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
+        ZipPrefetchPlan plan = SpanSelector.Select(candidates, trigger, maxFiles: 10, fillRatioThreshold: 0.80);
 
         plan.Entries.Count.Should().Be(2);
         plan.SpanStart.Should().Be(0);

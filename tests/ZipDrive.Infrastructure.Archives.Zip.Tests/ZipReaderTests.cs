@@ -4,8 +4,6 @@ using System.Text;
 using FluentAssertions;
 using Xunit;
 using ZipDrive.Domain.Exceptions;
-using ZipDrive.Domain.Models;
-using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Archives.Zip.Formats;
 
 namespace ZipDrive.Infrastructure.Archives.Zip.Tests;
@@ -315,7 +313,7 @@ public class ZipReaderTests : IDisposable
                 break;
             }
 
-            ZipEntryInfo entryInfo = new Domain.Models.ZipEntryInfo
+            ZipEntryInfo entryInfo = new ZipEntryInfo
             {
                 LocalHeaderOffset = cdEntry!.Value.LocalHeaderOffset,
                 CompressedSize = cdEntry.Value.CompressedSize,
@@ -361,7 +359,7 @@ public class ZipReaderTests : IDisposable
                 break;
             }
 
-            ZipEntryInfo entryInfo = new Domain.Models.ZipEntryInfo
+            ZipEntryInfo entryInfo = new ZipEntryInfo
             {
                 LocalHeaderOffset = cdEntry!.Value.LocalHeaderOffset,
                 CompressedSize = cdEntry.Value.CompressedSize,

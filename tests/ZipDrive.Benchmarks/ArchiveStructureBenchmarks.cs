@@ -19,7 +19,7 @@ public class ArchiveStructureBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        var trie = new TrieDictionary<ZipEntryInfo>();
+        var trie = new TrieDictionary<ArchiveEntryInfo>();
         var rng = new Random(42);
         string[] dirs = ["docs", "maps", "textures", "sounds", "scripts", "data", "config"];
 
@@ -29,28 +29,22 @@ public class ArchiveStructureBenchmarks
             string path = string.Join("/", Enumerable.Range(0, depth).Select(d => dirs[d % dirs.Length]));
             string fullPath = $"{path}/file{i:D6}.dat";
 
-            trie[fullPath] = new ZipEntryInfo
+            trie[fullPath] = new ArchiveEntryInfo
             {
-                LocalHeaderOffset = i * 1024L,
-                CompressedSize = rng.Next(100, 10000),
                 UncompressedSize = rng.Next(100, 50000),
-                CompressionMethod = 8,
                 IsDirectory = false,
                 LastModified = DateTime.UtcNow,
                 Attributes = FileAttributes.Normal,
-                Crc32 = (uint)rng.Next()
+                Checksum = (uint)rng.Next()
             };
         }
 
         // Add directory entries
         foreach (string dir in dirs)
         {
-            trie[dir + "/"] = new ZipEntryInfo
+            trie[dir + "/"] = new ArchiveEntryInfo
             {
-                LocalHeaderOffset = 0,
-                CompressedSize = 0,
                 UncompressedSize = 0,
-                CompressionMethod = 0,
                 IsDirectory = true,
                 Attributes = FileAttributes.Directory,
                 LastModified = DateTime.UtcNow
@@ -71,11 +65,11 @@ public class ArchiveStructureBenchmarks
     }
 
     [Benchmark]
-    public ZipEntryInfo? GetEntry_ShallowPath()
+    public ArchiveEntryInfo? GetEntry_ShallowPath()
         => _structure.GetEntry("docs/file000001.dat");
 
     [Benchmark]
-    public ZipEntryInfo? GetEntry_DeepPath()
+    public ArchiveEntryInfo? GetEntry_DeepPath()
         => _structure.GetEntry(_deepPath);
 
     [Benchmark]

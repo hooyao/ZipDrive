@@ -4,7 +4,7 @@ namespace ZipDrive.Domain.Abstractions;
 
 /// <summary>
 /// Manages archive lifecycle (add/remove/list) separately from file system operations.
-/// Implemented by ZipVirtualFileSystem alongside IVirtualFileSystem (ISP).
+/// Implemented by ArchiveVirtualFileSystem alongside IVirtualFileSystem (ISP).
 /// </summary>
 public interface IArchiveManager
 {

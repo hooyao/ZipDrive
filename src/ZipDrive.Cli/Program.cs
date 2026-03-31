@@ -14,6 +14,7 @@ using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Configuration;
+using ZipDrive.Infrastructure.Archives.Rar;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.Cli;
@@ -147,6 +148,18 @@ builder.ConfigureServices((context, services) =>
     services.AddSingleton<IArchiveDiscovery, ArchiveDiscovery>();
     services.AddSingleton<IZipReaderFactory, ZipReaderFactory>();
 
+    // Format providers (ZIP)
+    services.AddSingleton<ZipFormatMetadataStore>();
+    services.AddSingleton<IArchiveStructureBuilder, ZipStructureBuilder>();
+    services.AddSingleton<IArchiveEntryExtractor, ZipEntryExtractor>();
+    services.AddSingleton<IPrefetchStrategy, ZipPrefetchStrategy>();
+
+    // Format providers (RAR)
+    services.AddSingleton<IArchiveStructureBuilder, RarStructureBuilder>();
+    services.AddSingleton<IArchiveEntryExtractor, RarEntryExtractor>();
+
+    services.AddSingleton<IFormatRegistry, FormatRegistry>();
+
     // Cache infrastructure
     services.AddSingleton<IEvictionPolicy, LruEvictionPolicy>();
     services.AddSingleton<IArchiveStructureStore, ArchiveStructureStore>();
@@ -157,9 +170,9 @@ builder.ConfigureServices((context, services) =>
     services.AddHostedService<CacheMaintenanceService>();
 
     // VFS and Dokan
-    services.AddSingleton<ZipVirtualFileSystem>();
-    services.AddSingleton<IVirtualFileSystem>(sp => sp.GetRequiredService<ZipVirtualFileSystem>());
-    services.AddSingleton<IArchiveManager>(sp => sp.GetRequiredService<ZipVirtualFileSystem>());
+    services.AddSingleton<ArchiveVirtualFileSystem>();
+    services.AddSingleton<IVirtualFileSystem>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
+    services.AddSingleton<IArchiveManager>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
     services.AddSingleton<DokanFileSystemAdapter>();
     services.AddHostedService<DokanHostedService>();
 });

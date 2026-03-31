@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts ZIP archives (and potentially other formats like TAR, 7Z) as accessible Windows drives using DokanNet. The project has the **core caching layer and streaming ZIP reader implemented and tested**.
+**ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts archive files (ZIP, RAR, and extensible to other formats) as accessible Windows drives using DokanNet. The project has a **format-agnostic caching layer, streaming ZIP reader, and RAR support via SharpCompress**.
 
-**Current Status**: Core caching layer with chunked incremental extraction (149 tests), streaming ZIP reader (33 tests), file content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch, and sibling prefetch with coalescing batch reader implemented. Per-archive dynamic reload with FileSystemWatcher, event consolidation, and drain guard. 389 total tests passing. 12-hour soak test validated with DynamicReloadSuite (10 workload categories through DokanFileSystemAdapter), partial-read SHA-256 verification, and latency measurement.
+**Current Status**: Multi-format archive support with format-agnostic provider architecture (`IArchiveStructureBuilder`, `IArchiveEntryExtractor`, `IPrefetchStrategy`, `IFormatRegistry`). ZIP provider with chunked incremental extraction, streaming Central Directory reader, sibling prefetch with coalescing batch reader. RAR provider via SharpCompress with binary signature detection (RAR4/RAR5 magic bytes + solid flag in ~64 bytes). Solid RAR archives shown as `name.rar (NOT SUPPORTED)` with warning file, or hidden via `Mount:HideUnsupportedArchives`. File content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch. Per-archive dynamic reload with multi-format FileSystemWatcher. The caching layer (`Infrastructure.Caching`) has zero format-specific dependencies — all format operations accessed through Domain interfaces. 445+ tests passing.
 
 ## Development Workflow Requirements
 
@@ -340,6 +340,21 @@ The streaming ZIP reader provides memory-efficient parsing of ZIP archives using
 - `UnsupportedCompressionException`, `EncryptedEntryException`
 
 **Documentation**: [`STREAMING_ZIP_READER_DESIGN.md`](src/Docs/STREAMING_ZIP_READER_DESIGN.md)
+
+#### **RAR Archives (`src/ZipDrive.Infrastructure.Archives.Rar`) - RAR PROVIDER**
+
+RAR archive support via SharpCompress (MIT, pure managed C#).
+
+**Key Components**:
+- `RarSignature`: Binary detection of RAR4/RAR5 format and solid flag from file header (~64 bytes, no SharpCompress needed)
+- `RarStructureBuilder`: Implements `IArchiveStructureBuilder`. Uses `SharpCompress.Archives.Rar.RarArchive` for non-solid RAR. Solid archives produce a warning structure with `NOT_SUPPORTED_WARNING.txt`.
+- `RarEntryExtractor`: Implements `IArchiveEntryExtractor`. Opens `RarArchive` per extraction (thread safety). Returns `MemoryStream` with decompressed content.
+
+**Solid RAR Handling**: Solid archives require sequential decompression of all preceding entries — impractical for VFS random access. Three-layer UX: (1) folder renamed with `(NOT SUPPORTED)` suffix, (2) warning file with explanation + remediation commands, (3) `Mount:HideUnsupportedArchives` config to hide entirely.
+
+**Format Provider Architecture**: Both ZIP and RAR providers implement `IArchiveStructureBuilder` + `IArchiveEntryExtractor`. The `IFormatRegistry` resolves providers by `FormatId`. `ArchiveStructureCache` and `FileContentCache` delegate to providers through Domain interfaces — zero format-specific code in the caching layer.
+
+**Documentation**: [`MULTI_FORMAT_ARCHIVE_DESIGN.md`](src/Docs/MULTI_FORMAT_ARCHIVE_DESIGN.md)
 
 #### **FileSystem (`src/ZipDrive.Infrastructure.FileSystem`)**
 

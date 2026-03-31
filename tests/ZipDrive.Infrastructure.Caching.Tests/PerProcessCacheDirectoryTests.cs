@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using ZipDrive.Domain.Abstractions;
 using ZipDrive.Infrastructure.Archives.Zip;
 
 namespace ZipDrive.Infrastructure.Caching.Tests;
@@ -94,8 +95,9 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TempDirectory = _baseDir
         });
 
+        var metadataStore = new ZipFormatMetadataStore();
         var cache = new FileContentCache(
-            new ZipReaderFactory(),
+            new StubFormatRegistry(new ZipEntryExtractor(new ZipReaderFactory(), metadataStore)),
             cacheOpts,
             new LruEvictionPolicy(),
             TimeProvider.System,
@@ -116,8 +118,9 @@ public class PerProcessCacheDirectoryTests : IDisposable
             TempDirectory = _baseDir
         });
 
+        var metadataStore = new ZipFormatMetadataStore();
         var cache = new FileContentCache(
-            new ZipReaderFactory(),
+            new StubFormatRegistry(new ZipEntryExtractor(new ZipReaderFactory(), metadataStore)),
             cacheOpts,
             new LruEvictionPolicy(),
             TimeProvider.System,
@@ -151,5 +154,17 @@ public class PerProcessCacheDirectoryTests : IDisposable
         {
             strategy.DeleteCacheDirectory();
         }
+    }
+
+    private sealed class StubFormatRegistry : IFormatRegistry
+    {
+        private readonly IArchiveEntryExtractor _extractor;
+        public StubFormatRegistry(IArchiveEntryExtractor extractor) => _extractor = extractor;
+        public IArchiveStructureBuilder GetStructureBuilder(string f) => throw new NotImplementedException();
+        public IArchiveEntryExtractor GetExtractor(string f) => _extractor;
+        public IPrefetchStrategy? GetPrefetchStrategy(string f) => null;
+        public string? DetectFormat(string p) => null;
+        public IReadOnlyList<string> SupportedExtensions => [];
+        public void OnArchiveRemoved(string k) { }
     }
 }

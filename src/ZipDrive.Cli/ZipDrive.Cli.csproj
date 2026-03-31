@@ -29,6 +29,7 @@
     <ProjectReference Include="..\ZipDrive.Application\ZipDrive.Application.csproj" />
     <ProjectReference Include="..\ZipDrive.Infrastructure.FileSystem\ZipDrive.Infrastructure.FileSystem.csproj" />
     <ProjectReference Include="..\ZipDrive.Infrastructure.Caching\ZipDrive.Infrastructure.Caching.csproj" />
+    <ProjectReference Include="..\ZipDrive.Infrastructure.Archives.Rar\ZipDrive.Infrastructure.Archives.Rar.csproj" />
     <ProjectReference Include="..\ZipDrive.Infrastructure.Archives.Zip\ZipDrive.Infrastructure.Archives.Zip.csproj" />
   </ItemGroup>
 

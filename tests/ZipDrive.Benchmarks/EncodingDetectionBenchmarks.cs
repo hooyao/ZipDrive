@@ -3,6 +3,8 @@ using System.Text;
 using BenchmarkDotNet.Attributes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using ZipDrive.Application.Services;
+using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip;
@@ -85,15 +87,22 @@ public class EncodingDetectionBenchmarks
     private async Task<ArchiveStructure> BuildStructure(string zipPath)
     {
         var readerFactory = new ZipReaderFactory();
+        var metadataStore = new ZipFormatMetadataStore();
+        var zipBuilder = new ZipStructureBuilder(readerFactory, _detector, metadataStore,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var formatRegistry = new FormatRegistry(
+            [zipBuilder], Array.Empty<IArchiveEntryExtractor>(), Array.Empty<IPrefetchStrategy>());
+
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Options.Create(new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
 
         var cache = new ArchiveStructureCache(
-            structureStore, readerFactory, TimeProvider.System, cacheOpts,
-            NullLogger<ArchiveStructureCache>.Instance, _detector);
+            structureStore, formatRegistry,
+            TimeProvider.System, cacheOpts,
+            NullLogger<ArchiveStructureCache>.Instance);
 
-        return await cache.GetOrBuildAsync($"bench_{Guid.NewGuid():N}", zipPath);
+        return await cache.GetOrBuildAsync($"bench_{Guid.NewGuid():N}", zipPath, "zip");
     }
 
     #region Test Data Generation

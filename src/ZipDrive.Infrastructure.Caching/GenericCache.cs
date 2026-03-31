@@ -124,19 +124,33 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             // ═══════════════════════════════════════════════════════════════════
             if (_cache.TryGetValue(cacheKey, out CacheEntry? existingEntry) && !IsExpired(existingEntry))
             {
-                // Increment RefCount BEFORE returning handle (protects from eviction)
+                // Increment RefCount BEFORE returning handle (protects from eviction).
                 existingEntry.IncrementRefCount();
-                existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
-                existingEntry.AccessCount++;
-                Interlocked.Increment(ref _hits);
 
-                CacheTelemetry.Hits.Add(1, _tierTag);
-                borrowActivity?.SetTag("result", "hit");
+                // RACE GUARD: Between TryGetValue and IncrementRefCount, the evictor
+                // may have removed this entry and disposed/queued its storage (zeroing
+                // the underlying byte array). Check the IsStorageDisposed flag which
+                // the evictor sets atomically via TryMarkStorageDisposed before disposal.
+                if (existingEntry.IsStorageDisposed)
+                {
+                    // Storage already disposed — data is stale/zeroed.
+                    // Decrement (may trigger orphan cleanup) and fall through to miss path.
+                    existingEntry.DecrementRefCount();
+                }
+                else
+                {
+                    existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
+                    existingEntry.AccessCount++;
+                    Interlocked.Increment(ref _hits);
 
-                _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
+                    CacheTelemetry.Hits.Add(1, _tierTag);
+                    borrowActivity?.SetTag("result", "hit");
 
-                T value = _storageStrategy.Retrieve(existingEntry.Stored);
-                return new CacheHandle<T>(existingEntry, value, Return);
+                    _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
+
+                    T value = _storageStrategy.Retrieve(existingEntry.Stored);
+                    return new CacheHandle<T>(existingEntry, value, Return);
+                }
             }
 
             // ═══════════════════════════════════════════════════════════════════
@@ -184,7 +198,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
         // If entry was removed while borrowed, clean up after last handle returns.
         // Exactly one thread sees newRefCount == 0 (Interlocked.Decrement guarantee).
-        if (newRefCount == 0 && entry.IsOrphaned)
+        if (newRefCount == 0 && entry.IsOrphaned && entry.TryMarkStorageDisposed())
         {
             if (_storageStrategy.RequiresAsyncCleanup)
                 _pendingCleanup.Enqueue(entry.Stored);
@@ -436,13 +450,14 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 removed.MarkOrphaned();
                 _logger.LogDebug("Evicted entry borrowed concurrently, marked orphaned: {Key}", key);
             }
-            else if (_storageStrategy.RequiresAsyncCleanup)
+            else if (removed.TryMarkStorageDisposed())
             {
-                _pendingCleanup.Enqueue(removed.Stored);
-            }
-            else
-            {
-                _storageStrategy.Dispose(removed.Stored);
+                // Mark disposed BEFORE actual disposal — BorrowAsync checks this flag
+                // after IncrementRefCount to detect the race window.
+                if (_storageStrategy.RequiresAsyncCleanup)
+                    _pendingCleanup.Enqueue(removed.Stored);
+                else
+                    _storageStrategy.Dispose(removed.Stored);
             }
 
             _logger.LogInformation(

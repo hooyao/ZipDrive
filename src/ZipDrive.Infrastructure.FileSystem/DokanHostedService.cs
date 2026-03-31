@@ -23,6 +23,7 @@ public sealed class DokanHostedService : BackgroundService
     private readonly DokanFileSystemAdapter _adapter;
     private readonly MountSettings _mountSettings;
     private readonly IHostApplicationLifetime _lifetime;
+    private readonly IFormatRegistry _formatRegistry;
     private readonly ILogger<DokanHostedService> _logger;
 
     private Dokan? _dokan;
@@ -31,14 +32,13 @@ public sealed class DokanHostedService : BackgroundService
     private ArchiveChangeConsolidator? _consolidator;
     private CancellationToken _stoppingToken;
 
-    private static readonly string[] ZipExtensions = [".zip"];
-
     public DokanHostedService(
         IVirtualFileSystem vfs,
         IArchiveManager archiveManager,
         IArchiveDiscovery discovery,
         DokanFileSystemAdapter adapter,
         IOptions<MountSettings> mountSettings,
+        IFormatRegistry formatRegistry,
         IHostApplicationLifetime lifetime,
         ILogger<DokanHostedService> logger)
     {
@@ -47,6 +47,7 @@ public sealed class DokanHostedService : BackgroundService
         _discovery = discovery;
         _adapter = adapter;
         _mountSettings = mountSettings.Value;
+        _formatRegistry = formatRegistry;
         _lifetime = lifetime;
         _logger = logger;
     }
@@ -186,7 +187,7 @@ public sealed class DokanHostedService : BackgroundService
 
             _consolidator = new ArchiveChangeConsolidator(quietPeriod, ApplyDeltaAsync, _logger);
 
-            _watcher = new FileSystemWatcher(_mountSettings.ArchiveDirectory, "*.zip")
+            _watcher = new FileSystemWatcher(_mountSettings.ArchiveDirectory, "*")
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
                 IncludeSubdirectories = true,
@@ -229,7 +230,7 @@ public sealed class DokanHostedService : BackgroundService
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {
-        if (!IsValidZipEvent(e.FullPath)) return;
+        if (!IsSupportedArchive(e.FullPath)) return;
 
         if (!TryGetVirtualPath(e.FullPath, out string? virtualPath)) return;
         if (!IsWithinDepthLimit(virtualPath)) return;
@@ -240,7 +241,7 @@ public sealed class DokanHostedService : BackgroundService
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
-        if (!IsValidZipEvent(e.FullPath)) return;
+        if (!IsSupportedArchive(e.FullPath)) return;
 
         if (!TryGetVirtualPath(e.FullPath, out string? virtualPath)) return;
         if (!IsWithinDepthLimit(virtualPath)) return;
@@ -251,11 +252,11 @@ public sealed class DokanHostedService : BackgroundService
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        bool oldIsZip = IsZipExtension(e.OldFullPath);
-        bool newIsZip = IsZipExtension(e.FullPath);
+        bool oldIsSupported = IsSupportedArchive(e.OldFullPath);
+        bool newIsSupported = IsSupportedArchive(e.FullPath);
 
         // If it's a directory rename, trigger full reconciliation
-        if (Directory.Exists(e.FullPath) || (!oldIsZip && !newIsZip))
+        if (Directory.Exists(e.FullPath) || (!oldIsSupported && !newIsSupported))
         {
             if (Directory.Exists(e.FullPath))
             {
@@ -269,14 +270,14 @@ public sealed class DokanHostedService : BackgroundService
 
         _logger.LogDebug("FileSystemWatcher: Renamed {Old} → {New}", e.OldName, e.Name);
 
-        // Only emit events for .zip paths
-        if (oldIsZip && TryGetVirtualPath(e.OldFullPath, out string? oldVirtualPath))
+        // Only emit events for supported archive paths
+        if (oldIsSupported && TryGetVirtualPath(e.OldFullPath, out string? oldVirtualPath))
         {
             if (IsWithinDepthLimit(oldVirtualPath))
                 _consolidator?.OnDeleted(oldVirtualPath);
         }
 
-        if (newIsZip && TryGetVirtualPath(e.FullPath, out string? newVirtualPath))
+        if (newIsSupported && TryGetVirtualPath(e.FullPath, out string? newVirtualPath))
         {
             if (IsWithinDepthLimit(newVirtualPath))
                 _consolidator?.OnCreated(newVirtualPath);
@@ -293,14 +294,11 @@ public sealed class DokanHostedService : BackgroundService
 
     // === Event Filtering ===
 
-    private static bool IsZipExtension(string path)
+    private bool IsSupportedArchive(string path)
     {
-        return path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsValidZipEvent(string fullPath)
-    {
-        return IsZipExtension(fullPath);
+        string ext = Path.GetExtension(path);
+        return !string.IsNullOrEmpty(ext) &&
+               _formatRegistry.SupportedExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
     }
 
     private bool TryGetVirtualPath(string fullPath, out string virtualPath)

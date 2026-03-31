@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using ZipDrive.Domain.Abstractions;
 
 namespace ZipDrive.Infrastructure.Caching.Tests;
 
@@ -318,8 +319,12 @@ public class ChunkedExtractionIntegrationTests : IDisposable
             TempDirectory = _tempDir
         });
 
+        var metadataStore = new ZipDrive.Infrastructure.Archives.Zip.ZipFormatMetadataStore();
+        var zipExtractor = new ZipDrive.Infrastructure.Archives.Zip.ZipEntryExtractor(
+            new ZipDrive.Infrastructure.Archives.Zip.ZipReaderFactory(), metadataStore);
+        var formatRegistry = new StubFormatRegistry(zipExtractor);
         var cache = new FileContentCache(
-            new ZipDrive.Infrastructure.Archives.Zip.ZipReaderFactory(),
+            formatRegistry,
             cacheOpts,
             new LruEvictionPolicy(),
             TimeProvider.System,
@@ -384,5 +389,17 @@ public class ChunkedExtractionIntegrationTests : IDisposable
             if (disposing) _inner.Dispose();
             base.Dispose(disposing);
         }
+    }
+
+    private sealed class StubFormatRegistry : IFormatRegistry
+    {
+        private readonly IArchiveEntryExtractor _extractor;
+        public StubFormatRegistry(IArchiveEntryExtractor extractor) => _extractor = extractor;
+        public IArchiveStructureBuilder GetStructureBuilder(string f) => throw new NotImplementedException();
+        public IArchiveEntryExtractor GetExtractor(string f) => _extractor;
+        public IPrefetchStrategy? GetPrefetchStrategy(string f) => null;
+        public string? DetectFormat(string p) => null;
+        public IReadOnlyList<string> SupportedExtensions => [];
+        public void OnArchiveRemoved(string k) { }
     }
 }

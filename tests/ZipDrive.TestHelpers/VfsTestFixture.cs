@@ -38,32 +38,38 @@ public class VfsTestFixture : IAsyncLifetime
         var archiveTrie = new ArchiveTrie(charComparer);
         ArchiveTrie = archiveTrie;
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
 
         var readerFactory = new ZipReaderFactory();
+        var metadataStore = new ZipFormatMetadataStore();
+        var encodingDetector = new FilenameEncodingDetector(
+            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
+            NullLogger<FilenameEncodingDetector>.Instance);
+        var zipBuilder = new ZipStructureBuilder(readerFactory, encodingDetector, metadataStore,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var zipExtractor = new ZipEntryExtractor(readerFactory, metadataStore);
+        var formatRegistry = new FormatRegistry([zipBuilder], [zipExtractor], Array.Empty<IPrefetchStrategy>());
+        var discovery = new ArchiveDiscovery(formatRegistry, NullLogger<ArchiveDiscovery>.Instance);
 
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Microsoft.Extensions.Options.Options.Create(
             new CacheOptions { MemoryCacheSizeMb = 256, DiskCacheSizeMb = 256 });
-        var encodingDetector = new FilenameEncodingDetector(
-            Microsoft.Extensions.Options.Options.Create(new MountSettings()),
-            NullLogger<FilenameEncodingDetector>.Instance);
-        var structureCache = new ArchiveStructureCache(structureStore, readerFactory,
-            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
-
+        var structureCache = new ArchiveStructureCache(structureStore, formatRegistry,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
         var fileContentCache = new FileContentCache(
-            readerFactory, cacheOpts,
+            formatRegistry,
+            cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
 
-        var vfs = new ZipVirtualFileSystem(
+        var vfs = new ArchiveVirtualFileSystem(
             archiveTrie, structureCache, fileContentCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            formatRegistry,
             Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
-            NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = RootPath, MaxDiscoveryDepth = 6 });
         Vfs = vfs;
@@ -71,7 +77,7 @@ public class VfsTestFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (Vfs is ZipVirtualFileSystem zvfs && zvfs.IsMounted)
+        if (Vfs is ArchiveVirtualFileSystem zvfs && zvfs.IsMounted)
             await zvfs.UnmountAsync();
 
         try

@@ -1,4 +1,4 @@
-namespace ZipDrive.Domain.Models;
+namespace ZipDrive.Infrastructure.Archives.Zip;
 
 /// <summary>
 /// Minimal metadata for a ZIP entry, optimized for extraction.

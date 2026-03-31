@@ -2,9 +2,8 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
+using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
-using ZipDrive.Infrastructure.Archives.Zip;
-using ZipDrive.Infrastructure.Archives.Zip.Formats;
 
 namespace ZipDrive.Infrastructure.Caching.Tests;
 
@@ -29,7 +28,7 @@ public sealed class FileContentCacheTests : IDisposable
         catch { /* best effort */ }
     }
 
-    private FileContentCache CreateCache(int cutoffMb = 1, int memoryMb = 10, int diskMb = 10, StubZipReaderFactory? factory = null)
+    private FileContentCache CreateCache(int cutoffMb = 1, int memoryMb = 10, int diskMb = 10, StubExtractor? extractor = null)
     {
         var opts = Options.Create(new CacheOptions
         {
@@ -40,19 +39,16 @@ public sealed class FileContentCacheTests : IDisposable
         });
 
         return new FileContentCache(
-            factory ?? new StubZipReaderFactory(),
+            new StubFormatRegistry(extractor ?? new StubExtractor()),
             opts,
             new LruEvictionPolicy(),
             _fakeTime,
             NullLoggerFactory.Instance);
     }
 
-    private static ZipEntryInfo MakeEntry(long uncompressedSize) => new()
+    private static ArchiveEntryInfo MakeEntry(long uncompressedSize) => new()
     {
-        LocalHeaderOffset = 0,
-        CompressedSize = uncompressedSize,
         UncompressedSize = uncompressedSize,
-        CompressionMethod = 0,
         IsDirectory = false,
         LastModified = DateTime.UtcNow,
         Attributes = FileAttributes.Normal
@@ -66,11 +62,11 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_SmallFile_RoutesToMemoryTier()
     {
         byte[] data = CreateTestData(512);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(cutoffMb: 1, factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(cutoffMb: 1, extractor: stubFactory);
 
         byte[] buffer = new byte[1024];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(512), "key1", buffer, 0);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(512), "file", "key1", buffer, 0);
 
         bytesRead.Should().Be(512);
         cache.MemoryTier.EntryCount.Should().Be(1);
@@ -82,11 +78,11 @@ public sealed class FileContentCacheTests : IDisposable
     {
         int size = 2 * 1024 * 1024; // 2MB, cutoff is 1MB
         byte[] data = CreateTestData(size);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(cutoffMb: 1, factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(cutoffMb: 1, extractor: stubFactory);
 
         byte[] buffer = new byte[1024];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(size), "key1", buffer, 0);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(size), "file", "key1", buffer, 0);
 
         bytesRead.Should().Be(1024);
         cache.DiskTier.EntryCount.Should().Be(1);
@@ -101,17 +97,17 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_CacheHit_ReturnsCachedContentWithoutReExtraction()
     {
         byte[] data = CreateTestData(500);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer1 = new byte[500];
         byte[] buffer2 = new byte[500];
 
-        await cache.ReadAsync("test.zip", MakeEntry(500), "key1", buffer1, 0);
-        await cache.ReadAsync("test.zip", MakeEntry(500), "key1", buffer2, 0);
+        await cache.ReadAsync("test.zip", "zip", MakeEntry(500), "file", "key1", buffer1, 0);
+        await cache.ReadAsync("test.zip", "zip", MakeEntry(500), "file", "key1", buffer2, 0);
 
         buffer1.Should().Equal(buffer2);
-        stubFactory.CreateCount.Should().Be(1, "factory should only be called once (cache hit on second call)");
+        stubFactory.ExtractCount.Should().Be(1, "factory should only be called once (cache hit on second call)");
     }
 
     [Fact]
@@ -121,11 +117,11 @@ public sealed class FileContentCacheTests : IDisposable
         for (int i = 0; i < data.Length; i++)
             data[i] = (byte)(i % 256);
 
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer = new byte[2000];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(5000), "key1", buffer, 1000);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(5000), "file", "key1", buffer, 1000);
 
         bytesRead.Should().Be(2000);
         for (int i = 0; i < 2000; i++)
@@ -136,11 +132,11 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_PastEof_ReturnsRemainingBytes()
     {
         byte[] data = CreateTestData(5000);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer = new byte[2000];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(5000), "key1", buffer, 4500);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(5000), "file", "key1", buffer, 4500);
 
         bytesRead.Should().Be(500, "only 500 bytes remain from offset 4500 in a 5000-byte file");
     }
@@ -149,11 +145,11 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_AtExactEof_ReturnsZero()
     {
         byte[] data = CreateTestData(5000);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer = new byte[2000];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(5000), "key1", buffer, 5000);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(5000), "file", "key1", buffer, 5000);
 
         bytesRead.Should().Be(0);
     }
@@ -162,11 +158,11 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_BeyondEof_ReturnsZero()
     {
         byte[] data = CreateTestData(100);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer = new byte[100];
-        int bytesRead = await cache.ReadAsync("test.zip", MakeEntry(100), "key1", buffer, 999);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", MakeEntry(100), "file", "key1", buffer, 999);
 
         bytesRead.Should().Be(0);
     }
@@ -179,14 +175,13 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task ReadAsync_FactoryCreatesAndDisposesZipReader()
     {
         byte[] data = CreateTestData(100);
-        var stubFactory = new StubZipReaderFactory(data);
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(data);
+        var cache = CreateCache(extractor: stubFactory);
 
         byte[] buffer = new byte[100];
-        await cache.ReadAsync("test.zip", MakeEntry(100), "key1", buffer, 0);
+        await cache.ReadAsync("test.zip", "zip", MakeEntry(100), "file", "key1", buffer, 0);
 
-        stubFactory.CreateCount.Should().Be(1, "should create exactly one reader");
-        stubFactory.LastReader!.Disposed.Should().BeTrue("reader should be disposed after materialization");
+        stubFactory.ExtractCount.Should().Be(1, "should extract exactly once");
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -198,21 +193,21 @@ public sealed class FileContentCacheTests : IDisposable
     {
         int callCount = 0;
         byte[] data = CreateTestData(1000);
-        var stubFactory = new StubZipReaderFactory(data, onCreateReader: () =>
+        var stubFactory = new StubExtractor(data, onExtract: () =>
         {
             Interlocked.Increment(ref callCount);
             // Small delay to increase chance of concurrent access
             Thread.Sleep(50);
         });
 
-        var cache = CreateCache(factory: stubFactory);
+        var cache = CreateCache(extractor: stubFactory);
         var entry = MakeEntry(1000);
 
         Task<int>[] tasks = Enumerable.Range(0, 10)
             .Select(_ => Task.Run(async () =>
             {
                 byte[] buffer = new byte[1000];
-                return await cache.ReadAsync("test.zip", entry, "key1", buffer, 0);
+                return await cache.ReadAsync("test.zip", "zip", entry, "file", "key1", buffer, 0);
             }))
             .ToArray();
 
@@ -234,17 +229,17 @@ public sealed class FileContentCacheTests : IDisposable
         byte[] largeData = CreateTestData(largeSize);
 
         byte[]? currentData = null;
-        var stubFactory = new StubZipReaderFactory(ct => currentData!);
-        var cache = CreateCache(cutoffMb: 1, factory: stubFactory);
+        var stubFactory = new StubExtractor(ct => currentData!);
+        var cache = CreateCache(cutoffMb: 1, extractor: stubFactory);
 
         // Add small file (memory tier)
         currentData = smallData;
         byte[] buf = new byte[1024];
-        await cache.ReadAsync("test.zip", MakeEntry(512), "small-key", buf, 0);
+        await cache.ReadAsync("test.zip", "zip", MakeEntry(512), "file", "small-key", buf, 0);
 
         // Add large file (disk tier)
         currentData = largeData;
-        await cache.ReadAsync("test.zip", MakeEntry(largeSize), "large-key", buf, 0);
+        await cache.ReadAsync("test.zip", "zip", MakeEntry(largeSize), "file", "large-key", buf, 0);
 
         cache.EntryCount.Should().Be(2);
         cache.CurrentSizeBytes.Should().Be(512 + largeSize);
@@ -302,18 +297,18 @@ public sealed class FileContentCacheTests : IDisposable
     public async Task WarmAsync_AfterWarm_ReadAsyncReturnsCachedContent()
     {
         byte[] data = CreateTestData(500);
-        var stubFactory = new StubZipReaderFactory(); // should never be called
-        var cache = CreateCache(factory: stubFactory);
+        var stubFactory = new StubExtractor(); // should never be called
+        var cache = CreateCache(extractor: stubFactory);
         var entry = MakeEntry(500);
 
         await cache.WarmAsync(entry, "prefetch-key", new MemoryStream(data, writable: false));
 
         byte[] buffer = new byte[500];
-        int bytesRead = await cache.ReadAsync("test.zip", entry, "prefetch-key", buffer, 0);
+        int bytesRead = await cache.ReadAsync("test.zip", "zip", entry, "file", "prefetch-key", buffer, 0);
 
         bytesRead.Should().Be(500);
         buffer.Should().Equal(data);
-        stubFactory.CreateCount.Should().Be(0, "ReadAsync should serve from warm cache, not call factory");
+        stubFactory.ExtractCount.Should().Be(0, "ReadAsync should serve from warm cache, not call factory");
     }
 
     [Fact]
@@ -343,77 +338,52 @@ public sealed class FileContentCacheTests : IDisposable
     // Test Stubs
     // ═══════════════════════════════════════════════════════════════════
 
-    private sealed class StubZipReaderFactory : IZipReaderFactory
+    internal sealed class StubExtractor : IArchiveEntryExtractor
     {
         private readonly Func<CancellationToken, byte[]>? _dataProvider;
         private readonly byte[]? _fixedData;
-        private readonly Action? _onCreateReader;
-        private int _createCount;
+        private readonly Action? _onExtract;
+        private int _extractCount;
 
-        public StubZipReaderFactory() : this(Array.Empty<byte>()) { }
+        public string FormatId => "zip";
+        public int ExtractCount => _extractCount;
 
-        public StubZipReaderFactory(byte[] data, Action? onCreateReader = null)
+        public StubExtractor() : this(Array.Empty<byte>()) { }
+
+        public StubExtractor(byte[] data, Action? onExtract = null)
         {
             _fixedData = data;
-            _onCreateReader = onCreateReader;
+            _onExtract = onExtract;
         }
 
-        public StubZipReaderFactory(Func<CancellationToken, byte[]> dataProvider)
+        public StubExtractor(Func<CancellationToken, byte[]> dataProvider)
         {
             _dataProvider = dataProvider;
         }
 
-        public int CreateCount => _createCount;
-        public StubZipReader? LastReader { get; private set; }
-
-        public IZipReader Create(string filePath)
+        public Task<ExtractionResult> ExtractAsync(
+            string archivePath, string internalPath, CancellationToken cancellationToken = default)
         {
-            Interlocked.Increment(ref _createCount);
-            _onCreateReader?.Invoke();
-            byte[] data = _fixedData ?? _dataProvider!(CancellationToken.None);
-            var reader = new StubZipReader(data);
-            LastReader = reader;
-            return reader;
+            Interlocked.Increment(ref _extractCount);
+            _onExtract?.Invoke();
+            byte[] data = _fixedData ?? _dataProvider!(cancellationToken);
+            return Task.FromResult(new ExtractionResult
+            {
+                Stream = new MemoryStream(data, writable: false),
+                SizeBytes = data.Length
+            });
         }
     }
 
-    internal sealed class StubZipReader : IZipReader
+    private sealed class StubFormatRegistry : IFormatRegistry
     {
-        private readonly byte[] _data;
-        public bool Disposed { get; private set; }
-
-        public StubZipReader(byte[] data)
-        {
-            _data = data;
-        }
-
-        public Task<Stream> OpenEntryStreamAsync(ZipEntryInfo entry, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<Stream>(new MemoryStream(_data, writable: false));
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-
-        // ═══════════════════════════════════════════════════════════════
-        // Unused IZipReader members — stubbed for compilation
-        // ═══════════════════════════════════════════════════════════════
-
-        public long StreamLength => _data.Length;
-        public string? FilePath => "stub.zip";
-
-        public Task<ZipEocd> ReadEocdAsync(CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
-
-        public IAsyncEnumerable<ZipCentralDirectoryEntry> StreamCentralDirectoryAsync(
-            ZipEocd eocd, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
-
-        public Task<ZipLocalHeader> ReadLocalHeaderAsync(
-            long localHeaderOffset, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
+        private readonly IArchiveEntryExtractor _extractor;
+        public StubFormatRegistry(IArchiveEntryExtractor extractor) => _extractor = extractor;
+        public IArchiveStructureBuilder GetStructureBuilder(string f) => throw new NotImplementedException();
+        public IArchiveEntryExtractor GetExtractor(string f) => _extractor;
+        public IPrefetchStrategy? GetPrefetchStrategy(string f) => null;
+        public string? DetectFormat(string p) => null;
+        public IReadOnlyList<string> SupportedExtensions => [];
+        public void OnArchiveRemoved(string k) { }
     }
 }
