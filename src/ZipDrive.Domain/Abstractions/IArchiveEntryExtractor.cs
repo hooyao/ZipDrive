@@ -18,13 +18,15 @@ public interface IArchiveEntryExtractor
     /// <summary>
     /// Extracts and decompresses a single entry from the archive.
     /// </summary>
-    /// <param name="archivePath">Absolute path to the archive file.</param>
+    /// <param name="archiveKey">Virtual path key for metadata lookup (e.g., "games/doom.zip").</param>
+    /// <param name="archivePath">Absolute path to the archive file for I/O.</param>
     /// <param name="internalPath">Entry path within the archive (forward slashes, no leading /).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
     /// An ExtractionResult wrapping the decompressed stream and resource cleanup callback.
     /// </returns>
     Task<ExtractionResult> ExtractAsync(
+        string archiveKey,
         string archivePath,
         string internalPath,
         CancellationToken cancellationToken = default);

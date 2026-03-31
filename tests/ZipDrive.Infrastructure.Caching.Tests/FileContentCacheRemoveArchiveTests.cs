@@ -156,7 +156,7 @@ public class FileContentCacheRemoveArchiveTests : IDisposable
     private sealed class StubExtractor : IArchiveEntryExtractor
     {
         public string FormatId => "zip";
-        public Task<ExtractionResult> ExtractAsync(string archivePath, string internalPath, CancellationToken cancellationToken = default) =>
+        public Task<ExtractionResult> ExtractAsync(string archiveKey, string archivePath, string internalPath, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("StubExtractor should not be called in warm-only tests");
     }
 

@@ -16,7 +16,7 @@ public sealed class RarEntryExtractor : IArchiveEntryExtractor
     public string FormatId => "rar";
 
     public async Task<ExtractionResult> ExtractAsync(
-        string archivePath, string internalPath, CancellationToken cancellationToken = default)
+        string archiveKey, string archivePath, string internalPath, CancellationToken cancellationToken = default)
     {
         // Synthetic warning file for solid archives -- serve static content, no archive I/O
         if (internalPath == RarStructureBuilder.UnsupportedWarningFileName)
@@ -36,6 +36,11 @@ public sealed class RarEntryExtractor : IArchiveEntryExtractor
                 .FirstOrDefault(e => !e.IsDirectory &&
                     RarStructureBuilder.NormalizePath(e.Key ?? "") == normalizedTarget)
                 ?? throw new FileNotFoundException($"Entry not found in RAR: {internalPath}");
+
+            if (entry.Size > int.MaxValue)
+                throw new NotSupportedException(
+                    $"RAR entry too large for memory extraction: {entry.Size} bytes. " +
+                    "Files larger than 2GB are not supported in the RAR provider.");
 
             var ms = new MemoryStream((int)entry.Size);
             using (var entryStream = entry.OpenEntryStream())

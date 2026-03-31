@@ -103,11 +103,9 @@ public sealed class ZipStructureBuilder : IArchiveStructureBuilder, IArchiveMeta
             DecodeAndInsertNonUtf8Entries(trie, directoriesSeen, nonUtf8Buffer, metadataEntries);
 
         // Side effect: populate format metadata store for extractor and prefetch.
-        // Populate both archiveKey (virtual path) and absolutePath (physical path)
-        // because the extractor looks up by physical path while prefetch uses archiveKey.
+        // Keyed by archiveKey (virtual path) only — extractor receives archiveKey via
+        // the updated IArchiveEntryExtractor.ExtractAsync signature.
         _metadataStore.Populate(archiveKey, metadataEntries);
-        if (!string.Equals(archiveKey, absolutePath, StringComparison.OrdinalIgnoreCase))
-            _metadataStore.Populate(absolutePath, metadataEntries);
 
         stopwatch.Stop();
         long estimatedMemory = BaseStructureOverhead + (trie.Count * BytesPerEntry);
@@ -194,6 +192,11 @@ public sealed class ZipStructureBuilder : IArchiveStructureBuilder, IArchiveMeta
         }
     }
 
+    /// <summary>
+    /// Ensures parent directories exist during incremental trie insertion.
+    /// Uses TimeProvider for deterministic testing. Intentionally NOT using
+    /// DirectorySynthesizer (which is a post-pass approach for completed tries).
+    /// </summary>
     private static void EnsureParentDirectories(
         TrieDictionary<ArchiveEntryInfo> trie,
         string filePath,

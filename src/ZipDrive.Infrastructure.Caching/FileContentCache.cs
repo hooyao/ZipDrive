@@ -93,10 +93,16 @@ public sealed class FileContentCache : IFileContentCache
             : _diskCache;
 
         // Build factory delegate — delegates extraction to the format-specific extractor.
+        // Extract archiveKey from cacheKey (format: "archiveKey:internalPath").
+        // Falls back to archivePath if cacheKey doesn't follow the expected format.
+        string suffix = ":" + internalPath;
+        string archiveKey = cacheKey.EndsWith(suffix, StringComparison.Ordinal)
+            ? cacheKey[..^suffix.Length]
+            : archivePath;
         IArchiveEntryExtractor extractor = _formatRegistry.GetExtractor(formatId);
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
         {
-            ExtractionResult result = await extractor.ExtractAsync(archivePath, internalPath, ct)
+            ExtractionResult result = await extractor.ExtractAsync(archiveKey, archivePath, internalPath, ct)
                 .ConfigureAwait(false);
 
             return new CacheFactoryResult<Stream>

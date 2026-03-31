@@ -3,8 +3,8 @@ using System.Buffers.Binary;
 namespace ZipDrive.Infrastructure.Archives.Rar;
 
 /// <summary>
-/// Binary detection for RAR archive versions and solid compression flag.
-/// Reads only the header bytes (no SharpCompress dependency) for fast probing.
+/// Binary detection for RAR archive versions (via magic bytes, no library dependency)
+/// and solid compression flag (via SharpCompress for reliable parsing).
 /// </summary>
 internal static class RarSignature
 {

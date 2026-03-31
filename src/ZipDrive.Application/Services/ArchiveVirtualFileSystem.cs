@@ -22,7 +22,6 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     private readonly IPathResolver _pathResolver;
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly IFormatRegistry _formatRegistry;
-    private readonly IPrefetchStrategy? _prefetchStrategy;
     private readonly MountSettings _mountSettings;
     private readonly PrefetchOptions _prefetchOptions;
     private readonly ILogger<ArchiveVirtualFileSystem> _logger;
@@ -51,8 +50,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
         IFormatRegistry formatRegistry,
         IOptions<MountSettings> mountSettings,
         IOptions<PrefetchOptions> prefetchOptions,
-        ILogger<ArchiveVirtualFileSystem> logger,
-        IPrefetchStrategy? prefetchStrategy = null)
+        ILogger<ArchiveVirtualFileSystem> logger)
     {
         _archiveTrie = archiveTrie;
         _structureCache = structureCache;
@@ -61,7 +59,6 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
         _pathResolver = pathResolver;
         _appLifetime = appLifetime;
         _formatRegistry = formatRegistry;
-        _prefetchStrategy = prefetchStrategy;
         _mountSettings = mountSettings.Value;
         _prefetchOptions = prefetchOptions.Value;
         _logger = logger;
@@ -305,7 +302,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
             (result.Status == ArchiveTrieStatus.ArchiveRoot || result.Status == ArchiveTrieStatus.InsideArchive))
         {
             string internalDir = result.Status == ArchiveTrieStatus.ArchiveRoot ? "" : result.InternalPath;
-            _ = PrefetchDirectoryAsync(result.Archive!, internalDir, triggerEntry: null);
+            _ = PrefetchDirectoryAsync(result.Archive!, internalDir, triggerEntry: null, triggerInternalPath: null);
         }
 
         return listing;
@@ -367,7 +364,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
             if (!wasCached && _prefetchOptions.Enabled && _prefetchOptions.OnRead)
             {
                 string dirPath = GetDirectoryPath(internalPath);
-                _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value);
+                _ = PrefetchDirectoryAsync(archive, dirPath, triggerEntry: entry.Value, triggerInternalPath: internalPath);
             }
 
             return bytesRead;
@@ -452,7 +449,8 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     private async Task PrefetchDirectoryAsync(
         ArchiveDescriptor archive,
         string dirInternalPath,
-        ArchiveEntryInfo? triggerEntry)
+        ArchiveEntryInfo? triggerEntry,
+        string? triggerInternalPath)
     {
         // Participate in per-archive drain guard
         if (!ArchiveGuard.TryEnter(_archiveNodes, archive.VirtualPath, out var archiveGuard))
@@ -481,13 +479,14 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
 
         try
         {
-            if (_prefetchStrategy != null)
+            IPrefetchStrategy? prefetchStrategy = _formatRegistry.GetPrefetchStrategy(archive.FormatId);
+            if (prefetchStrategy != null)
             {
                 ArchiveStructure structure = await _structureCache.GetOrBuildAsync(
                     archive.VirtualPath, archive.PhysicalPath, archive.FormatId, ct).ConfigureAwait(false);
-                await _prefetchStrategy.PrefetchAsync(
+                await prefetchStrategy.PrefetchAsync(
                     archive.PhysicalPath, structure, dirInternalPath, triggerEntry,
-                    _fileContentCache, _prefetchOptions, ct).ConfigureAwait(false);
+                    triggerInternalPath, _fileContentCache, _prefetchOptions, ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)

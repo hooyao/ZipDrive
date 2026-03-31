@@ -20,7 +20,7 @@ public sealed class RarEntryExtractorTests
     public async Task ExtractAsync_WarningFile_ReturnsStaticContent()
     {
         var result = await _sut.ExtractAsync(
-            "nonexistent.rar",
+            "nonexistent.rar", "nonexistent.rar",
             RarStructureBuilder.UnsupportedWarningFileName);
 
         result.Should().NotBeNull();
@@ -35,7 +35,7 @@ public sealed class RarEntryExtractorTests
     public async Task ExtractAsync_WarningFile_StreamIsReadable()
     {
         var result = await _sut.ExtractAsync(
-            "nonexistent.rar",
+            "nonexistent.rar", "nonexistent.rar",
             RarStructureBuilder.UnsupportedWarningFileName);
 
         result.Stream.CanRead.Should().BeTrue();
@@ -47,7 +47,7 @@ public sealed class RarEntryExtractorTests
     public async Task ExtractAsync_WarningFile_NoDisposalCallback()
     {
         var result = await _sut.ExtractAsync(
-            "nonexistent.rar",
+            "nonexistent.rar", "nonexistent.rar",
             RarStructureBuilder.UnsupportedWarningFileName);
 
         // Warning file uses a read-only MemoryStream over static content,
@@ -61,7 +61,7 @@ public sealed class RarEntryExtractorTests
         // Even with a completely invalid path, the warning file should work
         // because it serves static content without opening any archive
         var result = await _sut.ExtractAsync(
-            @"Z:\nonexistent\path\to\nowhere.rar",
+            "nowhere.rar", @"Z:\nonexistent\path\to\nowhere.rar",
             RarStructureBuilder.UnsupportedWarningFileName);
 
         result.SizeBytes.Should().BeGreaterThan(0);
@@ -76,7 +76,7 @@ public sealed class RarEntryExtractorTests
         // SharpCompress throws DirectoryNotFoundException when the parent dir doesn't exist,
         // or FileNotFoundException when only the file is missing. Both inherit IOException.
         var act = () => _sut.ExtractAsync(
-            @"C:\nonexistent\archive.rar",
+            "archive.rar", @"C:\nonexistent\archive.rar",
             "some/file.txt");
 
         await act.Should().ThrowAsync<IOException>();
@@ -90,7 +90,7 @@ public sealed class RarEntryExtractorTests
             System.Text.Encoding.UTF8.GetBytes("This is not a RAR file"));
         try
         {
-            var act = () => _sut.ExtractAsync(path, "some/file.txt");
+            var act = () => _sut.ExtractAsync("test.rar", path, "some/file.txt");
             await act.Should().ThrowAsync<Exception>();
         }
         finally

@@ -24,7 +24,7 @@ public class FormatRegistryTests
     private class FakeExtractor : IArchiveEntryExtractor
     {
         public string FormatId { get; init; } = "fake";
-        public Task<ExtractionResult> ExtractAsync(string archivePath, string internalPath, CancellationToken ct = default)
+        public Task<ExtractionResult> ExtractAsync(string archiveKey, string archivePath, string internalPath, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 
@@ -32,7 +32,7 @@ public class FormatRegistryTests
     {
         public string FormatId { get; init; } = "fake";
         public Task PrefetchAsync(string archivePath, ArchiveStructure structure, string dirInternalPath,
-            ArchiveEntryInfo? triggerEntry, IFileContentCache contentCache, PrefetchOptions options, CancellationToken ct = default)
+            ArchiveEntryInfo? triggerEntry, string? triggerInternalPath, IFileContentCache contentCache, PrefetchOptions options, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 

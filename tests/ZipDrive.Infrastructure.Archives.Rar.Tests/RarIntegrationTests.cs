@@ -188,7 +188,7 @@ public sealed class RarIntegrationTests
             .FirstOrDefault(kv => !kv.Value.IsDirectory && kv.Key.EndsWith(".txt"));
         fileEntry.Key.Should().NotBeNullOrEmpty();
 
-        ExtractionResult result = await _extractor.ExtractAsync(NonSolidRar5, fileEntry.Key);
+        ExtractionResult result = await _extractor.ExtractAsync("test.rar", NonSolidRar5, fileEntry.Key);
 
         result.SizeBytes.Should().BeGreaterThan(0);
         result.Stream.Length.Should().Be(result.SizeBytes);
@@ -213,7 +213,7 @@ public sealed class RarIntegrationTests
             .FirstOrDefault(kv => !kv.Value.IsDirectory && kv.Key.EndsWith(".txt"));
         fileEntry.Key.Should().NotBeNullOrEmpty();
 
-        ExtractionResult result = await _extractor.ExtractAsync(NonSolidRar4, fileEntry.Key);
+        ExtractionResult result = await _extractor.ExtractAsync("test4.rar", NonSolidRar4, fileEntry.Key);
 
         result.SizeBytes.Should().BeGreaterThan(0);
         using var reader = new StreamReader(result.Stream);
@@ -231,7 +231,7 @@ public sealed class RarIntegrationTests
     public async Task ExtractAsync_WarningFile_ReturnsStaticContent()
     {
         ExtractionResult result = await _extractor.ExtractAsync(
-            SolidRar5, RarStructureBuilder.UnsupportedWarningFileName);
+            "solid.rar", SolidRar5, RarStructureBuilder.UnsupportedWarningFileName);
 
         result.Stream.Should().NotBeNull();
         result.SizeBytes.Should().Be(RarStructureBuilder.SolidWarningContent.Length);
@@ -244,7 +244,7 @@ public sealed class RarIntegrationTests
     [Fact]
     public async Task ExtractAsync_NonExistentEntry_Throws()
     {
-        Func<Task> act = () => _extractor.ExtractAsync(NonSolidRar5, "nonexistent.txt");
+        Func<Task> act = () => _extractor.ExtractAsync("test.rar", NonSolidRar5, "nonexistent.txt");
         await act.Should().ThrowAsync<FileNotFoundException>();
     }
 
@@ -269,7 +269,7 @@ public sealed class RarIntegrationTests
 
         // Layer 3: Warning file content includes config hint
         ExtractionResult result = await _extractor.ExtractAsync(
-            SolidRar5, RarStructureBuilder.UnsupportedWarningFileName);
+            suffixedKey, SolidRar5, RarStructureBuilder.UnsupportedWarningFileName);
         using var reader = new StreamReader(result.Stream);
         string text = await reader.ReadToEndAsync();
         text.Should().Contain("HideUnsupportedArchives");

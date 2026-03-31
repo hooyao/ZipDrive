@@ -53,6 +53,7 @@ public sealed class ZipPrefetchStrategy : IPrefetchStrategy
         ArchiveStructure structure,
         string dirInternalPath,
         ArchiveEntryInfo? triggerEntry,
+        string? triggerInternalPath,
         IFileContentCache contentCache,
         PrefetchOptions options,
         CancellationToken cancellationToken = default)
@@ -85,9 +86,13 @@ public sealed class ZipPrefetchStrategy : IPrefetchStrategy
 
         // Determine trigger's ZIP metadata for centering
         ZipEntryInfo? triggerZip = null;
-        if (triggerEntry.HasValue)
+        if (triggerInternalPath != null && zipEntries.TryGetValue(triggerInternalPath, out var tz))
         {
-            // Find the trigger in our items by matching UncompressedSize + LastModified
+            triggerZip = tz;
+        }
+        else if (triggerEntry.HasValue)
+        {
+            // Fallback: match by UncompressedSize + LastModified (legacy path)
             triggerZip = allItems
                 .Where(x => x.ZipEntry.UncompressedSize == triggerEntry.Value.UncompressedSize
                          && x.ZipEntry.LastModified == triggerEntry.Value.LastModified)

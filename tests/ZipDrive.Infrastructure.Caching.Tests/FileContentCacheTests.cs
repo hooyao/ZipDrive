@@ -362,7 +362,7 @@ public sealed class FileContentCacheTests : IDisposable
         }
 
         public Task<ExtractionResult> ExtractAsync(
-            string archivePath, string internalPath, CancellationToken cancellationToken = default)
+            string archiveKey, string archivePath, string internalPath, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _extractCount);
             _onExtract?.Invoke();

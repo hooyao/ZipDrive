@@ -23,11 +23,12 @@ public sealed class ZipEntryExtractor : IArchiveEntryExtractor
     }
 
     public async Task<ExtractionResult> ExtractAsync(
+        string archiveKey,
         string archivePath,
         string internalPath,
         CancellationToken cancellationToken = default)
     {
-        ZipEntryInfo zipEntry = _metadataStore.Get(archivePath, internalPath);
+        ZipEntryInfo zipEntry = _metadataStore.Get(archiveKey, internalPath);
         IZipReader reader = _readerFactory.Create(archivePath);
         try
         {

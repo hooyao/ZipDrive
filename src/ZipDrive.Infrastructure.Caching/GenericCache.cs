@@ -740,14 +740,14 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         // For strategies NOT requiring async cleanup (memory tier): dispose immediately
         // since Dispose is a no-op (byte[] released to GC). Deferring memory-tier
         // entries causes unbounded queue growth and memory pressure under rapid churn.
-        if (removed.RefCount == 0)
+        if (removed.RefCount == 0 && removed.TryMarkStorageDisposed())
         {
             if (_storageStrategy.RequiresAsyncCleanup)
                 _pendingCleanup.Enqueue(removed.Stored);
             else
                 _storageStrategy.Dispose(removed.Stored);
         }
-        else
+        else if (removed.RefCount > 0)
         {
             // Active borrows exist — mark as orphaned.
             // Cleanup happens in Return() when last handle is disposed.

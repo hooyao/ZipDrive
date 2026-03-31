@@ -51,7 +51,7 @@ public class ZipEntryExtractorTests
         var extractor = new ZipEntryExtractor(readerFactory, metadataStore);
         var (path, zipEntry) = entries[0];
 
-        ExtractionResult result = await extractor.ExtractAsync(TestFixturePath, path);
+        ExtractionResult result = await extractor.ExtractAsync(TestFixturePath, TestFixturePath, path);
 
         result.Stream.Should().NotBeNull();
         result.SizeBytes.Should().Be(zipEntry.UncompressedSize);
@@ -75,7 +75,7 @@ public class ZipEntryExtractorTests
 
         var extractor = new ZipEntryExtractor(new ZipReaderFactory(), metadataStore);
 
-        Func<Task> act = () => extractor.ExtractAsync("archive.zip", "nonexistent.txt");
+        Func<Task> act = () => extractor.ExtractAsync("archive.zip", "archive.zip", "nonexistent.txt");
         await act.Should().ThrowAsync<FileNotFoundException>();
     }
 }

@@ -94,8 +94,7 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
             formatRegistry,
             Options.Create(new MountSettings()),
             prefetchOpts,
-            NullLogger<ArchiveVirtualFileSystem>.Instance,
-            prefetchStrategy);
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 3 });
     }

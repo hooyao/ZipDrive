@@ -65,11 +65,13 @@ in appsettings.jsonc and restart ZipDrive.
     public Task<ArchiveProbeResult> ProbeAsync(
         string absolutePath, CancellationToken cancellationToken = default)
     {
-        bool isSolid = RarSignature.IsSolid(absolutePath);
-        ArchiveProbeResult result = isSolid
-            ? new ArchiveProbeResult(false, "Solid RAR archives are not supported")
-            : new ArchiveProbeResult(true);
-        return Task.FromResult(result);
+        return Task.Run(() =>
+        {
+            bool isSolid = RarSignature.IsSolid(absolutePath);
+            return isSolid
+                ? new ArchiveProbeResult(false, "Solid RAR archives are not supported")
+                : new ArchiveProbeResult(true);
+        }, cancellationToken);
     }
 
     /// <summary>

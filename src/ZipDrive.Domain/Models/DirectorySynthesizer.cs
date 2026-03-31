@@ -14,8 +14,11 @@ public static class DirectorySynthesizer
     /// directories exist as entries. Missing directories are inserted as
     /// <see cref="ArchiveEntryInfo"/> with <c>IsDirectory = true</c>.
     /// </summary>
-    public static void SynthesizeParentDirectories(TrieDictionary<ArchiveEntryInfo> trie)
+    public static void SynthesizeParentDirectories(
+        TrieDictionary<ArchiveEntryInfo> trie,
+        TimeProvider? timeProvider = null)
     {
+        DateTime now = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime;
         HashSet<string> seen = new(StringComparer.Ordinal);
         List<string> keys = [.. trie.Keys];
 
@@ -33,7 +36,7 @@ public static class DirectorySynthesizer
                     {
                         UncompressedSize = 0,
                         IsDirectory = true,
-                        LastModified = DateTime.UtcNow,
+                        LastModified = now,
                         Attributes = FileAttributes.Directory | FileAttributes.ReadOnly,
                     };
                 }

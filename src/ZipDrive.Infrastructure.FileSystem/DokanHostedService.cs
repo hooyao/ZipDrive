@@ -187,6 +187,9 @@ public sealed class DokanHostedService : BackgroundService
 
             _consolidator = new ArchiveChangeConsolidator(quietPeriod, ApplyDeltaAsync, _logger);
 
+            // FileSystemWatcher supports only a single glob pattern. Using "*" and filtering
+            // in event handlers via IsSupportedArchive() is the only way to watch multiple
+            // extensions (.zip, .rar, etc.) without creating multiple watchers.
             _watcher = new FileSystemWatcher(_mountSettings.ArchiveDirectory, "*")
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
