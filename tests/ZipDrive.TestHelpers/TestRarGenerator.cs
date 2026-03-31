@@ -269,13 +269,19 @@ public static class TestRarGenerator
             };
 
             using var process = Process.Start(psi)!;
+
+            // Must consume stdout/stderr BEFORE WaitForExit to prevent deadlock.
+            // When redirect is enabled and the buffer fills, rar.exe blocks on write
+            // while we block on WaitForExit — classic deadlock.
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+            await Task.WhenAll(stdoutTask, stderrTask);
 
             if (!File.Exists(absOutput))
             {
-                string stderr = await process.StandardError.ReadToEndAsync();
                 throw new InvalidOperationException(
-                    $"rar.exe failed (exit={process.ExitCode}): {stderr}");
+                    $"rar.exe failed (exit={process.ExitCode}): {stderrTask.Result}");
             }
         }
         finally
