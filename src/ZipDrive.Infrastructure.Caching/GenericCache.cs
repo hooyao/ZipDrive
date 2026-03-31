@@ -148,8 +148,18 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
                     _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
 
-                    T value = _storageStrategy.Retrieve(existingEntry.Stored);
-                    return new CacheHandle<T>(existingEntry, value, Return);
+                    try
+                    {
+                        T value = _storageStrategy.Retrieve(existingEntry.Stored);
+                        return new CacheHandle<T>(existingEntry, value, Return);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        // Disk tier: backing file was deleted by eviction cleanup
+                        // between our TryGetValue and Retrieve. Fall through to miss path.
+                        existingEntry.DecrementRefCount();
+                        _logger.LogDebug("Cache HIT but storage gone: {Key}, falling to miss", cacheKey);
+                    }
                 }
             }
 
