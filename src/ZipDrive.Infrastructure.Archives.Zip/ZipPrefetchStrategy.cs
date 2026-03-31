@@ -128,6 +128,7 @@ public sealed class ZipPrefetchStrategy : IPrefetchStrategy
                 .ToDictionary(x => x.ZipEntry.LocalHeaderOffset);
 
         // Skip entries already in cache
+        int totalWanted = wantedByOffset.Count;
         wantedByOffset = wantedByOffset
             .Where(kv => !contentCache.ContainsKey($"{structure.ArchiveKey}:{kv.Value.InternalPath}"))
             .ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -198,6 +199,15 @@ public sealed class ZipPrefetchStrategy : IPrefetchStrategy
                     continue;
                 }
 
+                if (compressedSize > int.MaxValue)
+                {
+                    // Skip prefetching entries too large for memory-based sequential read
+                    long discarded = await DiscardBytesAsync(zipStream, compressedSize, discardBuffer, cancellationToken).ConfigureAwait(false);
+                    currentPos += discarded;
+                    bytesRead += discarded;
+                    continue;
+                }
+
                 string cacheKey = $"{structure.ArchiveKey}:{wanted.InternalPath}";
                 byte[] compressedBuffer = ArrayPool<byte>.Shared.Rent((int)compressedSize);
                 try
@@ -258,7 +268,7 @@ public sealed class ZipPrefetchStrategy : IPrefetchStrategy
 
         _logger.LogInformation(
             "Prefetch complete: {Archive}/{Dir} — {Files}/{Candidates} files warmed, {Bytes:N0} bytes read in {Ms:F1} ms",
-            structure.ArchiveKey, dirInternalPath, filesWarmed, wantedByOffset.Count + filesWarmed, bytesRead, sw.Elapsed.TotalMilliseconds);
+            structure.ArchiveKey, dirInternalPath, filesWarmed, totalWanted, bytesRead, sw.Elapsed.TotalMilliseconds);
     }
 
     // ── I/O helpers ─────────────────────────────────────────────────────────

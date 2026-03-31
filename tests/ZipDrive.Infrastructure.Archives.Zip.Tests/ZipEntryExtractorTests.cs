@@ -13,8 +13,8 @@ public class ZipEntryExtractorTests
     [Fact]
     public async Task ExtractAsync_returns_decompressed_stream()
     {
-        if (!File.Exists(TestFixturePath))
-            return; // Skip if test fixture not available
+        Assert.True(File.Exists(TestFixturePath),
+            $"Test fixture missing: {TestFixturePath}. Ensure TestFixtures/small.zip is present.");
 
         // Build structure first to populate metadata store
         var metadataStore = new ZipFormatMetadataStore();

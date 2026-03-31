@@ -67,6 +67,8 @@ in appsettings.jsonc and restart ZipDrive.
     {
         return Task.Run(() =>
         {
+            // SharpCompress header-only open is fast (~1ms) — acceptable for ProbeAsync.
+            // Binary VINT parsing was attempted but unreliable across RAR4/RAR5 versions.
             bool isSolid = RarSignature.IsSolid(absolutePath);
             return isSolid
                 ? new ArchiveProbeResult(false, "Solid RAR archives are not supported")
@@ -81,68 +83,73 @@ in appsettings.jsonc and restart ZipDrive.
     public Task<ArchiveStructure> BuildAsync(
         string archiveKey, string absolutePath, CancellationToken cancellationToken = default)
     {
-        using var archive = RarArchive.OpenArchive(absolutePath);
-
-        // Defense-in-depth: solid should be caught by ProbeAsync before reaching here.
-        if (archive.IsSolid)
+        return Task.Run(() =>
         {
-            _logger.LogWarning(
-                "Solid RAR reached BuildAsync (should have been caught by ProbeAsync): {Path}",
-                absolutePath);
-            return Task.FromResult(
-                BuildSolidWarningStructure(archiveKey + ArchiveProbeResult.UnsupportedFolderSuffix, absolutePath));
-        }
+            using var archive = RarArchive.OpenArchive(absolutePath);
 
-        var trie = new TrieDictionary<ArchiveEntryInfo>();
-        long totalUncompressed = 0;
-        long totalCompressed = 0;
-
-        foreach (var entry in archive.Entries)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            string key = NormalizePath(entry.Key ?? "");
-            if (string.IsNullOrEmpty(key)) continue;
-
-            // SharpCompress sets IsDirectory but key may not end with /
-            string entryKey = entry.IsDirectory
-                ? (key.EndsWith('/') ? key : key + "/")
-                : key.TrimEnd('/');
-
-            trie[entryKey] = new ArchiveEntryInfo
+            // Defense-in-depth: solid should be caught by ProbeAsync before reaching here.
+            if (archive.IsSolid)
             {
-                UncompressedSize = entry.Size,
-                IsDirectory = entry.IsDirectory,
-                LastModified = entry.LastModifiedTime ?? DateTime.MinValue,
-                Attributes = entry.IsDirectory
-                    ? FileAttributes.Directory | FileAttributes.ReadOnly
-                    : FileAttributes.ReadOnly,
-                Checksum = GetSafeCrc(entry),
+                _logger.LogWarning(
+                    "Solid RAR reached BuildAsync (should have been caught by ProbeAsync): {Path}",
+                    absolutePath);
+                string warningKey = archiveKey.Contains(ArchiveProbeResult.UnsupportedFolderSuffix)
+                    ? archiveKey
+                    : archiveKey + ArchiveProbeResult.UnsupportedFolderSuffix;
+                return BuildSolidWarningStructure(warningKey, absolutePath);
+            }
+
+            var trie = new TrieDictionary<ArchiveEntryInfo>();
+            long totalUncompressed = 0;
+            long totalCompressed = 0;
+
+            foreach (var entry in archive.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string key = NormalizePath(entry.Key ?? "");
+                if (string.IsNullOrEmpty(key)) continue;
+
+                // SharpCompress sets IsDirectory but key may not end with /
+                string entryKey = entry.IsDirectory
+                    ? (key.EndsWith('/') ? key : key + "/")
+                    : key.TrimEnd('/');
+
+                trie[entryKey] = new ArchiveEntryInfo
+                {
+                    UncompressedSize = entry.Size,
+                    IsDirectory = entry.IsDirectory,
+                    LastModified = entry.LastModifiedTime ?? DateTime.MinValue,
+                    Attributes = entry.IsDirectory
+                        ? FileAttributes.Directory | FileAttributes.ReadOnly
+                        : FileAttributes.ReadOnly,
+                    Checksum = GetSafeCrc(entry),
+                };
+
+                if (!entry.IsDirectory)
+                {
+                    totalUncompressed += entry.Size;
+                    totalCompressed += entry.CompressedSize;
+                }
+            }
+
+            DirectorySynthesizer.SynthesizeParentDirectories(trie);
+
+            var structure = new ArchiveStructure
+            {
+                ArchiveKey = archiveKey,
+                AbsolutePath = absolutePath,
+                Entries = trie,
+                FormatId = "rar",
+                BuiltAt = DateTimeOffset.UtcNow,
+                TotalUncompressedSize = totalUncompressed,
+                TotalCompressedSize = totalCompressed,
+                EstimatedMemoryBytes = BaseOverhead + trie.Count * BytesPerEntry,
             };
 
-            if (!entry.IsDirectory)
-            {
-                totalUncompressed += entry.Size;
-                totalCompressed += entry.CompressedSize;
-            }
-        }
-
-        DirectorySynthesizer.SynthesizeParentDirectories(trie);
-
-        var structure = new ArchiveStructure
-        {
-            ArchiveKey = archiveKey,
-            AbsolutePath = absolutePath,
-            Entries = trie,
-            FormatId = "rar",
-            BuiltAt = DateTimeOffset.UtcNow,
-            TotalUncompressedSize = totalUncompressed,
-            TotalCompressedSize = totalCompressed,
-            EstimatedMemoryBytes = BaseOverhead + trie.Count * BytesPerEntry,
-        };
-
-        _logger.LogInformation("Built RAR structure for {Key}: {Count} entries", archiveKey, trie.Count);
-        return Task.FromResult(structure);
+            _logger.LogInformation("Built RAR structure for {Key}: {Count} entries", archiveKey, trie.Count);
+            return structure;
+        }, cancellationToken);
     }
 
     /// <summary>

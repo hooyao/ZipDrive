@@ -23,9 +23,10 @@ internal static class RarSignature
     }
 
     /// <summary>
-    /// Determines if a RAR archive uses solid compression by opening it with SharpCompress.
-    /// SharpCompress correctly parses the solid flag across RAR4 and RAR5 formats.
-    /// This is fast (~1ms) as it only reads headers, not entry data.
+    /// Determines if a RAR archive uses solid compression.
+    /// Uses SharpCompress which only reads archive headers (not entry data),
+    /// making this O(header_size) regardless of archive content size.
+    /// Binary VINT flag parsing was attempted but proved unreliable across RAR versions.
     /// </summary>
     internal static bool IsSolid(string filePath)
     {

@@ -99,9 +99,9 @@ public sealed class FileContentCache : IFileContentCache
         string archiveKey = cacheKey.EndsWith(suffix, StringComparison.Ordinal)
             ? cacheKey[..^suffix.Length]
             : archivePath;
-        IArchiveEntryExtractor extractor = _formatRegistry.GetExtractor(formatId);
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
         {
+            IArchiveEntryExtractor extractor = _formatRegistry.GetExtractor(formatId);
             ExtractionResult result = await extractor.ExtractAsync(archiveKey, archivePath, internalPath, ct)
                 .ConfigureAwait(false);
 
