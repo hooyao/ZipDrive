@@ -5,11 +5,11 @@ The `.rar` files in this directory were created with WinRAR's `rar.exe` command-
 
 ## Prerequisites
 
-Install [WinRAR](https://www.win-rar.com/) (v6.x or later, must support `-ma5` for RAR5 format)
+Install [WinRAR 6.24 x64](https://www.win-rar.com/fileadmin/winrar-versions/winrar/winrar-x64-624.exe)
 and ensure `rar.exe` is on your PATH (typically `C:\Program Files\WinRAR\rar.exe`).
 
-The original fixtures were generated with WinRAR 6.x (circa Oct 2023).
-Any WinRAR 6.x+ should produce compatible output.
+The original fixtures were generated with WinRAR 6.24.
+Any WinRAR 6.x+ that supports `-ma5` (RAR5 format) should produce compatible output.
 
 ## Commands
 
