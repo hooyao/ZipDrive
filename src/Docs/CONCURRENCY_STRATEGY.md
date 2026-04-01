@@ -492,3 +492,128 @@ This is acceptable because:
 ✅ Temporary RefCount hold during post-store eviction
 
 **This concurrency strategy is essential for high-performance caching in multi-threaded scenarios.**
+
+---
+
+## Layer 5: Storage Lifecycle Safety (LEARNED FROM PRODUCTION BUGS)
+
+**Added:** 2026-03-31, after fixing three concurrency bugs discovered via 12-hour endurance testing with 100 concurrent tasks under aggressive eviction pressure.
+
+### The Fundamental Problem: Non-Atomic Borrow-Retrieve Gap
+
+Layers 1-4 assume that between `TryGetValue` (finding an entry) and `IncrementRefCount` (protecting it), the entry's **storage** remains valid. This assumption is wrong under aggressive eviction.
+
+```
+BorrowAsync (Layer 1):              TryEvictEntry:
+─────────────────────               ──────────────
+1. TryGetValue → hit (RefCount=0)
+                                    2. RefCount > 0? → false
+                                    3. TryRemove → success
+                                    4. Dispose(stored) → storage destroyed
+5. IncrementRefCount → 1 (too late)
+6. Retrieve(stored) → reads destroyed storage
+```
+
+RefCount protects against eviction **once incremented**, but the increment happens **after** the dictionary lookup. The gap between steps 1 and 5 is the vulnerability window.
+
+### Bug #1: ArrayPool Return-Reuse-Overwrite (Memory Tier)
+
+**Symptom:** Endurance test SHA-256 mismatch. Data read back differs from what was written.
+
+**Root Cause:** `MemoryStorageStrategy` used `ArrayPool<byte>` for cache storage. On eviction, `Pool.Return(array, clearArray: true)` returned the array to the pool. A subsequent `Pool.Rent()` (for another entry's materialization) handed out the **same array**, which was then overwritten with new data. Any reader still holding a `MemoryStream` over the original array saw corrupted data.
+
+```
+Entry A stored in pooled array → [AAAA]
+Evict A → Pool.Return(array)
+Entry B materializes → Pool.Rent() returns SAME array → [BBBB]
+Reader still holds MemoryStream over array → reads [BBBB] instead of [AAAA]
+```
+
+**Key Insight:** `clearArray: true` vs `false` is irrelevant. The problem is **array reuse**, not zeroing. With `clearArray: false`, the reader sees Entry B's data instead of zeros — still wrong.
+
+**Fix Attempts That Failed:**
+1. `TryMarkStorageDisposed` flag on `CacheEntry` — Narrowed the window but couldn't close it. The flag check and `Retrieve()` are not atomic; the evictor can dispose between them.
+2. Defensive copy via `new byte[]` in `Retrieve()` — Worked but created per-read GC pressure (one `byte[]` allocation per Dokan callback).
+3. Defensive copy via `Pool.Rent()` in `Retrieve()` — Same reuse problem (rented copy can be returned and overwritten).
+
+**Definitive Fix:** Remove `ArrayPool` entirely. Use plain `new byte[size]` for cache storage.
+
+```csharp
+// Before (BROKEN): ArrayPool-backed storage
+byte[] rented = Pool.Rent(size);
+// ... fill with data ...
+// Dispose: Pool.Return(rented, clearArray: true)
+// Problem: array can be Rent()-ed by someone else and overwritten
+
+// After (CORRECT): GC-managed storage
+byte[] buffer = new byte[size];
+// ... fill with data ...
+// Dispose: no-op (GC collects when all references are gone)
+// Safe: array lives until ALL MemoryStreams over it are collected
+```
+
+**Why This Works:** GC guarantees the array is not collected (and therefore not reused) while any reference exists — including `MemoryStream` wrappers held by concurrent readers. This is a **language-level guarantee**, not a synchronization primitive.
+
+**Why ArrayPool Was Wrong Here:**
+- ArrayPool is designed for **short-lived, frequent** allocations (e.g., per-request buffers)
+- Cache entries are **long-lived** (minutes to hours) — they sit in pool buckets wasting capacity
+- Pool's return-reuse semantic is fundamentally incompatible with shared-reference access patterns
+
+### Bug #2: Temp File Deletion During Read (Disk Tier)
+
+**Symptom:** `FileNotFoundException` in `ChunkedStream` constructor when opening a backing file that was just evicted.
+
+**Root Cause:** `ChunkedDiskStorageStrategy.Dispose()` deletes the temp file. A concurrent `BorrowAsync` that already resolved the entry from the dictionary (pre-eviction) tries to open the file in `Retrieve()` — file no longer exists.
+
+Same gap as Bug #1, but the symptom is different because disk storage is file-backed rather than array-backed.
+
+**Fix:** `BorrowAsync` catches `FileNotFoundException` on `Retrieve()` and falls through to the miss path (re-materialization). The re-materialization creates a new temp file.
+
+```csharp
+try
+{
+    T value = _storageStrategy.Retrieve(existingEntry.Stored);
+    return new CacheHandle<T>(existingEntry, value, Return);
+}
+catch (FileNotFoundException)
+{
+    // Backing file deleted by eviction between TryGetValue and Retrieve.
+    existingEntry.DecrementRefCount();
+    // Fall through to Layer 2 (miss path) for re-materialization.
+}
+```
+
+### Bug #3: Partial-Read Verification (Test Bug, Not Cache Bug)
+
+**Symptom:** SHA-256 mismatch in `SequentialReader4K/64K` endurance suite.
+
+**Root Cause:** `SequentialReaderAsync` reads a file in chunks within `while (!ct.IsCancellationRequested)`. When the test duration CTS fires mid-sequence, the loop exits with `offset < file.size`. The code then calls `VerifyFullFile(data, offset)` — hashing partial data against the full-file manifest SHA. Always mismatches.
+
+**Fix:** Only verify when `offset == file.size` (complete read).
+
+**Lesson:** Endurance test harness bugs can masquerade as cache corruption. Always verify the test itself before debugging the system under test.
+
+### Design Principles (Updated)
+
+| Principle | Rationale |
+|-----------|-----------|
+| **No ArrayPool for long-lived storage** | Pool return-reuse is incompatible with shared-reference readers |
+| **GC-managed byte[] for memory tier** | Language-level lifetime guarantee eliminates storage races |
+| **Catch storage-gone on Retrieve** | Graceful fallback to miss path instead of crash |
+| **Flag-based guards are insufficient** | Non-atomic check+use windows cannot be closed with flags alone |
+| **Endurance test with SHA verification** | Only way to catch data-corruption races (unit tests too fast to trigger) |
+| **Separate verification from test lifecycle** | Don't verify partial reads caused by cancellation |
+
+### The TryMarkStorageDisposed Flag
+
+The `TryMarkStorageDisposed` / `IsStorageDisposed` flag on `CacheEntry` remains in the code as defense-in-depth. It is **not sufficient alone** (the check-then-Retrieve gap persists), but it catches the common case where eviction completes entirely before `BorrowAsync` reaches `IncrementRefCount`. With the `new byte[]` fix for memory tier and `FileNotFoundException` catch for disk tier, the flag is a belt alongside the suspenders.
+
+### Concurrency Layers (Final)
+
+| Layer | Mechanism | What It Prevents |
+|-------|-----------|-----------------|
+| Layer 1 | Lock-free `ConcurrentDictionary` | Read contention |
+| Layer 2 | `Lazy<Task<T>>` per key | Thundering herd (duplicate materialization) |
+| Layer 3 | Global eviction lock | Concurrent eviction corruption |
+| Layer 4 | RefCount on CacheEntry | Eviction of borrowed entries |
+| **Layer 5** | **GC-managed storage + Retrieve fallback** | **Storage destruction during borrow gap** |
