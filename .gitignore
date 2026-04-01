@@ -408,3 +408,6 @@ appsettings.dev.jsonc
 # TLA+ TLC output (trace files and state directories)
 specs/formal/*_TTrace*
 specs/formal/states/
+
+# Proprietary tools (not redistributable)
+**/Rar.exe
