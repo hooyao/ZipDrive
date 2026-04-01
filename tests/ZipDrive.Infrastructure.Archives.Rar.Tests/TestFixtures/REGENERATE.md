@@ -9,7 +9,8 @@ Install [WinRAR 6.24 x64](https://www.win-rar.com/fileadmin/winrar-versions/winr
 and ensure `rar.exe` is on your PATH (typically `C:\Program Files\WinRAR\rar.exe`).
 
 The original fixtures were generated with WinRAR 6.24.
-Any WinRAR 6.x+ that supports `-ma5` (RAR5 format) should produce compatible output.
+**Do not use WinRAR 7.x** — it dropped RAR4 format support (`-ma4` flag removed).
+Use WinRAR 6.24 specifically to generate both RAR4 and RAR5 fixtures.
 
 ## Commands
 
