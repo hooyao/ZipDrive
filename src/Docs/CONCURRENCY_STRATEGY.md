@@ -608,6 +608,34 @@ catch (FileNotFoundException)
 
 The `TryMarkStorageDisposed` / `IsStorageDisposed` flag on `CacheEntry` remains in the code as defense-in-depth. It is **not sufficient alone** (the check-then-Retrieve gap persists), but it catches the common case where eviction completes entirely before `BorrowAsync` reaches `IncrementRefCount`. With the `new byte[]` fix for memory tier and `FileNotFoundException` catch for disk tier, the flag is a belt alongside the suspenders.
 
+### Bug #4: Layer 2 Miss Path Missing Storage Guards (Found via TLA+ Model)
+
+**Symptom:** Potential `FileNotFoundException` in disk-tier BorrowAsync when multiple waiters share a `Lazy<Task>` and the entry is evicted between materialization completion and a waiter's `IncrementRefCount`.
+
+**Root Cause:** The Layer 2 (miss) path after `await lazy.Value` lacked the `IsStorageDisposed` check and `FileNotFoundException` catch present in the Layer 1 (hit) path. Between `MaterializeAndCacheAsync` releasing the temporary RefCount hold (`DecrementRefCount` → refCount=0) and a waiter's continuation reaching `IncrementRefCount`, the evictor can remove the entry and dispose storage.
+
+```
+MaterializeAndCacheAsync:        Evictor:                     Waiter:
+─────────────────────────        ────────                     ────────
+DecrementRefCount → RC=0
+return entry → Task completes
+                                 CheckRef → RC=0
+                                 TryRemove → success
+                                 Dispose → file deleted
+                                                              await lazy.Value → entry
+                                                              IncrementRefCount → RC=1
+                                                              Retrieve → FileNotFoundException!
+```
+
+The window is especially real for waiters: their continuations are scheduled asynchronously via the thread pool after the Task completes, whereas the materializer's continuation may run inline.
+
+**Fix:** Wrap the Layer 2 borrow in a retry loop with the same guards as Layer 1:
+1. After `IncrementRefCount`, check `IsStorageDisposed` — if true, decrement and retry
+2. Wrap `Retrieve` in try/catch for `FileNotFoundException` — if caught, decrement and retry
+3. The retry loop's `finally` block calls `TryRemove` on the stale `Lazy<Task>`, so `GetOrAdd` creates a fresh one
+
+**Discovery Method:** TLA+ formal verification (`specs/formal/GenericCache.tla`) with `Layer2FixEnabled = FALSE` produces a counterexample trace demonstrating the race. With `Layer2FixEnabled = TRUE`, TLC verifies all safety properties hold.
+
 ### Concurrency Layers (Final)
 
 | Layer | Mechanism | What It Prevents |
@@ -616,4 +644,165 @@ The `TryMarkStorageDisposed` / `IsStorageDisposed` flag on `CacheEntry` remains 
 | Layer 2 | `Lazy<Task<T>>` per key | Thundering herd (duplicate materialization) |
 | Layer 3 | Global eviction lock | Concurrent eviction corruption |
 | Layer 4 | RefCount on CacheEntry | Eviction of borrowed entries |
-| **Layer 5** | **GC-managed storage + Retrieve fallback** | **Storage destruction during borrow gap** |
+| **Layer 5** | **GC-managed storage + Retrieve fallback + Layer 2 retry** | **Storage destruction during borrow gap (both hit and miss paths)** |
+
+---
+
+## Formal Verification with TLA+
+
+### Overview
+
+The concurrency strategy is formally specified and model-checked using TLA+ with the TLC model checker. The specifications live in `specs/formal/` and model three critical concurrent subsystems:
+
+| Specification | C# Component | What It Models |
+|--------------|--------------|----------------|
+| `GenericCache.tla` | `GenericCache.BorrowAsync` + `TryEvictEntry` | 5-layer concurrency: lock-free lookup, per-key Lazy materialization, eviction lock, RefCount, storage lifecycle |
+| `ChunkedExtraction.tla` | `ChunkedFileEntry.ExtractAsync` + `ChunkedStream.Read` | Sequential writer → concurrent readers with Volatile/TCS chunk synchronization |
+| `ArchiveDrain.tla` | `ArchiveNode.TryEnter/Exit/DrainAsync` | Double-check TryEnter pattern, drain completion signaling |
+
+### How to Run
+
+Requires Java 11+ and `tla2tools.jar` (download from [TLA+ releases](https://github.com/tlaplus/tlaplus/releases)):
+
+```bash
+cd specs/formal
+
+# Detect Bug #4 (Layer 2 missing guards) — finds counterexample
+java -jar tla2tools.jar -config GenericCache_bug.cfg -workers auto GenericCache.tla
+
+# Verify all fixes applied — should pass
+java -jar tla2tools.jar -config GenericCache_fixed.cfg -workers auto GenericCache.tla
+
+# Verify chunk synchronization protocol
+java -jar tla2tools.jar -config ChunkedExtraction.cfg -workers auto ChunkedExtraction.tla
+
+# Verify archive drain protocol
+java -jar tla2tools.jar -config ArchiveDrain.cfg -workers auto ArchiveDrain.tla
+```
+
+### Verification Results
+
+| Config | Constants | States | Result |
+|--------|-----------|--------|--------|
+| `GenericCache_bug1_arraypool.cfg` | L1Fix=❌ L2Fix=❌ MemSafe=❌ | 53 | **`NoUnhandledException` violated** — Bug #1 detected |
+| `GenericCache_bug2_diskfnfe.cfg` | L1Fix=❌ L2Fix=❌ MemSafe=❌ | 53 | **`NoUnhandledException` violated** — Bug #2 detected |
+| `GenericCache_bug1_fix.cfg` | L1Fix=❌ L2Fix=❌ MemSafe=✅ | 55 | **Pass** — GC byte[] fix sufficient |
+| `GenericCache_bug.cfg` | L1Fix=✅ L2Fix=❌ MemSafe=❌ | 53 | **`NoUnhandledException` violated** — Bug #4 detected |
+| `GenericCache_fixed.cfg` | L1Fix=✅ L2Fix=✅ MemSafe=❌ | 64 | **Pass** — All fixes verified |
+| `ChunkedExtraction.cfg` | 3 chunks, 2 readers | 3,048 | **Pass** |
+| `ArchiveDrain.cfg` | 3 workers | 2,491 | **Pass** |
+
+### Model Design: Mapping C# to TLA+
+
+Each TLA+ **action** corresponds to one atomic operation in C#:
+
+| TLA+ Action | C# Atomic Operation | Atomicity Source |
+|-------------|---------------------|-----------------|
+| `BL1TryGet` | `ConcurrentDictionary.TryGetValue` | Lock-free dictionary read |
+| `BL1IncRef` | `Interlocked.Increment(ref _refCount)` | CPU atomic instruction |
+| `BL1CheckDisposed` | `Volatile.Read(ref _storageDisposed)` | Volatile load-acquire |
+| `ETryRemove` | `ConcurrentDictionary.TryRemove` | Lock-free dictionary CAS |
+| `EPostRemove` | `Interlocked.CompareExchange` (TryMarkStorageDisposed) | CPU CAS instruction |
+| `WMarkReady` | `Volatile.Write` + `TCS.TrySetResult` | Store-release barrier + TCS signal |
+
+The key insight: each C# concurrent operation that modifies shared state maps to exactly one TLA+ action. The **gap between actions** is where interleavings happen and bugs hide.
+
+### Configurable Fix Toggles
+
+`GenericCache.tla` uses three `CONSTANT` booleans to toggle individual fixes:
+
+| Constant | What It Controls | FALSE = Pre-fix | TRUE = Current Code |
+|----------|-----------------|-----------------|---------------------|
+| `Layer1FixEnabled` | `IsStorageDisposed` check + FNFE catch in Layer 1 (hit path) | Bugs #1, #2 reproducible | Guards present |
+| `Layer2FixEnabled` | `IsStorageDisposed` check + FNFE catch + retry loop in Layer 2 (miss path) | Bug #4 reproducible | Guards present |
+| `MemoryTierSafe` | Storage lifecycle after eviction disposal | ArrayPool: storage destroyed | GC byte[]: storage survives (Bug #1 fix) |
+
+This allows reproducing each historical bug independently and verifying each fix in isolation.
+
+### Safety Properties Checked
+
+```
+NoUseAfterDispose  ==  ∀ b ∈ Borrowers: bpc[b] = "HasHandle" ⇒ storageAlive[bkey[b]]
+NoUnhandledException == ∀ b ∈ Borrowers: bpc[b] ≠ "Error_FNFE"
+RefCountNonNeg     ==  ∀ k ∈ Keys: refCount[k] ≥ 0
+
+NoStaleRead        ==  ∀ r ∈ Readers: rpc[r] = "Reading" ⇒ chunkState[target] = "ready"
+NoDrainedActive    ==  drainTcsDone ⇒ ∀ w ∈ Workers: wpc[w] ≠ "Active"
+```
+
+TLC exhaustively checks these invariants across **every reachable state** in the state graph.
+
+### Modeling Lessons Learned
+
+Three model bugs were found and fixed during development. These illustrate important TLA+ modeling principles:
+
+**1. Single refCount per key cannot represent separate CacheEntry objects**
+
+The model uses one `refCount[key]` variable, but C# creates a new `CacheEntry` (with independent `_refCount`) per materialization. When two borrowers both materialize the same key, the second `BMaterialize` overwrites `refCount` to 1, corrupting the first borrower's count.
+
+**Fix:** Restrict to 1 borrower per key in the model. The `BL2CheckMat` action redirects to `L1_IncRef` when `inCache[key]` is already TRUE, preventing spurious double-materialization. For single-borrower + single-evictor, this accurately models the race.
+
+**Implication:** Multi-borrower thundering herd (3+ threads awaiting the same `Lazy<Task>`) is not exhaustively verified by TLC. This scenario is instead covered by the 24-hour endurance test with 100 concurrent tasks and SHA-256 full-file verification.
+
+**2. TCS cancellation ≠ TCS success**
+
+`ChunkedExtraction.tla` initially modeled writer failure (`WFail`) by setting `tcsSignaled=TRUE` for all chunks. In C#, `TrySetCanceled()` causes the reader's `await` to throw `OperationCanceledException` — the reader never reaches the "Reading" state. The model conflated "TCS signaled" with "chunk ready".
+
+**Fix:** `RWait` re-checks `chunkState` after waking from the TCS. If the chunk is not "ready" (writer failed), the reader goes to "Done" (representing the thrown exception) instead of "Reading".
+
+**3. Transient state in double-check patterns**
+
+`ArchiveDrain.tla` initially had `DrainImpliesZeroOps: drainTcsDone ⇒ activeOps = 0`. This is violated because a worker between `CheckDrain1` and `CheckDrain2` transiently increments `activeOps` before being rejected by the double-check.
+
+**Fix:** Weaken the invariant to exclude workers mid-TryEnter: `drainTcsDone ∧ (∀ w: wpc[w] ∉ {"IncOps", "CheckDrain2"}) ⇒ activeOps = 0`. The important property is `NoDrainedActive` (no worker in "Active" state after drain), which holds without weakening.
+
+### Known Limitations
+
+**1. Single-borrower GenericCache model**
+
+The GenericCache model uses 1 borrower + 1 evictor. Multi-borrower scenarios (thundering herd with 3+ threads sharing the same `Lazy<Task>`) are not exhaustively checked due to the per-key refCount limitation described above. Verified instead by endurance testing.
+
+**2. Unmodeled components**
+
+| Component | Concurrency Mechanism | Risk Level | Why Not Modeled |
+|-----------|-----------------------|------------|-----------------|
+| `ArchiveTrie` | `ReaderWriterLockSlim` | Low | Standard .NET primitive; correctness depends on framework implementation |
+| `ArchiveChangeConsolidator` | `Interlocked.Exchange` on `ConcurrentDictionary` | Low | Event consolidation, not on critical data path |
+| `FileContentCache._keyIndexLock` | `Lock` on `Dictionary` | Low | Simple mutual exclusion |
+| `ZipFormatMetadataStore` | Nested `ConcurrentDictionary` | Low | Read-only after `Populate()`; writes are whole-archive replacement |
+| Prefetch in-flight guard | `ConcurrentDictionary.TryAdd` | Low | Idempotent guard, worst case = duplicate prefetch (harmless) |
+
+**3. Memory model**
+
+TLA+ assumes **sequential consistency**: each action's effects are instantly visible to all threads. Real hardware (x86: TSO; ARM: relaxed) may reorder stores and loads. C# uses `Volatile.Read/Write` and `Interlocked` operations to provide the necessary memory barriers. The TLA+ model verifies **algorithmic correctness** (correct interleaving logic), not **memory ordering correctness** (barrier sufficiency).
+
+For memory ordering verification, consider [GenMC](https://plv.mpi-sws.org/genmc/) or [CDSChecker](http://plrg.eecs.uci.edu/software_page/42-2/) which model weak memory explicitly.
+
+**4. Multi-key interactions**
+
+The model uses 1 key. Cross-key interactions (e.g., evicting key A during key B's post-store eviction check) are not explored. Risk is low because per-key state (Lazy, refCount, storage) is independent. The global eviction lock serializes cross-key eviction decisions.
+
+### Complementary Verification Strategy
+
+Formal verification and runtime testing serve different roles:
+
+| Aspect | TLA+ Model Checking | Endurance Testing |
+|--------|---------------------|-------------------|
+| **Scope** | Algorithm correctness for specific protocols | System-wide correctness under realistic load |
+| **Coverage** | Exhaustive within model bounds | Statistical (probabilistic race triggering) |
+| **Finds** | Design-level bugs (race conditions, invariant violations) | Implementation bugs (off-by-one, resource leaks, data corruption) |
+| **Limits** | Abstraction gap; small state spaces | Non-deterministic; may miss rare interleavings |
+| **Speed** | Seconds (small models) | Hours (24-hour soak) |
+
+Both are necessary. TLA+ found Bug #4 (Layer 2 missing guards) that 24 hours of endurance testing did not trigger. Conversely, endurance testing validates the full system (including unmodeled components, real I/O, and memory management) which TLA+ cannot reach.
+
+### When to Update the Specs
+
+Update TLA+ specifications when:
+- Adding new concurrency primitives (locks, Interlocked, CAS patterns)
+- Changing the BorrowAsync/Eviction/Return protocol
+- Adding new tier strategies (e.g., a hybrid memory-mapped tier)
+- Modifying the ChunkedFileEntry extraction/signaling protocol
+- Changing the ArchiveNode drain protocol
+
+Run TLC after changes to verify no regressions. If the model needs more borrowers, implement entry generation tracking (`entryGen[key]` + `bGen[borrower]`) to correctly handle per-materialization refCount.

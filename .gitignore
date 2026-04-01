@@ -404,3 +404,7 @@ test-archives/
 *.zip2vd.cache
 appsettings.dev.jsonc
 
+
+# TLA+ TLC output (trace files and state directories)
+specs/formal/*_TTrace*
+specs/formal/states/

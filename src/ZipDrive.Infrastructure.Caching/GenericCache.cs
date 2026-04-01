@@ -173,25 +173,57 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
             _logger.LogDebug("Cache MISS: {Key}", cacheKey);
 
-            Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
-                new Lazy<Task<CacheEntry>>(
-                    () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
-                    LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
-
-            try
+            // Retry loop: if storage is evicted between materialization and
+            // our IncrementRefCount, fall back to a fresh materialization.
+            // Bounded in practice — eviction only targets RefCount=0 entries
+            // and the new materialization's temp hold prevents re-eviction.
+            while (true)
             {
-                CacheEntry entry = await lazy.Value.ConfigureAwait(false);
+                Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
+                    new Lazy<Task<CacheEntry>>(
+                        () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
+                        LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
 
-                // Increment RefCount for each borrower (thundering herd: all get handles)
-                entry.IncrementRefCount();
+                try
+                {
+                    CacheEntry entry = await lazy.Value.ConfigureAwait(false);
 
-                T value = _storageStrategy.Retrieve(entry.Stored);
-                return new CacheHandle<T>(entry, value, Return);
-            }
-            finally
-            {
-                // Clean up the lazy task to prevent memory leaks
-                _materializationTasks.TryRemove(cacheKey, out _);
+                    // Increment RefCount for each borrower (thundering herd: all get handles)
+                    entry.IncrementRefCount();
+
+                    // LAYER 5 GUARD (mirrors Layer 1 path):
+                    // Between MaterializeAndCacheAsync releasing the temporary RefCount hold
+                    // and this IncrementRefCount, the evictor may have removed the entry and
+                    // disposed its storage. This window is especially real for waiters whose
+                    // continuations are scheduled asynchronously via the thread pool.
+                    if (entry.IsStorageDisposed)
+                    {
+                        entry.DecrementRefCount();
+                        _logger.LogDebug("Cache MISS materialized but storage already gone: {Key}, retrying", cacheKey);
+                        continue;
+                    }
+
+                    try
+                    {
+                        T value = _storageStrategy.Retrieve(entry.Stored);
+                        return new CacheHandle<T>(entry, value, Return);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        // Disk tier: backing file deleted by eviction between
+                        // IncrementRefCount and Retrieve. Retry with fresh materialization.
+                        entry.DecrementRefCount();
+                        _logger.LogDebug("Cache MISS materialized but storage gone (FNFE): {Key}, retrying", cacheKey);
+                        continue;
+                    }
+                }
+                finally
+                {
+                    // Clean up the lazy task to prevent memory leaks.
+                    // On retry (continue), this removes the stale Lazy so the next
+                    // iteration's GetOrAdd creates a fresh one.
+                    _materializationTasks.TryRemove(cacheKey, out _);
+                }
             }
         }
     }

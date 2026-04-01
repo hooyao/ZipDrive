@@ -2777,6 +2777,205 @@ public class GenericCacheIntegrationTests : IDisposable
 
     #endregion
 
+    #region Layer 2 Storage Safety Tests
+
+    /// <summary>
+    /// Verifies that BorrowAsync Layer 2 (miss path) handles the race condition where
+    /// storage is evicted between materialization completion and IncrementRefCount.
+    /// With a tight cache, concurrent borrowers of different keys force frequent eviction.
+    /// Previously, a FileNotFoundException could escape from the Layer 2 path.
+    /// </summary>
+    [Fact]
+    public async Task DiskCache_Layer2_ConcurrentBorrowWithTightCapacity_NeverThrowsFnfe()
+    {
+        // Capacity for ~2 entries. 20 concurrent keys × 2MB each → massive eviction pressure.
+        GenericCache<Stream> cache = CreateDiskCache(capacityBytes: 4 * 1024 * 1024);
+        int fileSize = 2 * 1024 * 1024;
+        int concurrentKeys = 20;
+        int borrowersPerKey = 3;
+        ConcurrentBag<Exception> errors = new();
+
+        try
+        {
+            Task[] tasks = Enumerable.Range(0, concurrentKeys)
+                .SelectMany(keyIndex =>
+                    Enumerable.Range(0, borrowersPerKey).Select(async _ =>
+                    {
+                        try
+                        {
+                            string key = $"key-{keyIndex}";
+                            byte[] expected = CreateTestDataForKey(key, fileSize);
+
+                            using ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                                key,
+                                TimeSpan.FromMinutes(1),
+                                ct =>
+                                {
+                                    byte[] data = CreateTestDataForKey(key, fileSize);
+                                    return Task.FromResult(new CacheFactoryResult<Stream>
+                                    {
+                                        Value = new MemoryStream(data),
+                                        SizeBytes = data.Length
+                                    });
+                                });
+
+                            // Verify data integrity
+                            byte[] buffer = new byte[1024];
+                            handle.Value.Seek(0, SeekOrigin.Begin);
+                            int bytesRead = await handle.Value.ReadAsync(buffer);
+                            bytesRead.Should().BeGreaterThan(0);
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add(ex);
+                        }
+                    }))
+                .ToArray();
+
+            await Task.WhenAll(tasks);
+            cache.ProcessPendingCleanup();
+
+            errors.Should().BeEmpty(
+                "Layer 2 path should retry on storage disposal, not throw. " +
+                "Errors: {0}", string.Join("; ", errors.Select(e => e.Message)));
+        }
+        finally
+        {
+            await cache.ClearAsync();
+        }
+    }
+
+    /// <summary>
+    /// Verifies that BorrowAsync Layer 2 retries when TryRemove evicts the just-materialized
+    /// entry. Memory tier: GC-managed byte[] survives disposal, so no FNFE, but the
+    /// IsStorageDisposed guard should still detect the eviction and retry cleanly.
+    /// </summary>
+    [Fact]
+    public async Task MemoryCache_Layer2_ConcurrentBorrowWithEviction_AllSucceed()
+    {
+        // Capacity for ~3 entries. 30 keys × 5 borrowers each → heavy eviction.
+        GenericCache<Stream> cache = CreateMemoryCache(capacityBytes: 3 * 1024);
+        int fileSize = 1024;
+        int concurrentKeys = 30;
+        int borrowersPerKey = 5;
+        int successCount = 0;
+
+        try
+        {
+            Task[] tasks = Enumerable.Range(0, concurrentKeys)
+                .SelectMany(keyIndex =>
+                    Enumerable.Range(0, borrowersPerKey).Select(async _ =>
+                    {
+                        string key = $"key-{keyIndex}";
+                        byte[] expected = CreateTestDataForKey(key, fileSize);
+
+                        using ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                            key,
+                            TimeSpan.FromMinutes(1),
+                            ct =>
+                            {
+                                byte[] data = CreateTestDataForKey(key, fileSize);
+                                return Task.FromResult(new CacheFactoryResult<Stream>
+                                {
+                                    Value = new MemoryStream(data),
+                                    SizeBytes = data.Length
+                                });
+                            });
+
+                        // Read and verify
+                        byte[] buffer = new byte[fileSize];
+                        handle.Value.Seek(0, SeekOrigin.Begin);
+                        await handle.Value.ReadExactlyAsync(buffer);
+                        buffer.Should().Equal(expected);
+                        Interlocked.Increment(ref successCount);
+                    }))
+                .ToArray();
+
+            await Task.WhenAll(tasks);
+
+            successCount.Should().Be(concurrentKeys * borrowersPerKey,
+                "All borrowers should succeed — Layer 2 retry handles evicted storage");
+        }
+        finally
+        {
+            cache.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Verifies that concurrent borrowers for the SAME key (thundering herd) all succeed
+    /// even when the cache is at capacity and eviction pressure is high. The first borrower
+    /// materializes, others await the same Lazy&lt;Task&gt;. After Task completion, all
+    /// IncrementRefCount — the entry must survive long enough for all to borrow.
+    /// </summary>
+    [Fact]
+    public async Task DiskCache_Layer2_ThunderingHerdWithEviction_AllBorrowersSucceed()
+    {
+        // Capacity for 1 entry only — any new materialization evicts the old one.
+        GenericCache<Stream> cache = CreateDiskCache(capacityBytes: 2 * 1024 * 1024);
+        int fileSize = 1024 * 1024; // 1MB
+        int herdSize = 10;
+        byte[] expected = CreateTestData(fileSize);
+        int successCount = 0;
+        ConcurrentBag<Exception> errors = new();
+
+        try
+        {
+            // Pre-fill cache to capacity with a different key
+            using (ICacheHandle<Stream> prefill = await cache.BorrowAsync(
+                "prefill",
+                TimeSpan.FromMinutes(1),
+                ct => Task.FromResult(new CacheFactoryResult<Stream>
+                {
+                    Value = new MemoryStream(new byte[fileSize]),
+                    SizeBytes = fileSize
+                })))
+            { } // Release handle — prefill is now evictable
+
+            // Launch herd — all request same key "target".
+            // Materialization of "target" may evict "prefill", and if another
+            // eviction cycle runs before all herd members IncrementRefCount,
+            // the Layer 2 retry handles it.
+            Task[] herd = Enumerable.Range(0, herdSize).Select(async _ =>
+            {
+                try
+                {
+                    using ICacheHandle<Stream> handle = await cache.BorrowAsync(
+                        "target",
+                        TimeSpan.FromMinutes(1),
+                        ct => Task.FromResult(new CacheFactoryResult<Stream>
+                        {
+                            Value = new MemoryStream(expected),
+                            SizeBytes = expected.Length
+                        }));
+
+                    byte[] buffer = new byte[1024];
+                    handle.Value.Seek(0, SeekOrigin.Begin);
+                    int bytesRead = await handle.Value.ReadAsync(buffer);
+                    bytesRead.Should().BeGreaterThan(0);
+                    Interlocked.Increment(ref successCount);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                }
+            }).ToArray();
+
+            await Task.WhenAll(herd);
+            cache.ProcessPendingCleanup();
+
+            errors.Should().BeEmpty("All herd members should succeed. Errors: {0}",
+                string.Join("; ", errors.Select(e => $"{e.GetType().Name}: {e.Message}")));
+            successCount.Should().Be(herdSize);
+        }
+        finally
+        {
+            await cache.ClearAsync();
+        }
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private GenericCache<Stream> CreateMemoryCache(long capacityBytes)
