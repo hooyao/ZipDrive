@@ -29,10 +29,4 @@
     <ProjectReference Include="..\..\src\ZipDrive.Infrastructure.FileSystem\ZipDrive.Infrastructure.FileSystem.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="..\ZipDrive.Infrastructure.Archives.Rar.Tests\Rar.exe" Link="Rar.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
 </Project>
