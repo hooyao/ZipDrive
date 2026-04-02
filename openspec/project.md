@@ -102,7 +102,7 @@ ZIP archives provide sequential-only access (compressed streams), but Windows fi
 ## Important Constraints
 
 - **Windows x64 only** - DokanNet is Windows-specific
-- **Dokany v2.1.0.1000** must be installed (kernel driver dependency)
+- **Dokany v2.3.1.1000** must be installed (kernel driver dependency)
 - **Read-only** - No write support to archives
 - **Compression support**: Store (0) and Deflate (8) methods only (no LZMA yet)
 - **No encryption support** - Password-protected ZIPs not supported yet
@@ -120,7 +120,7 @@ ZIP archives provide sequential-only access (compressed streams), but Windows fi
 | Dependency | Purpose | Version |
 |------------|---------|---------|
 | DokanNet | User-mode file system driver | 2.1.0 |
-| Dokany | Kernel driver (must be installed) | v2.1.0.1000 |
+| Dokany | Kernel driver (must be installed) | v2.3.1.1000 |
 | System.IO.MemoryMappedFiles | Large file caching | Built-in |
 | System.IO.Compression | ZIP reading (reference only) | Built-in |
 | Serilog | Structured logging | Latest |

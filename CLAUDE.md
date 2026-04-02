@@ -44,7 +44,7 @@ ZipDrive's CLI and DokanNet adapter are **Windows-only**, but the underlying inf
 ## Prerequisites
 
 - **Windows x64 only** - Uses DokanNet which is Windows-specific
-- **Dokany v2.1.0.1000** must be installed from https://github.com/dokan-dev/dokany/releases/tag/v2.1.0.1000
+- **Dokany v2.3.1.1000** must be installed from https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000
 - **.NET 10.0 SDK** (Note: Currently targets .NET 10 preview - may need adjustment to .NET 8 LTS for production)
 
 ## Build and Run Commands
