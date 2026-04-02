@@ -531,4 +531,101 @@ public class ArchiveVirtualFileSystemTests : IAsyncLifetime, IDisposable
             try { Directory.Delete(longRoot, true); } catch { }
         }
     }
+
+    // === MountSingleFileAsync ===
+
+    private ArchiveVirtualFileSystem CreateFreshVfs()
+    {
+        var trie = new ArchiveTrie(CaseInsensitiveCharComparer.Instance);
+        var resolver = new PathResolver(trie);
+        var readerFactory = new ZipReaderFactory();
+        var ms = new ZipFormatMetadataStore();
+        var detector = new FilenameEncodingDetector(Options.Create(new MountSettings()), NullLogger<FilenameEncodingDetector>.Instance);
+        var zipBuilder = new ZipStructureBuilder(readerFactory, detector, ms,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var zipExtractor = new ZipEntryExtractor(readerFactory, ms);
+        var formatRegistry = new FormatRegistry([zipBuilder], [zipExtractor], Array.Empty<IPrefetchStrategy>());
+        var discovery = new ArchiveDiscovery(formatRegistry, NullLogger<ArchiveDiscovery>.Instance);
+        var cacheOpts = Options.Create(new CacheOptions { MemoryCacheSizeMb = 64, DiskCacheSizeMb = 64 });
+        var structureStore = new ArchiveStructureStore(new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var structCache = new ArchiveStructureCache(structureStore, formatRegistry, TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
+        var fc = new FileContentCache(formatRegistry, cacheOpts, new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+
+        return new ArchiveVirtualFileSystem(trie, structCache, fc, discovery, resolver,
+            new NullHostApplicationLifetime(),
+            formatRegistry,
+            Options.Create(new MountSettings()),
+            Options.Create(new PrefetchOptions { Enabled = false }),
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
+    }
+
+    [Fact]
+    public async Task MountSingleFile_SupportedZip_ReturnsTrueAndMounts()
+    {
+        string zipPath = Path.Combine(_tempRoot, "games", "doom.zip");
+
+        var vfs = CreateFreshVfs();
+        bool result = await vfs.MountSingleFileAsync(zipPath);
+
+        result.Should().BeTrue();
+        vfs.IsMounted.Should().BeTrue();
+
+        // Archive appears at root as "doom.zip" folder
+        var root = await vfs.ListDirectoryAsync("");
+        root.Should().Contain(e => e.Name == "doom.zip" && e.IsDirectory);
+    }
+
+    [Fact]
+    public async Task MountSingleFile_SupportedZip_VolumeLabelIsFilenameWithoutExtension()
+    {
+        string zipPath = Path.Combine(_tempRoot, "games", "doom.zip");
+
+        var vfs = CreateFreshVfs();
+        await vfs.MountSingleFileAsync(zipPath);
+
+        var vol = vfs.GetVolumeInfo();
+        vol.VolumeLabel.Should().Be("doom");
+    }
+
+    [Fact]
+    public async Task MountSingleFile_UnsupportedFile_ReturnsFalse()
+    {
+        string txtPath = Path.Combine(_tempRoot, "notes.txt");
+        File.WriteAllText(txtPath, "not an archive");
+
+        var vfs = CreateFreshVfs();
+        bool result = await vfs.MountSingleFileAsync(txtPath);
+
+        result.Should().BeFalse();
+        vfs.IsMounted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MountSingleFile_LongFilename_VolumeLabelTruncatedTo32Chars()
+    {
+        string longName = new string('Z', 40) + ".zip";
+        string longPath = Path.Combine(_tempRoot, longName);
+        using (ZipFile.Open(longPath, ZipArchiveMode.Create)) { }
+
+        var vfs = CreateFreshVfs();
+        await vfs.MountSingleFileAsync(longPath);
+
+        var vol = vfs.GetVolumeInfo();
+        vol.VolumeLabel.Should().HaveLength(32);
+    }
+
+    [Fact]
+    public async Task MountSingleFile_CanReadFileContent()
+    {
+        string zipPath = Path.Combine(_tempRoot, "games", "doom.zip");
+
+        var vfs = CreateFreshVfs();
+        await vfs.MountSingleFileAsync(zipPath);
+
+        byte[] buffer = new byte[4096];
+        int bytesRead = await vfs.ReadFileAsync("doom.zip/readme.txt", buffer, 0);
+
+        bytesRead.Should().Be(16);
+        Encoding.UTF8.GetString(buffer, 0, bytesRead).Should().Be("Hello from doom!");
+    }
 }
