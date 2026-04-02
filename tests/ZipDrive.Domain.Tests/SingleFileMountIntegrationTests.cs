@@ -185,19 +185,25 @@ public class SingleFileMountIntegrationTests : IDisposable
     }
 
     // === 5.6 Single-file mode does not start FileSystemWatcher ===
-    // (Verified structurally: the StartWatcher() call is inside the Directory.Exists branch,
-    //  not the File.Exists branch. The _singleFileMode flag tracks this.)
+    // Verified structurally: StartWatcher() is only called inside the Directory.Exists branch.
+    // Single-file mode mounts successfully without touching any watcher infrastructure.
 
     [Fact]
-    public void SingleFileMode_WatcherNotStarted_VerifiedByCodeStructure()
+    public async Task SingleFileMode_MountsWithoutWatcherInfrastructure()
     {
-        // This test verifies the design: in DokanHostedService.ExecuteAsync,
-        // StartWatcher() is only called inside the `else if (Directory.Exists)` branch.
-        // The File.Exists branch (single-file mode) skips it entirely.
-        // No FileSystemWatcher or ArchiveChangeConsolidator is created.
-        //
-        // This is a structural guarantee, not a runtime test, because DokanHostedService
-        // requires the Dokany runtime which is not available in unit tests.
-        Assert.True(true, "Verified by code review: StartWatcher() only called in directory branch");
+        // MountSingleFileAsync only calls DescribeFile + AddArchiveAsync — no watcher involvement.
+        // If it returns true, the mount succeeded entirely within the VFS layer.
+        string zipPath = CreateTestZip("watcher-test.zip", new Dictionary<string, string>
+        {
+            ["file.txt"] = "content"
+        });
+
+        var (vfs, _, _) = CreateInfrastructure();
+        bool result = await vfs.MountSingleFileAsync(zipPath);
+
+        result.Should().BeTrue();
+        vfs.IsMounted.Should().BeTrue();
+        // No FileSystemWatcher is created — that's DokanHostedService's responsibility
+        // and it only calls StartWatcher() in the directory branch.
     }
 }

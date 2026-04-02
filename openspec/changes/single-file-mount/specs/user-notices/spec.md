@@ -1,18 +1,18 @@
 ## ADDED Requirements
 
 ### Requirement: UserNotice static helper
-A static `UserNotice` class SHALL provide methods to display visually prominent notices using Spectre.Console `Panel` widgets. Methods: `Tip(string title, string body)`, `Warning(string title, string body)`, `Error(string title, string body)`.
+A static `UserNotice` class SHALL provide methods to display visually prominent notices using Spectre.Console `Panel` widgets. Methods: `Tip(string body)`, `Warning(string body)`, `Error(string body)`. Headers are fixed per method (TIP, WARNING, ERROR).
 
 #### Scenario: Tip notice rendering
-- **WHEN** `UserNotice.Tip("TIP", "Some message")` is called
+- **WHEN** `UserNotice.Tip("Some message")` is called
 - **THEN** a Spectre.Console `Panel` SHALL be written to `AnsiConsole` with `RoundedBorder()`, blue border color, and header `[blue bold] TIP [/]`
 
 #### Scenario: Warning notice rendering
-- **WHEN** `UserNotice.Warning("WARNING", "Some message")` is called
+- **WHEN** `UserNotice.Warning("Some message")` is called
 - **THEN** a Spectre.Console `Panel` SHALL be written to `AnsiConsole` with `RoundedBorder()`, yellow border color, and header `[yellow bold] WARNING [/]`
 
 #### Scenario: Error notice rendering
-- **WHEN** `UserNotice.Error("ERROR", "Some message")` is called
+- **WHEN** `UserNotice.Error("Some message")` is called
 - **THEN** a Spectre.Console `Panel` SHALL be written to `AnsiConsole` with `DoubleBorder()`, red border color, and header `[red bold] ERROR [/]`
 
 ### Requirement: Spectre.Console dependency

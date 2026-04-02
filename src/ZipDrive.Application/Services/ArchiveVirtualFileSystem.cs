@@ -110,10 +110,11 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
-        string parentDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
+        string fullPath = Path.GetFullPath(filePath);
+        string parentDir = Path.GetDirectoryName(fullPath)
             ?? throw new ArgumentException("Cannot determine parent directory", nameof(filePath));
 
-        ArchiveDescriptor? descriptor = _discovery.DescribeFile(parentDir, filePath);
+        ArchiveDescriptor? descriptor = _discovery.DescribeFile(parentDir, fullPath);
         if (descriptor == null)
             return false;
 
@@ -121,7 +122,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
 
         await AddArchiveAsync(descriptor, cancellationToken).ConfigureAwait(false);
 
-        string label = Path.GetFileNameWithoutExtension(filePath) ?? "ZipDrive";
+        string label = Path.GetFileNameWithoutExtension(fullPath) ?? "ZipDrive";
         if (label.Length > MaxVolumeLabelLength)
         {
             _logger.LogWarning("Volume label truncated from {Length} to {Max} chars: \"{Original}\"",

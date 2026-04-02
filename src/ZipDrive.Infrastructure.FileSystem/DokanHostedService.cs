@@ -52,9 +52,6 @@ public sealed class DokanHostedService : BackgroundService
         _logger = logger;
     }
 
-    // Tracks whether we're in single-file mount mode (skip watcher, different notices)
-    private bool _singleFileMode;
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stoppingToken = stoppingToken;
@@ -71,6 +68,7 @@ public sealed class DokanHostedService : BackgroundService
             // Validation: empty path
             if (string.IsNullOrWhiteSpace(archivePath))
             {
+                _logger.LogError("Mount:ArchiveDirectory is required");
                 UserNotice.Error(
                     "No archive path specified.\n" +
                     "Drag a ZIP/RAR file or a folder onto ZipDrive.exe,\n" +
@@ -81,19 +79,30 @@ public sealed class DokanHostedService : BackgroundService
 
             if (File.Exists(archivePath))
             {
-                // Single-file mode
-                _singleFileMode = true;
-
-                bool mounted = await _vfs.MountSingleFileAsync(archivePath, stoppingToken);
-                if (!mounted)
+                // Single-file mode — pre-check format before attempting mount
+                string? detectedFormat = _formatRegistry.DetectFormat(archivePath);
+                if (detectedFormat == null)
                 {
                     string ext = Path.GetExtension(archivePath);
                     string filename = Path.GetFileName(archivePath);
+                    _logger.LogError("Unsupported archive format: {File} ({Extension})", filename, ext);
                     UserNotice.Error(
                         $"Cannot mount \"{filename}\"\n" +
                         $"File type \"{ext}\" is not a supported archive format.\n" +
                         $"Supported formats: {supportedFormats}\n\n" +
                         "Tip: Drag a ZIP or RAR file, or a folder containing them.");
+                    WaitForKeyAndStop();
+                    return;
+                }
+
+                bool mounted = await _vfs.MountSingleFileAsync(archivePath, stoppingToken);
+                if (!mounted)
+                {
+                    string filename = Path.GetFileName(archivePath);
+                    _logger.LogError("Failed to mount archive: {File}", filename);
+                    UserNotice.Error(
+                        $"Cannot mount \"{filename}\"\n" +
+                        "The file could not be accessed. It may be locked or unreadable.");
                     WaitForKeyAndStop();
                     return;
                 }
@@ -107,8 +116,6 @@ public sealed class DokanHostedService : BackgroundService
             else if (Directory.Exists(archivePath))
             {
                 // Directory mode (existing behavior)
-                _singleFileMode = false;
-
                 DetectNetworkPath();
 
                 await _vfs.MountAsync(new VfsMountOptions
@@ -123,7 +130,9 @@ public sealed class DokanHostedService : BackgroundService
                 if (!_archiveManager.GetRegisteredArchives().Any())
                 {
                     string dirName = Path.GetFileName(archivePath.TrimEnd(
-                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? archivePath;
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "";
+                    if (string.IsNullOrEmpty(dirName))
+                        dirName = archivePath;
                     UserNotice.Warning(
                         $"No supported archives found in \"{dirName}\"\n" +
                         $"Supported formats: {supportedFormats}\n" +
@@ -135,6 +144,7 @@ public sealed class DokanHostedService : BackgroundService
             else
             {
                 // Path not found
+                _logger.LogError("Archive path does not exist: {Path}", archivePath);
                 UserNotice.Error($"Path not found: {archivePath}");
                 WaitForKeyAndStop();
                 return;
