@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts archive files (ZIP, RAR, and extensible to other formats) as accessible Windows drives using DokanNet. The project has a **format-agnostic caching layer, streaming ZIP reader, and RAR support via SharpCompress**.
 
-**Current Status**: Multi-format archive support with format-agnostic provider architecture (`IArchiveStructureBuilder`, `IArchiveEntryExtractor`, `IPrefetchStrategy`, `IFormatRegistry`). ZIP provider with chunked incremental extraction, streaming Central Directory reader, sibling prefetch with coalescing batch reader. RAR provider via SharpCompress with binary signature detection (RAR4/RAR5 magic bytes + solid flag in ~64 bytes). Solid RAR archives shown as `name.rar (NOT SUPPORTED)` with warning file, or hidden via `Mount:HideUnsupportedArchives`. File content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch. Per-archive dynamic reload with multi-format FileSystemWatcher. The caching layer (`Infrastructure.Caching`) has zero format-specific dependencies — all format operations accessed through Domain interfaces. 445+ tests passing.
+**Current Status**: Multi-format archive support with format-agnostic provider architecture (`IArchiveStructureBuilder`, `IArchiveEntryExtractor`, `IPrefetchStrategy`, `IFormatRegistry`). ZIP provider with chunked incremental extraction, streaming Central Directory reader, sibling prefetch with coalescing batch reader. RAR provider via SharpCompress with binary signature detection (RAR4/RAR5 magic bytes + solid flag in ~64 bytes). Solid RAR archives shown as `name.rar (NOT SUPPORTED)` with warning file, or hidden via `Mount:HideUnsupportedArchives`. File content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch. Per-archive dynamic reload with multi-format FileSystemWatcher. The caching layer (`Infrastructure.Caching`) has zero format-specific dependencies — all format operations accessed through Domain interfaces. Concurrency model formally verified with TLA+ (`specs/formal/`). 450+ tests passing, 12-hour endurance soak validated.
 
 ## Development Workflow Requirements
 
@@ -238,12 +238,13 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - `Dispose()` on handle decrements `RefCount`, allowing eviction
 - Prevents data corruption when reading while eviction occurs
 
-**Five-Layer Concurrency Strategy** (prevents thundering herd + data corruption):
+**Five-Layer Concurrency Strategy** (prevents thundering herd + data corruption; formally verified with TLA+):
 1. **Layer 1 (Lock-free)**: `ConcurrentDictionary.TryGetValue` for cache hits (< 100ns, zero contention)
 2. **Layer 2 (Per-key)**: `Lazy<Task<T>>` prevents duplicate materialization of same file
 3. **Layer 3 (Eviction)**: Global lock only when capacity exceeded (infrequent)
 4. **Layer 4 (RefCount)**: Borrowed entries protected from eviction during use
-5. **Layer 5 (Per-chunk)**: `TaskCompletionSource<bool>[]` signals chunk completion — readers await specific chunks with zero polling, multiple readers served concurrently from completed chunks
+5. **Layer 5 (Storage lifecycle)**: GC-managed byte[] for memory tier + `IsStorageDisposed` check + `FileNotFoundException` catch + retry loop in both Layer 1 (hit) and Layer 2 (miss) paths — prevents storage destruction during the TryGetValue→IncrementRefCount gap
+6. **Layer 5b (Per-chunk)**: `TaskCompletionSource<bool>[]` signals chunk completion — readers await specific chunks with zero polling, multiple readers served concurrently from completed chunks
 
 **Key Features**:
 - TTL-based expiration (configurable via `CacheOptions.DefaultTtlMinutes`, default: 30 minutes)
@@ -253,10 +254,12 @@ This is the **most important** subsystem. It solves the core problem: ZIP provid
 - `Clear()` and `ClearAsync()` for cleanup/shutdown
 - **`CacheMaintenanceService`**: Background `IHostedService` that periodically calls `EvictExpired()` and `ProcessPendingCleanup()` at `CacheOptions.EvictionCheckIntervalSeconds` interval (default: 60s)
 
+**Formal Verification**: TLA+ specs in `specs/formal/` — `GenericCache.tla` (borrow/evict protocol), `ChunkedExtraction.tla` (chunk sync), `ArchiveDrain.tla` (drain protocol). Run with `java -jar tla2tools.jar -config <cfg> <spec>.tla`. See [`CONCURRENCY_STRATEGY.md` § Formal Verification](src/Docs/CONCURRENCY_STRATEGY.md#formal-verification-with-tla) for details.
+
 **Documentation**: See `src/Docs/`:
 - [`CACHING_DESIGN.md`](src/Docs/CACHING_DESIGN.md) - Comprehensive design (1500+ lines)
 - [`CHUNKED_EXTRACTION_DESIGN.md`](src/Docs/CHUNKED_EXTRACTION_DESIGN.md) - Incremental chunk-based extraction design
-- [`CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md) - Multi-layer locking details
+- [`CONCURRENCY_STRATEGY.md`](src/Docs/CONCURRENCY_STRATEGY.md) - Multi-layer locking details + TLA+ formal verification
 - [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) - Implementation steps
 
 #### **ZIP Structure Cache (`src/ZipDrive.Infrastructure.Caching`) - NEW**
