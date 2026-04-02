@@ -58,43 +58,99 @@ public sealed class DokanHostedService : BackgroundService
         try
         {
             _logger.LogInformation("Starting ZipDrive VFS...");
-            _logger.LogInformation("Archive directory: {Dir}", _mountSettings.ArchiveDirectory);
+            _logger.LogInformation("Archive path: {Path}", _mountSettings.ArchiveDirectory);
             _logger.LogInformation("Mount point: {Mount}", _mountSettings.MountPoint);
 
-            if (string.IsNullOrWhiteSpace(_mountSettings.ArchiveDirectory))
+            string archivePath = _mountSettings.ArchiveDirectory;
+            string supportedFormats = string.Join(", ", _formatRegistry.SupportedExtensions
+                .Select(e => e.TrimStart('.').ToUpperInvariant() + $" ({e})"));
+
+            // Validation: empty path
+            if (string.IsNullOrWhiteSpace(archivePath))
             {
-                _logger.LogError("Mount:ArchiveDirectory is required. Set it in appsettings.jsonc, via command line (--Mount:ArchiveDirectory=<path>), or drag a folder onto ZipDrive.exe");
-                Console.Error.WriteLine("Error: Mount:ArchiveDirectory is required.");
-                Console.Error.WriteLine("Set it in appsettings.jsonc, via command line (--Mount:ArchiveDirectory=<path>),");
-                Console.Error.WriteLine("or drag a folder onto ZipDrive.exe.");
+                _logger.LogError("Mount:ArchiveDirectory is required");
+                UserNotice.Error(
+                    "No archive path specified.\n" +
+                    "Drag a ZIP/RAR file or a folder onto ZipDrive.exe,\n" +
+                    "or set Mount:ArchiveDirectory in appsettings.jsonc.");
                 WaitForKeyAndStop();
                 return;
             }
 
-            if (!Directory.Exists(_mountSettings.ArchiveDirectory))
+            if (File.Exists(archivePath))
             {
-                _logger.LogError("Mount:ArchiveDirectory does not exist: {ArchiveDirectory}", _mountSettings.ArchiveDirectory);
-                Console.Error.WriteLine($"Error: Directory not found: {_mountSettings.ArchiveDirectory}");
+                // Single-file mode — pre-check format before attempting mount
+                string? detectedFormat = _formatRegistry.DetectFormat(archivePath);
+                if (detectedFormat == null)
+                {
+                    string ext = Path.GetExtension(archivePath);
+                    string filename = Path.GetFileName(archivePath);
+                    _logger.LogError("Unsupported archive format: {File} ({Extension})", filename, ext);
+                    UserNotice.Error(
+                        $"Cannot mount \"{filename}\"\n" +
+                        $"File type \"{ext}\" is not a supported archive format.\n" +
+                        $"Supported formats: {supportedFormats}\n\n" +
+                        "Tip: Drag a ZIP or RAR file, or a folder containing them.");
+                    WaitForKeyAndStop();
+                    return;
+                }
+
+                bool mounted = await _vfs.MountSingleFileAsync(archivePath, stoppingToken);
+                if (!mounted)
+                {
+                    string filename = Path.GetFileName(archivePath);
+                    _logger.LogError("Failed to mount archive: {File}", filename);
+                    UserNotice.Error(
+                        $"Cannot mount \"{filename}\"\n" +
+                        "The file could not be accessed. It may be locked or unreadable.");
+                    WaitForKeyAndStop();
+                    return;
+                }
+
+                _logger.LogInformation("VFS mounted: single archive");
+
+                UserNotice.Tip(
+                    "You mounted a single archive file.\n" +
+                    "Drag a FOLDER onto ZipDrive.exe to mount all archives inside it at once!");
+            }
+            else if (Directory.Exists(archivePath))
+            {
+                // Directory mode (existing behavior)
+                DetectNetworkPath();
+
+                await _vfs.MountAsync(new VfsMountOptions
+                {
+                    RootPath = archivePath,
+                    MaxDiscoveryDepth = _mountSettings.MaxDiscoveryDepth
+                }, stoppingToken);
+
+                _logger.LogInformation("VFS mounted: archives discovered");
+
+                // Warn if directory has no supported archives
+                if (!_archiveManager.GetRegisteredArchives().Any())
+                {
+                    string dirName = Path.GetFileName(archivePath.TrimEnd(
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "";
+                    if (string.IsNullOrEmpty(dirName))
+                        dirName = archivePath;
+                    UserNotice.Warning(
+                        $"No supported archives found in \"{dirName}\"\n" +
+                        $"Supported formats: {supportedFormats}\n" +
+                        "The drive is mounted but empty. Add ZIP or RAR files and they will appear automatically.");
+                }
+
+                StartWatcher();
+            }
+            else
+            {
+                // Path not found
+                _logger.LogError("Archive path does not exist: {Path}", archivePath);
+                UserNotice.Error($"Path not found: {archivePath}");
                 WaitForKeyAndStop();
                 return;
             }
 
-            // Detect network paths
-            DetectNetworkPath();
-
-            // Step 1: Mount VFS (discover ZIPs, build archive trie via AddArchiveAsync)
-            await _vfs.MountAsync(new VfsMountOptions
-            {
-                RootPath = _mountSettings.ArchiveDirectory,
-                MaxDiscoveryDepth = _mountSettings.MaxDiscoveryDepth
-            }, stoppingToken);
-
-            _logger.LogInformation("VFS mounted: archives discovered");
-
-            // Step 2: Start FileSystemWatcher for dynamic reload
-            StartWatcher();
-
-            // Step 3: Create Dokan instance
+            // Create Dokan instance
             _dokan = new Dokan(new DokanNetLogger(_logger));
 
             var dokanBuilder = new DokanInstanceBuilder(_dokan)
@@ -114,9 +170,10 @@ public sealed class DokanHostedService : BackgroundService
         catch (DllNotFoundException)
         {
             _logger.LogError("Dokany driver is not installed. ZipDrive requires Dokany to mount virtual drives");
-            Console.Error.WriteLine("Error: Dokany driver is not installed.");
-            Console.Error.WriteLine("ZipDrive requires Dokany to mount virtual drives.");
-            Console.Error.WriteLine("Download and install from: https://github.com/dokan-dev/dokany/releases");
+            UserNotice.Error(
+                "Dokany driver is not installed.\n" +
+                "ZipDrive requires Dokany to mount virtual drives.\n" +
+                "Download and install from: https://github.com/dokan-dev/dokany/releases");
             WaitForKeyAndStop();
         }
         catch (DokanException ex)

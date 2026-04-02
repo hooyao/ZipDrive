@@ -19,6 +19,17 @@ public interface IVirtualFileSystem
     Task MountAsync(VfsMountOptions options, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Attempts to mount a single archive file.
+    /// </summary>
+    /// <param name="filePath">Path to the archive file on the host file system.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// <c>true</c> if the file was successfully mounted; <c>false</c> if the file was not mounted,
+    /// for example because the format is not recognized or the file could not be accessed.
+    /// </returns>
+    Task<bool> MountSingleFileAsync(string filePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Clears caches, releases resources, and marks the VFS as unmounted.
     /// </summary>
     Task UnmountAsync(CancellationToken cancellationToken = default);

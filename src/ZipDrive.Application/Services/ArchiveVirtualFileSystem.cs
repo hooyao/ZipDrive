@@ -106,6 +106,39 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     }
 
     /// <inheritdoc />
+    public async Task<bool> MountSingleFileAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        string fullPath = Path.GetFullPath(filePath);
+        string parentDir = Path.GetDirectoryName(fullPath)
+            ?? throw new ArgumentException("Cannot determine parent directory", nameof(filePath));
+
+        ArchiveDescriptor? descriptor = _discovery.DescribeFile(parentDir, fullPath);
+        if (descriptor == null)
+            return false;
+
+        _logger.LogInformation("Mounting single archive: {File}", descriptor.VirtualPath);
+
+        await AddArchiveAsync(descriptor, cancellationToken).ConfigureAwait(false);
+
+        string label = Path.GetFileNameWithoutExtension(fullPath) ?? "ZipDrive";
+        if (label.Length > MaxVolumeLabelLength)
+        {
+            _logger.LogWarning("Volume label truncated from {Length} to {Max} chars: \"{Original}\"",
+                label.Length, MaxVolumeLabelLength, label);
+            label = label[..MaxVolumeLabelLength];
+        }
+        _volumeLabel = label;
+
+        IsMounted = true;
+        MountStateChanged?.Invoke(this, true);
+
+        _logger.LogInformation("VFS mounted: single archive \"{Label}\"", label);
+        return true;
+    }
+
+    /// <inheritdoc />
     /// <remarks>
     /// Hard stop: clears archive nodes without draining. In-flight operations may
     /// call Exit() on detached nodes (safe — operates on the object, not the dictionary).
