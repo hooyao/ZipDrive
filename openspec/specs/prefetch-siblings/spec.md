@@ -1,123 +1,53 @@
-# prefetch-siblings Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change prefetch-siblings. Update Purpose after archive.
-## Requirements
 ### Requirement: Sibling Prefetch On File Read
-When a file is read from a ZIP archive, the system SHALL asynchronously warm sibling files in the same directory into the cache using a single sequential read of the ZIP, without blocking the triggering read response.
+On cache miss for a file read, the VFS SHALL delegate prefetch to `IPrefetchStrategy` resolved via `IFormatRegistry.GetPrefetchStrategy(archive.FormatId)`. If the registry returns null (format has no prefetch optimization), prefetch SHALL be skipped silently. The VFS SHALL NOT contain any format-specific prefetch logic.
 
-#### Scenario: Prefetch fires after first file read
-- **WHEN** `ReadFileAsync` is called for a file inside a ZIP archive
-- **THEN** `PrefetchSiblingsAsync` is dispatched fire-and-forget after the read is initiated
-- **AND** the `ReadFileAsync` response is not delayed by the prefetch operation
+#### Scenario: Prefetch fires after first file read (ZIP)
+- **WHEN** a file in a ZIP archive is read for the first time (cache miss)
+- **AND** `Prefetch:Enabled` is true and `Prefetch:OnRead` is true
+- **THEN** `ZipPrefetchStrategy.PrefetchAsync` is called
+
+#### Scenario: Prefetch skipped for RAR (no strategy)
+- **WHEN** a file in a RAR archive is read for the first time
+- **THEN** no prefetch is attempted (registry returns null for "rar")
 
 #### Scenario: Subsequent sibling reads are cache hits
-- **WHEN** a sibling file in the same directory is read after prefetch has completed
-- **THEN** the sibling is served from cache as a hit with no extraction required
-
----
-
-### Requirement: Sibling Prefetch On Directory Listing
-When a directory inside a ZIP archive is listed, the system SHALL asynchronously warm all qualifying small files in that directory into the cache.
-
-#### Scenario: Prefetch fires after directory listing
-- **WHEN** `FindFilesAsync` is called for a directory inside a ZIP archive
-- **THEN** `PrefetchSiblingsAsync` is dispatched fire-and-forget after the listing completes
-- **AND** the listing response is not delayed by the prefetch operation
-
-#### Scenario: Explorer thumbnail generation benefits from listing trigger
-- **WHEN** Windows Explorer lists a directory and then reads each file for thumbnail generation
-- **THEN** files are already warm in cache before individual `ReadFile` calls arrive
-
----
-
-### Requirement: Span Selection Algorithm
-The system SHALL select a contiguous span of sibling entries around a trigger file that maximizes the fill ratio (wanted bytes / total span bytes), respecting configurable knobs.
-
-#### Scenario: High-density span selected
-- **WHEN** all siblings are tightly packed in the ZIP with no large holes
-- **THEN** all siblings within `MaxFiles` are included in the span
-
-#### Scenario: Sparse span shrinks to meet fill ratio
-- **WHEN** a large hole entry exists between two wanted siblings such that fill ratio < `FillRatioThreshold`
-- **THEN** the endpoint that creates the largest hole is removed
-- **AND** the algorithm repeats until fill ratio meets the threshold or window has one entry
-
-#### Scenario: Large directory is capped before span selection
-- **WHEN** a directory contains more files than `MaxDirectoryFiles`
-- **THEN** only the `MaxDirectoryFiles` files nearest to the trigger by `LocalHeaderOffset` are considered
-- **AND** span selection runs on this reduced candidate set
-
-#### Scenario: Span capped at MaxFiles
-- **WHEN** the candidate window after directory cap contains more than `MaxFiles` entries
-- **THEN** a centered window of `MaxFiles` around the trigger is selected before span selection
-
----
+- **WHEN** ZIP prefetch has warmed sibling files
+- **AND** those siblings are read
+- **THEN** they are served from cache (cache hit, no extraction)
 
 ### Requirement: Sequential ZIP Read With Hole Discard
-The prefetch SHALL perform a single sequential read of the selected span, decompressing wanted files and reading-but-discarding hole entries without decompressing them.
+This requirement is now implemented by `ZipPrefetchStrategy` in `Infrastructure.Archives.Zip` (moved from VFS). The behavior is unchanged: single seek to span start, linear read discarding holes, decompressing wanted entries, warming via `IFileContentCache.WarmAsync`.
 
 #### Scenario: Single seek for entire span
-- **WHEN** a prefetch plan covers N sibling files with holes between them
-- **THEN** the archive is seeked exactly once to the span start
-- **AND** all entries are processed in a single forward pass
+- **WHEN** `ZipPrefetchStrategy.PrefetchAsync` is called
+- **THEN** one `FileStream.Seek` positions to `SpanStart`
+- **AND** compressed data is read linearly until `SpanEnd`
 
 #### Scenario: Hole bytes read but not decompressed
-- **WHEN** a non-target entry (hole) lies between two wanted entries in the span
-- **THEN** its compressed bytes are read and discarded without calling any decompressor
-- **AND** stream position advances to the next entry's local header
+- **WHEN** the span contains entries not in the wanted set
+- **THEN** their compressed bytes are consumed (discarded) without decompression
 
 #### Scenario: Wanted entry decompressed and warmed
-- **WHEN** a wanted entry is reached during sequential scan
-- **THEN** its compressed bytes are read and decompressed
-- **AND** the decompressed stream is pushed into the cache via `WarmAsync`
+- **WHEN** a wanted entry's compressed data is read
+- **THEN** it is decompressed (Store or Deflate) and `WarmAsync`-ed into the cache
 
----
+### Requirement: Span Selection Algorithm
+`SpanSelector` and `PrefetchPlan` SHALL reside in `Infrastructure.Archives.Zip` (moved from Application). They use `ZipEntryInfo.LocalHeaderOffset` and `CompressedSize` from `ZipFormatMetadataStore` for span computation. The algorithm is unchanged: centered window, fill-ratio shrinking, MaxFiles cap.
 
-### Requirement: Per-Directory In-Flight Deduplication
-The system SHALL prevent duplicate concurrent sequential reads of the same directory by maintaining a per-directory in-flight guard.
+#### Scenario: High-density span selected
+- **WHEN** candidates are closely packed by offset
+- **THEN** fill ratio is high and all candidates are included
 
-#### Scenario: Second concurrent prefetch for same directory is skipped
-- **WHEN** two `ReadFile` calls for files in the same directory trigger prefetch concurrently
-- **THEN** the first prefetch proceeds with the sequential read
-- **AND** the second prefetch returns immediately without performing I/O
-- **AND** `GenericCache` thundering herd protection handles any residual concurrent `WarmAsync` calls for individual entries
+#### Scenario: Sparse span shrinks to meet fill ratio
+- **WHEN** initial window has fill ratio below threshold
+- **THEN** endpoints are removed until ratio >= threshold or only 1 entry remains
 
-#### Scenario: Guard released after prefetch completes
-- **WHEN** a prefetch for a directory completes (success or error)
-- **THEN** the in-flight guard for that directory is removed
-- **AND** a subsequent prefetch trigger for that directory can proceed
+#### Scenario: Large directory is capped before span selection
+- **WHEN** directory has more files than `MaxDirectoryFiles`
+- **THEN** only the `MaxDirectoryFiles` nearest by offset to the trigger are considered
 
----
-
-### Requirement: Prefetch Configuration
-All prefetch behavior SHALL be configurable via `PrefetchOptions` bound from the `Cache:Prefetch` configuration subsection, with defaults that are safe for production use.
-
-#### Scenario: Prefetch disabled by config
-- **WHEN** `Cache:Prefetch:Enabled` is set to `false`
-- **THEN** no prefetch is triggered on any `ReadFileAsync` or `FindFilesAsync` call
-
-#### Scenario: File size threshold filters large files
-- **WHEN** a sibling file's uncompressed size exceeds `FileSizeThresholdMb`
-- **THEN** that sibling is excluded from prefetch candidates
-
-#### Scenario: Default configuration is safe
-- **WHEN** no prefetch config is specified
-- **THEN** defaults are: `Enabled=false`, `OnRead=true`, `OnListDirectory=false`, `FileSizeThresholdMb=10`, `MaxFiles=20`, `MaxDirectoryFiles=300`, `FillRatioThreshold=0.80`
-
-#### Scenario: Enabling prefetch activates read-triggered prefetch immediately
-- **WHEN** only `Cache:Prefetch:Enabled` is set to `true` (no other overrides)
-- **THEN** read-triggered prefetch is active (because `OnRead` defaults to `true`)
-- **AND** list-triggered prefetch remains inactive (because `OnListDirectory` defaults to `false`)
-
----
-
-### Requirement: Prefetch Telemetry
-The system SHALL emit metrics for prefetch operations to enable observability.
-
-#### Scenario: Prefetch metrics emitted
-- **WHEN** a prefetch operation completes
-- **THEN** counters are incremented for files warmed and bytes read
-- **AND** a histogram records the span read duration
-- **AND** skipped-due-to-in-flight events are counted separately
-
+#### Scenario: Span capped at MaxFiles
+- **WHEN** candidates exceed `MaxFiles`
+- **THEN** the centered window contains at most `MaxFiles` entries

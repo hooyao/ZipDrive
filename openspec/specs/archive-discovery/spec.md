@@ -1,117 +1,49 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Discover ZIP files in a directory tree
-
-`IArchiveDiscovery.DiscoverAsync` SHALL scan a root directory recursively up to a configurable maximum depth, finding all files with a `.zip` extension. Discovery SHALL be a one-time operation performed at mount time.
+The system SHALL discover all supported archive formats (not just ZIP) in a directory tree. It SHALL iterate `IFormatRegistry.SupportedExtensions` and enumerate files matching each extension pattern. Each discovered file SHALL have its format detected via `IFormatRegistry.DetectFormat(filePath)`.
 
 #### Scenario: Discover ZIPs at root level (depth=1)
+- **WHEN** root directory contains `a.zip` and `b.zip`
+- **THEN** both are returned as `ArchiveDescriptor` with `FormatId == "zip"`
 
-- **WHEN** `DiscoverAsync("D:\Archives", maxDepth: 1)` is called
-- **AND** `D:\Archives` contains `backup.zip` and subdirectory `games/`
-- **THEN** the result contains `ArchiveDescriptor { VirtualPath="backup.zip" }`
-- **AND** the result does NOT contain any ZIPs from `games/` subdirectory
+#### Scenario: Discover RARs at root level
+- **WHEN** root directory contains `a.rar` and `b.rar`
+- **THEN** both are returned as `ArchiveDescriptor` with `FormatId == "rar"`
+
+#### Scenario: Discover mixed formats
+- **WHEN** root directory contains `a.zip`, `b.rar`, and `c.txt`
+- **THEN** `a.zip` (FormatId=zip) and `b.rar` (FormatId=rar) are returned
+- **AND** `c.txt` is not returned
 
 #### Scenario: Discover ZIPs in subdirectories (depth=2)
-
-- **WHEN** `DiscoverAsync("D:\Archives", maxDepth: 2)` is called
-- **AND** `D:\Archives\games\` contains `doom.zip`
-- **THEN** the result contains `ArchiveDescriptor { VirtualPath="games/doom.zip" }`
+- **WHEN** root directory contains `sub/a.zip` and `sub/b.rar`
+- **THEN** both are returned with correct format IDs and virtual paths preserving directory structure
 
 #### Scenario: Depth limit is respected
-
-- **WHEN** `DiscoverAsync("D:\Archives", maxDepth: 1)` is called
-- **AND** `D:\Archives\games\retro\` contains `duke.zip` (depth 2)
-- **THEN** the result does NOT contain `duke.zip`
+- **WHEN** max depth is 1 and `sub/deep/a.rar` exists at depth 2
+- **THEN** `a.rar` is NOT returned
 
 #### Scenario: Empty directory returns empty list
-
-- **WHEN** `DiscoverAsync("D:\EmptyDir", maxDepth: 6)` is called
-- **AND** the directory contains no ZIP files at any depth
-- **THEN** the result is an empty list
-
----
-
-### Requirement: Maximum depth constraint
-
-The `maxDepth` parameter SHALL be clamped to the range 1-6 inclusive. Values outside this range SHALL be clamped without error.
-
-#### Scenario: Depth clamped to minimum
-
-- **WHEN** `DiscoverAsync(root, maxDepth: 0)` is called
-- **THEN** the effective depth is 1 (immediate children only)
-
-#### Scenario: Depth clamped to maximum
-
-- **WHEN** `DiscoverAsync(root, maxDepth: 100)` is called
-- **THEN** the effective depth is 6
-
-#### Scenario: Default depth
-
-- **WHEN** `DiscoverAsync(root)` is called without specifying `maxDepth`
-- **THEN** the default depth of 6 is used
-
----
-
-### Requirement: Virtual path preserves directory structure
-
-Each `ArchiveDescriptor` produced by discovery SHALL have a `VirtualPath` that is the ZIP file's path relative to the root directory, using forward slashes.
-
-#### Scenario: Root-level ZIP
-
-- **WHEN** root is `"D:\Archives"` and `"D:\Archives\backup.zip"` is found
-- **THEN** `VirtualPath` is `"backup.zip"`
-
-#### Scenario: Nested ZIP
-
-- **WHEN** root is `"D:\Archives"` and `"D:\Archives\games\retro\duke.zip"` is found
-- **THEN** `VirtualPath` is `"games/retro/duke.zip"`
-
-#### Scenario: Virtual path uses forward slashes on all platforms
-
-- **WHEN** running on Windows where physical path uses backslashes
-- **THEN** `VirtualPath` still uses forward slashes (e.g., `"games/doom.zip"` not `"games\doom.zip"`)
-
----
+- **WHEN** root directory has no supported archive files
+- **THEN** an empty list is returned
 
 ### Requirement: ArchiveDescriptor metadata
-
-Each discovered archive SHALL produce an `ArchiveDescriptor` containing the virtual path, absolute physical path, file size in bytes, and last modified time in UTC.
+`ArchiveDescriptor` SHALL include `FormatId` (string, required) in addition to existing fields. The `FormatId` SHALL be set by `IFormatRegistry.DetectFormat(filePath)` during discovery.
 
 #### Scenario: Descriptor contains correct metadata
+- **WHEN** a `.rar` file is discovered
+- **THEN** its `ArchiveDescriptor` has `FormatId == "rar"`, correct `VirtualPath`, `PhysicalPath`, `SizeBytes`, and `LastModifiedUtc`
 
-- **WHEN** `"D:\Archives\games\doom.zip"` is discovered
-- **AND** the file is 50 MB and last modified 2025-01-15T10:30:00Z
-- **THEN** the descriptor has `PhysicalPath = "D:\Archives\games\doom.zip"`
-- **AND** `SizeBytes = 52428800`
-- **AND** `LastModifiedUtc = 2025-01-15T10:30:00Z`
+## ADDED Requirements
 
----
+### Requirement: DescribeFile sets FormatId for dynamic reload
+`ArchiveDiscovery.DescribeFile(rootPath, filePath)` SHALL call `IFormatRegistry.DetectFormat(filePath)` and return null if the format is unrecognized. The returned `ArchiveDescriptor` SHALL include the detected `FormatId`.
 
-### Requirement: Graceful handling of inaccessible files
+#### Scenario: DescribeFile for RAR file
+- **WHEN** `DescribeFile` is called with a `.rar` file
+- **THEN** the returned descriptor has `FormatId == "rar"`
 
-Discovery SHALL skip ZIP files that cannot be accessed (permission denied, locked by another process) and continue scanning. A warning SHALL be logged for each skipped file.
-
-#### Scenario: Inaccessible ZIP is skipped
-
-- **WHEN** `"D:\Archives\locked.zip"` exists but is locked by another process
-- **AND** `"D:\Archives\readable.zip"` is accessible
-- **THEN** the result contains only the descriptor for `readable.zip`
-- **AND** a warning is logged for `locked.zip`
-
-#### Scenario: Non-existent root directory
-
-- **WHEN** `DiscoverAsync("D:\NonExistent", maxDepth: 6)` is called
-- **AND** the directory does not exist
-- **THEN** a `DirectoryNotFoundException` is thrown
-
----
-
-### Requirement: Cancellation support
-
-`DiscoverAsync` SHALL respect the `CancellationToken` parameter and abort discovery promptly when cancellation is requested.
-
-#### Scenario: Cancellation during discovery
-
-- **WHEN** cancellation is requested while scanning a directory tree
-- **THEN** `OperationCanceledException` is thrown
-- **AND** any partial results are discarded
+#### Scenario: DescribeFile for unsupported extension
+- **WHEN** `DescribeFile` is called with a `.7z` file (no provider registered)
+- **THEN** null is returned
