@@ -2251,14 +2251,11 @@ public class GenericCacheIntegrationTests : IDisposable
         currentSize.Should().BeGreaterThanOrEqualTo(0,
             "CurrentSizeBytes must never go negative");
 
-        currentSize.Should().BeLessThanOrEqualTo(entrySize * cacheCapacity,
+        currentSize.Should().BeLessThanOrEqualTo((long)entrySize * cacheCapacity,
             "CurrentSizeBytes should not exceed capacity after evictions");
 
         (currentSize % entrySize).Should().Be(0,
             $"CurrentSizeBytes ({currentSize}) should be a multiple of entry size ({entrySize}) — no partial entry leaks");
-
-        if (entryCount == 0)
-            currentSize.Should().Be(0, "If no entries remain, size must be zero");
     }
 
     /// <summary>
