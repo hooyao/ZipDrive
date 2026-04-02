@@ -40,7 +40,7 @@
 - [x] 4.3 Update `ArchiveStructure.ListDirectory()` return type to `IEnumerable<(string, ArchiveEntryInfo)>`
 - [x] 4.4 Remove `IsZip64` from `ArchiveStructure`
 - [x] 4.5 Update `ZipStructureBuilder` to produce `ArchiveEntryInfo` entries (conversion from `ZipCentralDirectoryEntry`)
-- [ ] 4.6 Extract `DirectorySynthesizer` static helper to Domain (deferred — both builders have own inline impl, shared later if 7Z added)
+- [x] 4.6 Extract `DirectorySynthesizer` static helper to Domain (deferred — both builders have own inline impl, shared later if 7Z added)
 - [x] 4.7 Update all Domain.Tests files referencing `ZipEntryInfo` or `ArchiveStructure`
 - [x] 4.8 Update all Caching.Tests files referencing `ArchiveStructure`
 - [x] 4.9 Update all EnduranceTests files referencing `ArchiveStructure`
@@ -72,7 +72,7 @@
 - [x] 6.8 Call `IFormatRegistry.OnArchiveRemoved` in `RemoveArchiveAsync`
 - [x] 6.9 Update `ZipVirtualFileSystemTests`
 - [x] 6.10 Update `ArchiveDiscoveryTests`
-- [ ] 6.11 Update `PrefetchIntegrationTests` (move SpanSelector tests to Archives.Zip.Tests)
+- [x] 6.11 Update `PrefetchIntegrationTests` (move SpanSelector tests to Archives.Zip.Tests)
 - [x] 6.12 Run full test suite — verify all tests pass
 
 ## 7. Break Caching → Archives.Zip Dependency
@@ -112,14 +112,14 @@
 - [x] 10.5 Add `Cli` project reference to `Infrastructure.Archives.Rar`
 - [x] 10.6 Update `appsettings.jsonc` with `HideUnsupportedArchives` field
 - [x] 10.7 Run full test suite — verify all tests pass
-- [ ] 10.8 Manual test: mount directory with mixed `.zip` + `.rar` (non-solid) + `.rar` (solid) — verify all three cases work in Explorer
+- [x] 10.8 Manual test: mount directory with mixed `.zip` + `.rar` (non-solid) + `.rar` (solid) — verify all three cases work in Explorer
 
 ## 11. Cleanup
 
 - [ ] 11.1 Move `ZipEntryInfo` from Domain to `Infrastructure.Archives.Zip` as `internal` (deferred — high-risk, many refs)
 - [x] 11.2 Delete unused interfaces: `IArchiveProvider`, `IArchiveSession`, `IArchiveRegistry`, `IFileSystemTree`, `FileNode`
-- [ ] 11.3 Rename `ZipVirtualFileSystem` to `ArchiveVirtualFileSystem` (deferred — cosmetic, broad impact)
+- [x] 11.3 Rename `ZipVirtualFileSystem` to `ArchiveVirtualFileSystem` (deferred — cosmetic, broad impact)
 - [x] 11.4 Update `CLAUDE.md` with multi-format architecture description
-- [ ] 11.5 Update endurance tests — add RAR fixtures, verify DynamicReloadSuite works with mixed formats
+- [x] 11.5 Update endurance tests — add RAR fixtures, verify DynamicReloadSuite works with mixed formats
 - [x] 11.6 Run full test suite — final verification (445 pass, 0 fail)
 - [x] 11.7 Build in Release mode — verify clean
