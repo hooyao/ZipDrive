@@ -41,7 +41,12 @@
 
     // When true, the mounted drive's volume label shows the archive directory folder name
     // (e.g., "D:\my-zips" → "my-zips"). When false, the label is "ZipDrive".
-    "UseFolderNameAsVolumeLabel": false
+    "UseFolderNameAsVolumeLabel": false,
+
+    // When true, unsupported archives (e.g., solid RAR) are hidden from the virtual drive.
+    // A warning is logged for each filtered archive.
+    // When false (default), they appear as "name (NOT SUPPORTED)" with a warning file inside.
+    "HideUnsupportedArchives": false
   },
 
   // Two-tier cache: small files in memory, large files on disk (memory-mapped).

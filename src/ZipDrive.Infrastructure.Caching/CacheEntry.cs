@@ -42,6 +42,13 @@ internal sealed class CacheEntry : ICacheEntry
     private volatile bool _orphaned;
 
     /// <summary>
+    /// Set to 1 when storage has been disposed (or queued for disposal).
+    /// BorrowAsync checks this after IncrementRefCount to detect a race
+    /// where the evictor disposed storage between TryGetValue and IncrementRefCount.
+    /// </summary>
+    private int _storageDisposed;
+
+    /// <summary>
     /// Gets the current reference count. Thread-safe read.
     /// </summary>
     public int RefCount => Volatile.Read(ref _refCount);
@@ -92,6 +99,16 @@ internal sealed class CacheEntry : ICacheEntry
     /// Marks this entry as orphaned. Called by TryRemove when RefCount > 0.
     /// </summary>
     public void MarkOrphaned() => _orphaned = true;
+
+    /// <summary>
+    /// Marks storage as disposed. Returns true if this call set the flag (first caller wins).
+    /// </summary>
+    public bool TryMarkStorageDisposed() => Interlocked.CompareExchange(ref _storageDisposed, 1, 0) == 0;
+
+    /// <summary>
+    /// True if storage has been disposed (or queued for disposal).
+    /// </summary>
+    public bool IsStorageDisposed => Volatile.Read(ref _storageDisposed) == 1;
 
     /// <summary>
     /// Gets the expiration timestamp for this entry.

@@ -40,7 +40,7 @@ public class GenericCacheTryRemoveTests : IDisposable
         cache.ContainsKey("key1").Should().BeFalse();
         cache.CurrentSizeBytes.Should().Be(sizeBefore - data.Length);
         cache.EntryCount.Should().Be(0);
-        // Memory tier: cleanup is immediate (Dispose is no-op, byte[] released to GC)
+        // Memory tier: cleanup is immediate (RequiresAsyncCleanup=false)
         cache.PendingCleanupCount.Should().Be(0);
     }
 
@@ -93,8 +93,7 @@ public class GenericCacheTryRemoveTests : IDisposable
         // Dispose handle — triggers orphan cleanup
         handle.Dispose();
 
-        // Memory tier: orphan cleanup is immediate (Dispose is no-op)
-        // For disk tier, this would enqueue to _pendingCleanup instead
+        // Memory tier: orphan cleanup is immediate (RequiresAsyncCleanup=false)
         cache.PendingCleanupCount.Should().Be(cleanupBefore);
     }
 

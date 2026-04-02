@@ -2,7 +2,8 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
-using ZipDrive.Infrastructure.Archives.Zip;
+using ZipDrive.Domain.Abstractions;
+using ZipDrive.Domain.Models;
 
 namespace ZipDrive.Infrastructure.Caching.Tests;
 
@@ -18,7 +19,7 @@ public class FileContentCacheRemoveArchiveTests : IDisposable
     public FileContentCacheRemoveArchiveTests()
     {
         _cache = new FileContentCache(
-            new StubZipReaderFactory(),
+            new StubFormatRegistry(new StubExtractor()),
             Options.Create(new CacheOptions
             {
                 MemoryCacheSizeMb = 100,
@@ -107,7 +108,7 @@ public class FileContentCacheRemoveArchiveTests : IDisposable
                 {
                     ArchiveKey = "game.zip",
                     AbsolutePath = "C:\\test\\game.zip",
-                    Entries = new KTrie.TrieDictionary<Domain.Models.ZipEntryInfo>(),
+                    Entries = new KTrie.TrieDictionary<Domain.Models.ArchiveEntryInfo>(),
                     BuiltAt = _fakeTime.GetUtcNow()
                 },
                 SizeBytes = 1024
@@ -138,12 +139,9 @@ public class FileContentCacheRemoveArchiveTests : IDisposable
     private async Task WarmEntry(string cacheKey, int size)
     {
         byte[] data = new byte[size];
-        var entry = new Domain.Models.ZipEntryInfo
+        var entry = new Domain.Models.ArchiveEntryInfo
         {
-            LocalHeaderOffset = 0,
-            CompressedSize = size,
             UncompressedSize = size,
-            CompressionMethod = 0,
             IsDirectory = false,
             LastModified = DateTime.UtcNow,
             Attributes = System.IO.FileAttributes.Normal
@@ -153,11 +151,24 @@ public class FileContentCacheRemoveArchiveTests : IDisposable
     }
 
     /// <summary>
-    /// Minimal stub that is never actually called (WarmAsync bypasses the reader).
+    /// Minimal stub that is never actually called (WarmAsync bypasses the extractor).
     /// </summary>
-    private sealed class StubZipReaderFactory : IZipReaderFactory
+    private sealed class StubExtractor : IArchiveEntryExtractor
     {
-        public IZipReader Create(string archivePath) =>
-            throw new NotSupportedException("StubZipReaderFactory should not be called in warm-only tests");
+        public string FormatId => "zip";
+        public Task<ExtractionResult> ExtractAsync(string archiveKey, string archivePath, string internalPath, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("StubExtractor should not be called in warm-only tests");
+    }
+
+    private sealed class StubFormatRegistry : IFormatRegistry
+    {
+        private readonly IArchiveEntryExtractor _extractor;
+        public StubFormatRegistry(IArchiveEntryExtractor extractor) => _extractor = extractor;
+        public IArchiveStructureBuilder GetStructureBuilder(string f) => throw new NotImplementedException();
+        public IArchiveEntryExtractor GetExtractor(string f) => _extractor;
+        public IPrefetchStrategy? GetPrefetchStrategy(string f) => null;
+        public string? DetectFormat(string p) => null;
+        public IReadOnlyList<string> SupportedExtensions => [];
+        public void OnArchiveRemoved(string k) { }
     }
 }

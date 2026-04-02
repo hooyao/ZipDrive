@@ -124,19 +124,43 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
             // ═══════════════════════════════════════════════════════════════════
             if (_cache.TryGetValue(cacheKey, out CacheEntry? existingEntry) && !IsExpired(existingEntry))
             {
-                // Increment RefCount BEFORE returning handle (protects from eviction)
+                // Increment RefCount BEFORE returning handle (protects from eviction).
                 existingEntry.IncrementRefCount();
-                existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
-                existingEntry.AccessCount++;
-                Interlocked.Increment(ref _hits);
 
-                CacheTelemetry.Hits.Add(1, _tierTag);
-                borrowActivity?.SetTag("result", "hit");
+                // RACE GUARD: Between TryGetValue and IncrementRefCount, the evictor
+                // may have removed this entry and disposed/queued its storage (zeroing
+                // the underlying byte array). Check the IsStorageDisposed flag which
+                // the evictor sets atomically via TryMarkStorageDisposed before disposal.
+                if (existingEntry.IsStorageDisposed)
+                {
+                    // Storage already disposed — data is stale/zeroed.
+                    // Decrement (may trigger orphan cleanup) and fall through to miss path.
+                    existingEntry.DecrementRefCount();
+                }
+                else
+                {
+                    existingEntry.LastAccessedAt = _timeProvider.GetUtcNow();
+                    existingEntry.AccessCount++;
+                    Interlocked.Increment(ref _hits);
 
-                _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
+                    CacheTelemetry.Hits.Add(1, _tierTag);
+                    borrowActivity?.SetTag("result", "hit");
 
-                T value = _storageStrategy.Retrieve(existingEntry.Stored);
-                return new CacheHandle<T>(existingEntry, value, Return);
+                    _logger.LogDebug("Cache HIT: {Key} (RefCount={RefCount})", cacheKey, existingEntry.RefCount);
+
+                    try
+                    {
+                        T value = _storageStrategy.Retrieve(existingEntry.Stored);
+                        return new CacheHandle<T>(existingEntry, value, Return);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        // Disk tier: backing file was deleted by eviction cleanup
+                        // between our TryGetValue and Retrieve. Fall through to miss path.
+                        existingEntry.DecrementRefCount();
+                        _logger.LogDebug("Cache HIT but storage gone: {Key}, falling to miss", cacheKey);
+                    }
+                }
             }
 
             // ═══════════════════════════════════════════════════════════════════
@@ -149,25 +173,57 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
             _logger.LogDebug("Cache MISS: {Key}", cacheKey);
 
-            Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
-                new Lazy<Task<CacheEntry>>(
-                    () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
-                    LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
-
-            try
+            // Retry loop: if storage is evicted between materialization and
+            // our IncrementRefCount, fall back to a fresh materialization.
+            // Bounded in practice — eviction only targets RefCount=0 entries
+            // and the new materialization's temp hold prevents re-eviction.
+            while (true)
             {
-                CacheEntry entry = await lazy.Value.ConfigureAwait(false);
+                Lazy<Task<CacheEntry>> lazy = _materializationTasks.GetOrAdd(cacheKey, _ =>
+                    new Lazy<Task<CacheEntry>>(
+                        () => MaterializeAndCacheAsync(cacheKey, ttl, factory, cancellationToken),
+                        LazyThreadSafetyMode.ExecutionAndPublication)); // Critical: Only one execution!
 
-                // Increment RefCount for each borrower (thundering herd: all get handles)
-                entry.IncrementRefCount();
+                try
+                {
+                    CacheEntry entry = await lazy.Value.ConfigureAwait(false);
 
-                T value = _storageStrategy.Retrieve(entry.Stored);
-                return new CacheHandle<T>(entry, value, Return);
-            }
-            finally
-            {
-                // Clean up the lazy task to prevent memory leaks
-                _materializationTasks.TryRemove(cacheKey, out _);
+                    // Increment RefCount for each borrower (thundering herd: all get handles)
+                    entry.IncrementRefCount();
+
+                    // LAYER 5 GUARD (mirrors Layer 1 path):
+                    // Between MaterializeAndCacheAsync releasing the temporary RefCount hold
+                    // and this IncrementRefCount, the evictor may have removed the entry and
+                    // disposed its storage. This window is especially real for waiters whose
+                    // continuations are scheduled asynchronously via the thread pool.
+                    if (entry.IsStorageDisposed)
+                    {
+                        entry.DecrementRefCount();
+                        _logger.LogDebug("Cache MISS materialized but storage already gone: {Key}, retrying", cacheKey);
+                        continue;
+                    }
+
+                    try
+                    {
+                        T value = _storageStrategy.Retrieve(entry.Stored);
+                        return new CacheHandle<T>(entry, value, Return);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        // Disk tier: backing file deleted by eviction between
+                        // IncrementRefCount and Retrieve. Retry with fresh materialization.
+                        entry.DecrementRefCount();
+                        _logger.LogDebug("Cache MISS materialized but storage gone (FNFE): {Key}, retrying", cacheKey);
+                        continue;
+                    }
+                }
+                finally
+                {
+                    // Clean up the lazy task to prevent memory leaks.
+                    // On retry (continue), this removes the stale Lazy so the next
+                    // iteration's GetOrAdd creates a fresh one.
+                    _materializationTasks.TryRemove(cacheKey, out _);
+                }
             }
         }
     }
@@ -184,7 +240,7 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
 
         // If entry was removed while borrowed, clean up after last handle returns.
         // Exactly one thread sees newRefCount == 0 (Interlocked.Decrement guarantee).
-        if (newRefCount == 0 && entry.IsOrphaned)
+        if (newRefCount == 0 && entry.IsOrphaned && entry.TryMarkStorageDisposed())
         {
             if (_storageStrategy.RequiresAsyncCleanup)
                 _pendingCleanup.Enqueue(entry.Stored);
@@ -436,13 +492,14 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
                 removed.MarkOrphaned();
                 _logger.LogDebug("Evicted entry borrowed concurrently, marked orphaned: {Key}", key);
             }
-            else if (_storageStrategy.RequiresAsyncCleanup)
+            else if (removed.TryMarkStorageDisposed())
             {
-                _pendingCleanup.Enqueue(removed.Stored);
-            }
-            else
-            {
-                _storageStrategy.Dispose(removed.Stored);
+                // Mark disposed BEFORE actual disposal — BorrowAsync checks this flag
+                // after IncrementRefCount to detect the race window.
+                if (_storageStrategy.RequiresAsyncCleanup)
+                    _pendingCleanup.Enqueue(removed.Stored);
+                else
+                    _storageStrategy.Dispose(removed.Stored);
             }
 
             _logger.LogInformation(
@@ -725,14 +782,14 @@ public sealed class GenericCache<T> : ICache<T>, ICacheMetricsSource
         // For strategies NOT requiring async cleanup (memory tier): dispose immediately
         // since Dispose is a no-op (byte[] released to GC). Deferring memory-tier
         // entries causes unbounded queue growth and memory pressure under rapid churn.
-        if (removed.RefCount == 0)
+        if (removed.RefCount == 0 && removed.TryMarkStorageDisposed())
         {
             if (_storageStrategy.RequiresAsyncCleanup)
                 _pendingCleanup.Enqueue(removed.Stored);
             else
                 _storageStrategy.Dispose(removed.Stored);
         }
-        else
+        else if (removed.RefCount > 0)
         {
             // Active borrows exist — mark as orphaned.
             // Cleanup happens in Return() when last handle is disposed.

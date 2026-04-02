@@ -108,6 +108,11 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
         string actual = Convert.ToHexStringLower(SHA256.HashData(data.AsSpan(0, length)));
         if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
         {
+            // Diagnostic: capture data fingerprint for root-cause analysis
+            string first16 = length >= 16 ? Convert.ToHexString(data, 0, 16) : Convert.ToHexString(data, 0, length);
+            string last16 = length >= 16 ? Convert.ToHexString(data, length - 16, 16) : "";
+            bool allZeros = data.AsSpan(0, Math.Min(length, 256)).IndexOfAnyExcept((byte)0) == -1;
+
             ReportFailure(new EnduranceFailure
             {
                 Suite = Name,
@@ -115,7 +120,7 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
                 Workload = workload,
                 Elapsed = RunStopwatch.Elapsed,
                 FilePath = $"{archivePath}/{fileName}",
-                Operation = $"ReadFileAsync(offset=0, length={length})",
+                Operation = $"ReadFileAsync(offset=0, length={length}, expectedSize={entry.UncompressedSize}, allZeros={allZeros}, first16={first16}, last16={last16})",
                 ExpectedHash = entry.Sha256,
                 ActualHash = actual,
                 SampleDescription = "full-file",

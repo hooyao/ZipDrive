@@ -12,10 +12,12 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
     private const int MinDepth = 1;
     private const int MaxDepth = 6;
 
+    private readonly IFormatRegistry _formatRegistry;
     private readonly ILogger<ArchiveDiscovery> _logger;
 
-    public ArchiveDiscovery(ILogger<ArchiveDiscovery> logger)
+    public ArchiveDiscovery(IFormatRegistry formatRegistry, ILogger<ArchiveDiscovery> logger)
     {
+        _formatRegistry = formatRegistry;
         _logger = logger;
     }
 
@@ -36,13 +38,13 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
         int clampedDepth = Math.Clamp(maxDepth, MinDepth, MaxDepth);
 
         _logger.LogInformation(
-            "Discovering ZIP files under {RootPath} with depth {Depth}",
+            "Discovering archive files under {RootPath} with depth {Depth}",
             rootPath, clampedDepth);
 
         List<ArchiveDescriptor> results = new();
         ScanDirectory(rootPath, rootPath, clampedDepth, 0, results, cancellationToken);
 
-        _logger.LogInformation("Discovered {Count} ZIP files", results.Count);
+        _logger.LogInformation("Discovered {Count} archive files", results.Count);
 
         return Task.FromResult<IReadOnlyList<ArchiveDescriptor>>(results);
     }
@@ -52,6 +54,10 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
     {
         try
         {
+            string? formatId = _formatRegistry.DetectFormat(filePath);
+            if (formatId == null)
+                return null;
+
             FileInfo fileInfo = new(filePath);
             if (!fileInfo.Exists)
                 return null;
@@ -63,12 +69,13 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
                 VirtualPath = virtualPath,
                 PhysicalPath = Path.GetFullPath(filePath),
                 SizeBytes = fileInfo.Length,
-                LastModifiedUtc = fileInfo.LastWriteTimeUtc
+                LastModifiedUtc = fileInfo.LastWriteTimeUtc,
+                FormatId = formatId
             };
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
-            _logger.LogWarning(ex, "Cannot access file for descriptor: {Path}", filePath);
+            _logger.LogWarning(ex, "Cannot access archive file for descriptor: {Path}", filePath);
             return null;
         }
     }
@@ -88,29 +95,33 @@ public sealed class ArchiveDiscovery : IArchiveDiscovery
 
         try
         {
-            // Find ZIP files in current directory
-            foreach (string filePath in Directory.EnumerateFiles(currentPath, "*.zip"))
+            // Find archive files in current directory (all registered formats)
+            foreach (string ext in _formatRegistry.SupportedExtensions)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                try
+                foreach (string filePath in Directory.EnumerateFiles(currentPath, $"*{ext}"))
                 {
-                    FileInfo fileInfo = new(filePath);
-                    string relativePath = Path.GetRelativePath(rootPath, filePath);
-                    // Normalize to forward slashes
-                    string virtualPath = relativePath.Replace('\\', '/');
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                    results.Add(new ArchiveDescriptor
+                    try
                     {
-                        VirtualPath = virtualPath,
-                        PhysicalPath = filePath,
-                        SizeBytes = fileInfo.Length,
-                        LastModifiedUtc = fileInfo.LastWriteTimeUtc
-                    });
-                }
-                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
-                {
-                    _logger.LogWarning(ex, "Skipping inaccessible ZIP file: {Path}", filePath);
+                        FileInfo fileInfo = new(filePath);
+                        string relativePath = Path.GetRelativePath(rootPath, filePath);
+                        // Normalize to forward slashes
+                        string virtualPath = relativePath.Replace('\\', '/');
+
+                        results.Add(new ArchiveDescriptor
+                        {
+                            VirtualPath = virtualPath,
+                            PhysicalPath = filePath,
+                            SizeBytes = fileInfo.Length,
+                            LastModifiedUtc = fileInfo.LastWriteTimeUtc,
+                            FormatId = _formatRegistry.DetectFormat(filePath) ?? "zip"
+                        });
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+                    {
+                        _logger.LogWarning(ex, "Skipping inaccessible archive file: {Path}", filePath);
+                    }
                 }
             }
 

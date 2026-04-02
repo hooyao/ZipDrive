@@ -21,7 +21,7 @@ namespace ZipDrive.Domain.Tests;
 public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
 {
     private readonly string _tempRoot;
-    private ZipVirtualFileSystem _vfs = null!;
+    private ArchiveVirtualFileSystem _vfs = null!;
     private FileContentCache _fileCache = null!;
 
     public PrefetchIntegrationTests()
@@ -46,8 +46,18 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
         // Build VFS with prefetch ENABLED
         var archiveTrie = new ArchiveTrie(CaseInsensitiveCharComparer.Instance);
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var readerFactory = new ZipReaderFactory();
+
+        var metadataStore = new ZipFormatMetadataStore();
+        var encodingDetector = new FilenameEncodingDetector(
+            Options.Create(new MountSettings()),
+            NullLogger<FilenameEncodingDetector>.Instance);
+        var zipBuilder = new ZipStructureBuilder(readerFactory, encodingDetector, metadataStore,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var zipExtractor = new ZipEntryExtractor(readerFactory, metadataStore);
+        var prefetchStrategy = new ZipPrefetchStrategy(metadataStore, NullLogger<ZipPrefetchStrategy>.Instance);
+        var formatRegistry = new FormatRegistry([zipBuilder], [zipExtractor], [prefetchStrategy]);
+        var discovery = new ArchiveDiscovery(formatRegistry, NullLogger<ArchiveDiscovery>.Instance);
 
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
@@ -57,15 +67,12 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
             DiskCacheSizeMb = 64,
             SmallFileCutoffMb = 10
         });
-        var encodingDetector = new FilenameEncodingDetector(
-            Options.Create(new MountSettings()),
-            NullLogger<FilenameEncodingDetector>.Instance);
         var structureCache = new ArchiveStructureCache(
-            structureStore, readerFactory,
-            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
-
+            structureStore, formatRegistry,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
         _fileCache = new FileContentCache(
-            readerFactory, cacheOpts,
+            formatRegistry,
+            cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
 
@@ -80,13 +87,14 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
             FillRatioThreshold = 0.80
         });
 
-        _vfs = new ZipVirtualFileSystem(
+        _vfs = new ArchiveVirtualFileSystem(
             archiveTrie, structureCache, _fileCache,
             discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            formatRegistry,
             Options.Create(new MountSettings()),
             prefetchOpts,
-            NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
 
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 3 });
     }
@@ -117,26 +125,33 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
         // Build a separate VFS with prefetch disabled
         var archiveTrie = new ArchiveTrie(CaseInsensitiveCharComparer.Instance);
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var readerFactory = new ZipReaderFactory();
+
+        var metadataStore2 = new ZipFormatMetadataStore();
+        var encodingDetector = new FilenameEncodingDetector(
+            Options.Create(new MountSettings()), NullLogger<FilenameEncodingDetector>.Instance);
+        var zipBuilder2 = new ZipStructureBuilder(readerFactory, encodingDetector, metadataStore2,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var zipExtractor2 = new ZipEntryExtractor(readerFactory, metadataStore2);
+        var formatRegistry2 = new FormatRegistry([zipBuilder2], [zipExtractor2], Array.Empty<IPrefetchStrategy>());
+        var discovery = new ArchiveDiscovery(formatRegistry2, NullLogger<ArchiveDiscovery>.Instance);
 
         var structureStore = new ArchiveStructureStore(
             new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
         var cacheOpts = Options.Create(new CacheOptions { MemoryCacheSizeMb = 64, DiskCacheSizeMb = 64 });
-        var encodingDetector = new FilenameEncodingDetector(
-            Options.Create(new MountSettings()), NullLogger<FilenameEncodingDetector>.Instance);
         var structureCache = new ArchiveStructureCache(
-            structureStore, readerFactory, TimeProvider.System, cacheOpts,
-            NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
+            structureStore, formatRegistry2, TimeProvider.System, cacheOpts,
+            NullLogger<ArchiveStructureCache>.Instance);
         var fileCache = new FileContentCache(
-            readerFactory, cacheOpts, new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+            formatRegistry2, cacheOpts, new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
 
-        var vfs = new ZipVirtualFileSystem(
+        var vfs = new ArchiveVirtualFileSystem(
             archiveTrie, structureCache, fileCache, discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            formatRegistry2,
             Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
-            NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
 
         await vfs.MountAsync(new VfsMountOptions { RootPath = _tempRoot, MaxDiscoveryDepth = 3 });
 
@@ -205,12 +220,9 @@ public sealed class PrefetchIntegrationTests : IAsyncLifetime, IDisposable
     {
         // Manually warm a stream and verify ReadAsync returns that content
         byte[] expectedData = Encoding.ASCII.GetBytes(new string('Z', 200));
-        var entry = new ZipEntryInfo
+        var entry = new ArchiveEntryInfo
         {
-            LocalHeaderOffset = 0,
-            CompressedSize = expectedData.Length,
             UncompressedSize = expectedData.Length,
-            CompressionMethod = 0,
             IsDirectory = false,
             LastModified = DateTime.UtcNow,
             Attributes = FileAttributes.Normal

@@ -86,7 +86,9 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
             Interlocked.Increment(ref Result.TotalOperations);
         }
 
-        if (offset > 0)
+        // Only verify if we read the entire file. Partial reads happen when
+        // the cancellation token fires mid-sequence (test duration expired).
+        if (offset == file.size)
             VerifyFullFile(archivePath, file.name, fullContent, (int)offset,
                 $"SequentialReader{chunkSize / 1024}K", taskId);
     }

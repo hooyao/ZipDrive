@@ -13,8 +13,10 @@ public interface IFileContentCache
     /// Reads decompressed bytes from an archive entry at the given offset into the buffer.
     /// On cache miss, extracts and caches the entry. On cache hit, reads from cache.
     /// </summary>
-    /// <param name="archivePath">Absolute path to the ZIP archive file.</param>
-    /// <param name="entry">Entry metadata from the structure cache.</param>
+    /// <param name="archivePath">Absolute path to the archive file.</param>
+    /// <param name="formatId">Archive format identifier (e.g., "zip", "rar") used to resolve the correct extractor.</param>
+    /// <param name="entry">Format-agnostic entry metadata from the structure cache.</param>
+    /// <param name="internalPath">Entry path within the archive (forward slashes, no leading /).</param>
     /// <param name="cacheKey">Unique cache key for this entry.</param>
     /// <param name="buffer">Output buffer to write decompressed bytes into.</param>
     /// <param name="offset">Byte offset within the decompressed file to start reading from.</param>
@@ -22,7 +24,9 @@ public interface IFileContentCache
     /// <returns>Number of bytes actually read (0 if offset is at or beyond EOF).</returns>
     Task<int> ReadAsync(
         string archivePath,
-        ZipEntryInfo entry,
+        string formatId,
+        ArchiveEntryInfo entry,
+        string internalPath,
         string cacheKey,
         byte[] buffer,
         long offset,
@@ -34,12 +38,12 @@ public interface IFileContentCache
     /// If the entry is already cached, this is a no-op (thundering herd protection applies).
     /// The handle is immediately released — the entry has RefCount 0 and is eligible for eviction.
     /// </summary>
-    /// <param name="entry">Entry metadata used for tier routing.</param>
+    /// <param name="entry">Format-agnostic entry metadata used for tier routing (only UncompressedSize is read).</param>
     /// <param name="cacheKey">Unique cache key for this entry.</param>
     /// <param name="decompressedStream">Already-decompressed stream to store.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task WarmAsync(
-        ZipEntryInfo entry,
+        ArchiveEntryInfo entry,
         string cacheKey,
         Stream decompressedStream,
         CancellationToken cancellationToken = default);

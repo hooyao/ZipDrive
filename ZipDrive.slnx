@@ -3,12 +3,14 @@
     <Project Path="src/ZipDrive.Application/ZipDrive.Application.csproj" />
     <Project Path="src/ZipDrive.Cli/ZipDrive.Cli.csproj" />
     <Project Path="src/ZipDrive.Domain/ZipDrive.Domain.csproj" />
+    <Project Path="src/ZipDrive.Infrastructure.Archives.Rar/ZipDrive.Infrastructure.Archives.Rar.csproj" />
     <Project Path="src/ZipDrive.Infrastructure.Archives.Zip/ZipDrive.Infrastructure.Archives.Zip.csproj" />
     <Project Path="src/ZipDrive.Infrastructure.Caching/ZipDrive.Infrastructure.Caching.csproj" />
     <Project Path="src/ZipDrive.Infrastructure.FileSystem/ZipDrive.Infrastructure.FileSystem.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ZipDrive.Domain.Tests/ZipDrive.Domain.Tests.csproj" />
+    <Project Path="tests/ZipDrive.Infrastructure.Archives.Rar.Tests/ZipDrive.Infrastructure.Archives.Rar.Tests.csproj" />
     <Project Path="tests/ZipDrive.Infrastructure.Archives.Zip.Tests/ZipDrive.Infrastructure.Archives.Zip.Tests.csproj" />
     <Project Path="tests/ZipDrive.Infrastructure.Caching.Tests/ZipDrive.Infrastructure.Caching.Tests.csproj" />
     <Project Path="tests/ZipDrive.TestHelpers/ZipDrive.TestHelpers.csproj" />

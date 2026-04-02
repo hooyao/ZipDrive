@@ -5,7 +5,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using ZipDrive.Domain.Exceptions;
-using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip.Formats;
 
 namespace ZipDrive.Infrastructure.Archives.Zip;

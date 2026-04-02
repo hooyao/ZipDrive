@@ -1,25 +1,17 @@
-using System.Buffers;
-
 namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
-/// Stores file content as pooled byte[] in memory.
+/// Stores file content as GC-managed byte[] in memory.
 /// Use for small files (&lt; 50MB by default).
-/// Internal storage: PooledBuffer (rented byte[] + actual data length)
-/// Returns: Stream (MemoryStream wrapping the rented byte[], bounded to actual length)
 ///
-/// Uses a dedicated ArrayPool (not Shared) to control retention. The pool is bounded
-/// to avoid the unbounded thread-local retention behavior of ArrayPool.Shared under
-/// high concurrency.
+/// Storage arrays are plain heap allocations (not pooled). This is intentional:
+/// cache entries are long-lived (minutes to hours), making ArrayPool counterproductive.
+/// GC guarantees the array lives until ALL references — including MemoryStreams held
+/// by concurrent readers — are collected, eliminating the return-reuse-overwrite race
+/// that occurs with ArrayPool.
 /// </summary>
 public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
 {
-    // Dedicated pool with bounded retention — avoids Shared pool's per-thread caching
-    // that retains large arrays across 100+ concurrent threads indefinitely.
-    private static readonly ArrayPool<byte> Pool = ArrayPool<byte>.Create(
-        maxArrayLength: 50 * 1024 * 1024,  // 50MB max (matches SmallFileCutoffMb default)
-        maxArraysPerBucket: 8);             // Bounded retention per size bucket
-
     /// <inheritdoc />
     public async Task<StoredEntry> MaterializeAsync(
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory,
@@ -35,23 +27,13 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
                 "Route large files to the disk tier instead.");
 
         int size = (int)result.SizeBytes;
-        byte[] rented = Pool.Rent(size);
+        byte[] buffer = new byte[size];
 
-        try
-        {
-            // Copy decompressed stream into pooled array via a wrapping MemoryStream.
-            // CopyTo handles the read loop internally.
-            var target = new MemoryStream(rented, 0, size, writable: true);
-            await result.Value.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
-            int totalRead = (int)target.Position;
+        var target = new MemoryStream(buffer, 0, size, writable: true);
+        await result.Value.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+        int totalRead = (int)target.Position;
 
-            return new StoredEntry(new PooledBuffer(rented, totalRead), result.SizeBytes);
-        }
-        catch
-        {
-            Pool.Return(rented);
-            throw;
-        }
+        return new StoredEntry(new DataBuffer(buffer, totalRead), result.SizeBytes);
     }
 
     /// <inheritdoc />
@@ -59,37 +41,27 @@ public sealed class MemoryStorageStrategy : IStorageStrategy<Stream>
     {
         ArgumentNullException.ThrowIfNull(stored);
 
-        var pooled = (PooledBuffer)stored.Data;
-        return new MemoryStream(pooled.Array, 0, pooled.Length, writable: false);
+        var buf = (DataBuffer)stored.Data;
+        return new MemoryStream(buf.Array, 0, buf.Length, writable: false);
     }
 
     /// <inheritdoc />
     public void Dispose(StoredEntry stored)
     {
-        ArgumentNullException.ThrowIfNull(stored);
-
-        var pooled = (PooledBuffer)stored.Data;
-        // Idempotent: only return to pool once (guards against double-dispose)
-        if (Interlocked.Exchange(ref pooled._returned, 1) == 0)
-            Pool.Return(pooled.Array, clearArray: true);
+        // No-op. The byte[] is GC-managed and will be collected when all references
+        // (including MemoryStreams from concurrent readers) are gone.
     }
 
     /// <inheritdoc />
     public bool RequiresAsyncCleanup => false;
 
     /// <summary>
-    /// Wraps a rented byte[] with the actual data length (pool may return oversized arrays).
+    /// Wraps a byte[] with the actual data length (allocated array may be exact size,
+    /// but totalRead from CopyToAsync may be less if the stream was shorter than declared).
     /// </summary>
-    internal sealed class PooledBuffer
+    internal sealed class DataBuffer(byte[] array, int length)
     {
-        public byte[] Array { get; }
-        public int Length { get; }
-        internal int _returned; // 0 = not returned, 1 = returned to pool
-
-        public PooledBuffer(byte[] array, int length)
-        {
-            Array = array;
-            Length = length;
-        }
+        public byte[] Array { get; } = array;
+        public int Length { get; } = length;
     }
 }

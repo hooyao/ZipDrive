@@ -54,4 +54,11 @@ public class MountSettings
     /// Default is false.
     /// </summary>
     public bool UseFolderNameAsVolumeLabel { get; set; } = false;
+
+    /// <summary>
+    /// When true, unsupported archives (e.g., solid RAR) are excluded from the virtual drive entirely.
+    /// A LogWarning is emitted for each filtered archive.
+    /// When false (default), unsupported archives appear as "name (NOT SUPPORTED)" with a warning file inside.
+    /// </summary>
+    public bool HideUnsupportedArchives { get; set; } = false;
 }

@@ -1,4 +1,3 @@
-using ZipDrive.Domain.Models;
 using ZipDrive.Infrastructure.Archives.Zip.Formats;
 
 namespace ZipDrive.Infrastructure.Archives.Zip;

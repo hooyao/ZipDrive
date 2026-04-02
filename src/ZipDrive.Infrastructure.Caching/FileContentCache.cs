@@ -2,12 +2,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
-using ZipDrive.Infrastructure.Archives.Zip;
 
 namespace ZipDrive.Infrastructure.Caching;
 
 /// <summary>
-/// File content cache that owns ZIP extraction, tier routing, and caching.
+/// File content cache that owns extraction, tier routing, and caching.
 /// Replaces <c>DualTierFileCache</c> by merging extraction ownership with cache coordination.
 /// Routes small files to memory tier and large files to disk tier based on
 /// <see cref="CacheOptions.SmallFileCutoffBytes"/>.
@@ -17,7 +16,7 @@ public sealed class FileContentCache : IFileContentCache
     private readonly GenericCache<Stream> _memoryCache;
     private readonly GenericCache<Stream> _diskCache;
     private readonly ChunkedDiskStorageStrategy _diskStorageStrategy;
-    private readonly IZipReaderFactory _zipReaderFactory;
+    private readonly IFormatRegistry _formatRegistry;
     private readonly long _cutoffBytes;
     private readonly TimeSpan _defaultTtl;
     private readonly ILogger<FileContentCache> _logger;
@@ -29,18 +28,18 @@ public sealed class FileContentCache : IFileContentCache
     private readonly Lock _keyIndexLock = new();
 
     public FileContentCache(
-        IZipReaderFactory zipReaderFactory,
+        IFormatRegistry formatRegistry,
         IOptions<CacheOptions> options,
         IEvictionPolicy evictionPolicy,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory)
     {
-        ArgumentNullException.ThrowIfNull(zipReaderFactory);
+        ArgumentNullException.ThrowIfNull(formatRegistry);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(evictionPolicy);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
-        _zipReaderFactory = zipReaderFactory;
+        _formatRegistry = formatRegistry;
         _logger = loggerFactory.CreateLogger<FileContentCache>();
 
         CacheOptions opts = options.Value;
@@ -76,7 +75,9 @@ public sealed class FileContentCache : IFileContentCache
     /// <inheritdoc />
     public async Task<int> ReadAsync(
         string archivePath,
-        ZipEntryInfo entry,
+        string formatId,
+        ArchiveEntryInfo entry,
+        string internalPath,
         string cacheKey,
         byte[] buffer,
         long offset,
@@ -91,26 +92,25 @@ public sealed class FileContentCache : IFileContentCache
             ? _memoryCache
             : _diskCache;
 
-        // Build factory delegate — FileContentCache owns the extraction pipeline
+        // Build factory delegate — delegates extraction to the format-specific extractor.
+        // Extract archiveKey from cacheKey (format: "archiveKey:internalPath").
+        // Falls back to archivePath if cacheKey doesn't follow the expected format.
+        string suffix = ":" + internalPath;
+        string archiveKey = cacheKey.EndsWith(suffix, StringComparison.Ordinal)
+            ? cacheKey[..^suffix.Length]
+            : archivePath;
         Func<CancellationToken, Task<CacheFactoryResult<Stream>>> factory = async ct =>
         {
-            IZipReader reader = _zipReaderFactory.Create(archivePath);
-            try
-            {
-                Stream decompressedStream = await reader.OpenEntryStreamAsync(entry, ct).ConfigureAwait(false);
+            IArchiveEntryExtractor extractor = _formatRegistry.GetExtractor(formatId);
+            ExtractionResult result = await extractor.ExtractAsync(archiveKey, archivePath, internalPath, ct)
+                .ConfigureAwait(false);
 
-                return new CacheFactoryResult<Stream>
-                {
-                    Value = decompressedStream,
-                    SizeBytes = entry.UncompressedSize,
-                    OnDisposed = async () => await reader.DisposeAsync().ConfigureAwait(false)
-                };
-            }
-            catch
+            return new CacheFactoryResult<Stream>
             {
-                await reader.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
+                Value = result.Stream,
+                SizeBytes = result.SizeBytes,
+                OnDisposed = result.OnDisposed
+            };
         };
 
         // Borrow from cache (thundering herd prevention is inside GenericCache)
@@ -149,7 +149,7 @@ public sealed class FileContentCache : IFileContentCache
 
     /// <inheritdoc />
     public async Task WarmAsync(
-        ZipEntryInfo entry,
+        ArchiveEntryInfo entry,
         string cacheKey,
         Stream decompressedStream,
         CancellationToken cancellationToken = default)

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using ZipDrive.Application.Services;
+using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Models;
 using ZipDrive.TestHelpers;
 
@@ -56,7 +57,9 @@ public class MountAndDiscoveryTests
             var fixture = new VfsTestFixture();
             // Use a custom path - can't reuse the shared fixture for this test
             // Just verify discovery on empty returns empty
-            var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
+            var zipOnlyBuilder = new ZipOnlyBuilder();
+            var registry = new FormatRegistry([zipOnlyBuilder], [], []);
+            var discovery = new ArchiveDiscovery(registry, NullLogger<ArchiveDiscovery>.Instance);
             var results = await discovery.DiscoverAsync(emptyDir, 6);
             results.Should().BeEmpty();
         }
@@ -64,5 +67,12 @@ public class MountAndDiscoveryTests
         {
             Directory.Delete(emptyDir, recursive: true);
         }
+    }
+
+    private sealed class ZipOnlyBuilder : IArchiveStructureBuilder
+    {
+        public string FormatId => "zip";
+        public IReadOnlyList<string> SupportedExtensions => [".zip"];
+        public Task<ArchiveStructure> BuildAsync(string k, string p, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

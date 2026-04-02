@@ -3,13 +3,13 @@ using KTrie;
 namespace ZipDrive.Domain.Models;
 
 /// <summary>
-/// Cached structure of a single ZIP archive.
+/// Cached structure of a single archive (ZIP, RAR, etc.).
 /// Uses a trie for efficient path lookup and prefix-based directory listing.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <strong>Memory estimation:</strong> ~114 bytes per entry
-/// (ZipEntryInfo ~48 bytes + filename string ~50 bytes + trie node overhead ~16 bytes).
+/// (ArchiveEntryInfo ~48 bytes + filename string ~50 bytes + trie node overhead ~16 bytes).
 /// </para>
 /// </remarks>
 public sealed class ArchiveStructure
@@ -29,7 +29,7 @@ public sealed class ArchiveStructure
     /// Directories have trailing /, files do not.
     /// Always uses Ordinal (case-sensitive) comparison per ZIP spec.
     /// </summary>
-    public required TrieDictionary<ZipEntryInfo> Entries { get; init; }
+    public required TrieDictionary<ArchiveEntryInfo> Entries { get; init; }
 
     /// <summary>
     /// Total number of entries in the archive.
@@ -42,9 +42,9 @@ public sealed class ArchiveStructure
     public required DateTimeOffset BuiltAt { get; init; }
 
     /// <summary>
-    /// True if this is a ZIP64 archive.
+    /// Archive format identifier (e.g., "zip", "rar").
     /// </summary>
-    public bool IsZip64 { get; init; }
+    public string FormatId { get; init; } = "zip";
 
     /// <summary>
     /// Total uncompressed size of all entries in bytes.
@@ -74,9 +74,9 @@ public sealed class ArchiveStructure
     /// Directories must include trailing / for exact match.
     /// </param>
     /// <returns>The entry info if found, or null if not found.</returns>
-    public ZipEntryInfo? GetEntry(string internalPath)
+    public ArchiveEntryInfo? GetEntry(string internalPath)
     {
-        return Entries.TryGetValue(internalPath, out ZipEntryInfo entry) ? entry : null;
+        return Entries.TryGetValue(internalPath, out ArchiveEntryInfo entry) ? entry : null;
     }
 
     /// <summary>
@@ -86,15 +86,15 @@ public sealed class ArchiveStructure
     public bool DirectoryExists(string dirPath)
     {
         string key = dirPath.EndsWith('/') ? dirPath : dirPath + "/";
-        return Entries.TryGetValue(key, out ZipEntryInfo entry) && entry.IsDirectory;
+        return Entries.TryGetValue(key, out ArchiveEntryInfo entry) && entry.IsDirectory;
     }
 
     /// <summary>
     /// Lists direct children of a directory using trie prefix enumeration.
     /// </summary>
     /// <param name="dirPath">Directory path (empty string for root). Trailing slash optional.</param>
-    /// <returns>Direct children as (Name, ZipEntryInfo) tuples.</returns>
-    public IEnumerable<(string Name, ZipEntryInfo Entry)> ListDirectory(string dirPath)
+    /// <returns>Direct children as (Name, ArchiveEntryInfo) tuples.</returns>
+    public IEnumerable<(string Name, ArchiveEntryInfo Entry)> ListDirectory(string dirPath)
     {
         // Normalize: ensure trailing / for non-root
         string prefix = string.IsNullOrEmpty(dirPath)
@@ -102,10 +102,10 @@ public sealed class ArchiveStructure
             : (dirPath.EndsWith('/') ? dirPath : dirPath + "/");
 
         // KTrie doesn't support empty prefix in EnumerateByPrefix, so enumerate all for root
-        IEnumerable<KeyValuePair<string, ZipEntryInfo>> source =
+        IEnumerable<KeyValuePair<string, ArchiveEntryInfo>> source =
             string.IsNullOrEmpty(prefix) ? Entries : Entries.EnumerateByPrefix(prefix);
 
-        foreach (KeyValuePair<string, ZipEntryInfo> kvp in source)
+        foreach (KeyValuePair<string, ArchiveEntryInfo> kvp in source)
         {
             // Skip the directory entry itself
             if (kvp.Key == prefix)

@@ -12,6 +12,7 @@ using ZipDrive.Domain.Abstractions;
 using ZipDrive.Domain.Configuration;
 using ZipDrive.Domain.Models;
 using ZipDrive.EnduranceTests.Suites;
+using ZipDrive.Infrastructure.Archives.Rar;
 using ZipDrive.Infrastructure.Archives.Zip;
 using ZipDrive.Infrastructure.Caching;
 using ZipDrive.Infrastructure.FileSystem;
@@ -37,7 +38,7 @@ public class EnduranceTest : IAsyncLifetime
     private readonly ITestOutputHelper _output;
 
     private string _rootPath = "";
-    private ZipVirtualFileSystem _vfs = null!;
+    private ArchiveVirtualFileSystem _vfs = null!;
     private DokanFileSystemAdapter _adapter = null!;
     private FileContentCache _fileCache = null!;
     private IArchiveStructureCache _structureCache = null!;
@@ -72,10 +73,18 @@ public class EnduranceTest : IAsyncLifetime
             : TestZipGenerator.GetEnduranceFixture();
         await TestZipGenerator.GenerateTestFixtureAsync(_rootPath, fixture);
 
+        // Generate RAR fixtures alongside ZIPs (if rar.exe is available)
+        // 6 RAR archives across 4 profiles: small (memory tier), mixed (both tiers),
+        // deep nested (path resolution), edge cases (boundaries)
+        string? rarExe = TestRarGenerator.FindRarExe();
+        if (rarExe != null)
+        {
+            await TestRarGenerator.GenerateEnduranceFixtureAsync(_rootPath, rarExe);
+        }
+
         var charComparer = CaseInsensitiveCharComparer.Instance;
         var archiveTrie = new ArchiveTrie(charComparer);
         var pathResolver = new PathResolver(archiveTrie);
-        var discovery = new ArchiveDiscovery(NullLogger<ArchiveDiscovery>.Instance);
         var readerFactory = new ZipReaderFactory();
 
         // Tight cache to force constant eviction
@@ -89,24 +98,41 @@ public class EnduranceTest : IAsyncLifetime
             EvictionCheckIntervalSeconds = 2
         });
 
-        var structureStore = new ArchiveStructureStore(
-            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        var metadataStore = new ZipFormatMetadataStore();
         var encodingDetector = new FilenameEncodingDetector(
             Microsoft.Extensions.Options.Options.Create(new MountSettings()),
             NullLogger<FilenameEncodingDetector>.Instance);
-        _structureCache = new ArchiveStructureCache(structureStore, readerFactory,
-            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance, encodingDetector);
+        var zipBuilder = new ZipStructureBuilder(readerFactory, encodingDetector, metadataStore,
+            TimeProvider.System, NullLogger<ZipStructureBuilder>.Instance);
+        var zipExtractor = new ZipEntryExtractor(readerFactory, metadataStore);
+
+        var rarBuilder = new Infrastructure.Archives.Rar.RarStructureBuilder(
+            NullLogger<Infrastructure.Archives.Rar.RarStructureBuilder>.Instance);
+        var rarExtractor = new Infrastructure.Archives.Rar.RarEntryExtractor();
+
+        var formatRegistry = new FormatRegistry(
+            [zipBuilder, rarBuilder],
+            [zipExtractor, rarExtractor],
+            Array.Empty<IPrefetchStrategy>());
+        var discovery = new ArchiveDiscovery(formatRegistry, NullLogger<ArchiveDiscovery>.Instance);
+
+        var structureStore = new ArchiveStructureStore(
+            new LruEvictionPolicy(), TimeProvider.System, NullLoggerFactory.Instance);
+        _structureCache = new ArchiveStructureCache(structureStore, formatRegistry,
+            TimeProvider.System, cacheOpts, NullLogger<ArchiveStructureCache>.Instance);
 
         _fileCache = new FileContentCache(
-            readerFactory, cacheOpts,
+            formatRegistry,
+            cacheOpts,
             new LruEvictionPolicy(), TimeProvider.System,
             NullLoggerFactory.Instance);
 
-        _vfs = new ZipVirtualFileSystem(archiveTrie, _structureCache, _fileCache, discovery, pathResolver,
+        _vfs = new ArchiveVirtualFileSystem(archiveTrie, _structureCache, _fileCache, discovery, pathResolver,
             new NullHostApplicationLifetime(),
+            formatRegistry,
             Options.Create(new MountSettings()),
             Options.Create(new PrefetchOptions { Enabled = false }),
-            NullLogger<ZipVirtualFileSystem>.Instance);
+            NullLogger<ArchiveVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
 
         _adapter = new DokanFileSystemAdapter(
@@ -335,7 +361,7 @@ public class EnduranceTest : IAsyncLifetime
             string entryPath = string.IsNullOrEmpty(folderPath) ? entry.Name : $"{folderPath}/{entry.Name}";
             if (entry.IsDirectory)
             {
-                if (entry.Name.EndsWith(".zip"))
+                if (entry.Name.EndsWith(".zip") || entry.Name.EndsWith(".rar"))
                     archives.Add(entryPath);
                 else
                     await CollectArchivePathsAsync(entryPath, archives);

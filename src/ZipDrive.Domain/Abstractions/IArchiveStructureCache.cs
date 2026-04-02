@@ -36,16 +36,18 @@ namespace ZipDrive.Domain.Abstractions;
 public interface IArchiveStructureCache
 {
     /// <summary>
-    /// Gets the cached structure or builds it by parsing the ZIP Central Directory.
+    /// Gets the cached structure or builds it by delegating to the format-specific
+    /// <see cref="IArchiveStructureBuilder"/> resolved via <see cref="IFormatRegistry"/>.
     /// </summary>
     /// <param name="archiveKey">Unique archive identifier (e.g., "archive.zip").</param>
-    /// <param name="absolutePath">Filesystem path to the ZIP file.</param>
+    /// <param name="absolutePath">Filesystem path to the archive file.</param>
+    /// <param name="formatId">Archive format identifier (e.g., "zip", "rar").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Parsed archive structure (from cache or freshly built).</returns>
     /// <remarks>
     /// <para>
-    /// This method uses streaming Central Directory enumeration for memory-efficient
-    /// parsing. No bulk allocation of entry lists is performed.
+    /// On cache miss, delegates to <c>IFormatRegistry.GetStructureBuilder(formatId).BuildAsync()</c>.
+    /// The builder handles all format-specific parsing.
     /// </para>
     /// <para>
     /// If the structure is already cached, TTL is extended and LRU metrics are updated.
@@ -55,12 +57,10 @@ public interface IArchiveStructureCache
     /// only one should perform the build (thundering herd prevention).
     /// </para>
     /// </remarks>
-    /// <exception cref="Domain.Exceptions.ZipException">
-    /// Thrown when the ZIP file cannot be parsed (corrupt, unsupported format, etc.).
-    /// </exception>
     Task<ArchiveStructure> GetOrBuildAsync(
         string archiveKey,
         string absolutePath,
+        string formatId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

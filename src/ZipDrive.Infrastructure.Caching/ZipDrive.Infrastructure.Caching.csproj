@@ -21,7 +21,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ZipDrive.Domain\ZipDrive.Domain.csproj" />
-    <ProjectReference Include="..\ZipDrive.Infrastructure.Archives.Zip\ZipDrive.Infrastructure.Archives.Zip.csproj" />
   </ItemGroup>
 
 </Project>
