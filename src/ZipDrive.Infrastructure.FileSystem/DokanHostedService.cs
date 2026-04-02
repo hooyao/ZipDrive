@@ -178,7 +178,7 @@ public sealed class DokanHostedService : BackgroundService
         }
         catch (DokanException ex)
         {
-            _logger.LogError(ex, "Dokan mount failed. Ensure Dokany v2.1.0.1000 is installed from https://github.com/dokan-dev/dokany/releases/tag/v2.1.0.1000");
+            _logger.LogError(ex, "Dokan mount failed. Ensure Dokany v2.3.1.1000 is installed from https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000");
             _lifetime.StopApplication();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
