@@ -17,7 +17,7 @@ public sealed class PathResolutionSuite : EnduranceSuiteBase
     public override int TaskCount => 8;
 
     public PathResolutionSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

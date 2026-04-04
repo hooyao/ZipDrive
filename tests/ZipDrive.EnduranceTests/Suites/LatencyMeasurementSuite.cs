@@ -21,7 +21,7 @@ public sealed class LatencyMeasurementSuite : EnduranceSuiteBase
     public override int TaskCount => 5;
 
     public LatencyMeasurementSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

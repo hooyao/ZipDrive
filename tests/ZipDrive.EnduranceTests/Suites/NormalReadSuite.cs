@@ -17,7 +17,7 @@ public sealed class NormalReadSuite : EnduranceSuiteBase
     public override int TaskCount => 25;
 
     public NormalReadSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

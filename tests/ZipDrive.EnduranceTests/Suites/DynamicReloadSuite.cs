@@ -9,7 +9,7 @@ using ZipDrive.TestHelpers;
 namespace ZipDrive.EnduranceTests.Suites;
 
 /// <summary>
-/// Endurance suite testing dynamic archive add/remove through DokanFileSystemAdapter.
+/// Endurance suite testing dynamic archive add/remove through WinFspFileSystemAdapter.
 /// All reads go through Adapter.Guarded*Async. Lifecycle ops go through IArchiveManager.
 /// Uses dedicated reload-only archives isolated from other suites.
 ///
@@ -35,7 +35,7 @@ public sealed class DynamicReloadSuite : EnduranceSuiteBase
     public override int TaskCount => 20;
 
     public DynamicReloadSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         IArchiveManager archiveManager,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,

@@ -39,7 +39,7 @@ public class EnduranceTest : IAsyncLifetime
 
     private string _rootPath = "";
     private ArchiveVirtualFileSystem _vfs = null!;
-    private DokanFileSystemAdapter _adapter = null!;
+    private WinFspFileSystemAdapter _adapter = null!;
     private FileContentCache _fileCache = null!;
     private IArchiveStructureCache _structureCache = null!;
     private double _durationHours;
@@ -135,8 +135,8 @@ public class EnduranceTest : IAsyncLifetime
             NullLogger<ArchiveVirtualFileSystem>.Instance);
         await _vfs.MountAsync(new VfsMountOptions { RootPath = _rootPath, MaxDiscoveryDepth = 6 });
 
-        _adapter = new DokanFileSystemAdapter(
-            _vfs, Options.Create(new MountSettings()), NullLogger<DokanFileSystemAdapter>.Instance);
+        _adapter = new WinFspFileSystemAdapter(
+            _vfs, Options.Create(new MountSettings()), NullLogger<WinFspFileSystemAdapter>.Instance);
     }
 
     public async Task DisposeAsync()

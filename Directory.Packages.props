@@ -7,7 +7,7 @@
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="DokanNet" Version="2.3.0.3" />
+    <PackageVersion Include="winfsp.net" Version="2.1.25156" />
     <PackageVersion Include="FluentAssertions" Version="8.1.1" />
     <PackageVersion Include="KTrie" Version="3.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
