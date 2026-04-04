@@ -15,7 +15,7 @@ namespace ZipDrive.EnduranceTests.Suites;
 /// </summary>
 public abstract class EnduranceSuiteBase : IEnduranceSuite
 {
-    protected readonly DokanFileSystemAdapter Adapter;
+    protected readonly WinFspFileSystemAdapter Adapter;
     protected readonly ConcurrentDictionary<string, ZipManifest> Manifests;
     protected readonly List<string> ArchivePaths;
     protected readonly FileContentCache FileCache;
@@ -28,7 +28,7 @@ public abstract class EnduranceSuiteBase : IEnduranceSuite
     public abstract int TaskCount { get; }
 
     protected EnduranceSuiteBase(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

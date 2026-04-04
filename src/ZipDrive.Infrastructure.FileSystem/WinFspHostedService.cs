@@ -1,5 +1,5 @@
 using System.Runtime.Versioning;
-using DokanNet;
+using Fsp;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,36 +11,35 @@ using ZipDrive.Domain.Models;
 namespace ZipDrive.Infrastructure.FileSystem;
 
 /// <summary>
-/// Background service that manages the Dokan mount lifecycle and dynamic reload.
+/// Background service that manages the WinFsp mount lifecycle and dynamic reload.
 /// Mounts VFS on start, watches for archive directory changes, and unmounts on Ctrl+C / host shutdown.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class DokanHostedService : BackgroundService
+public sealed class WinFspHostedService : BackgroundService
 {
     private readonly IVirtualFileSystem _vfs;
     private readonly IArchiveManager _archiveManager;
     private readonly IArchiveDiscovery _discovery;
-    private readonly DokanFileSystemAdapter _adapter;
+    private readonly WinFspFileSystemAdapter _adapter;
     private readonly MountSettings _mountSettings;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly IFormatRegistry _formatRegistry;
-    private readonly ILogger<DokanHostedService> _logger;
+    private readonly ILogger<WinFspHostedService> _logger;
 
-    private Dokan? _dokan;
-    private DokanInstance? _dokanInstance;
+    private FileSystemHost? _host;
     private FileSystemWatcher? _watcher;
     private ArchiveChangeConsolidator? _consolidator;
     private CancellationToken _stoppingToken;
 
-    public DokanHostedService(
+    public WinFspHostedService(
         IVirtualFileSystem vfs,
         IArchiveManager archiveManager,
         IArchiveDiscovery discovery,
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         IOptions<MountSettings> mountSettings,
         IFormatRegistry formatRegistry,
         IHostApplicationLifetime lifetime,
-        ILogger<DokanHostedService> logger)
+        ILogger<WinFspHostedService> logger)
     {
         _vfs = vfs;
         _archiveManager = archiveManager;
@@ -150,36 +149,42 @@ public sealed class DokanHostedService : BackgroundService
                 return;
             }
 
-            // Create Dokan instance
-            _dokan = new Dokan(new DokanNetLogger(_logger));
+            // Create WinFsp file system host
+            _host = new FileSystemHost(_adapter);
+            _host.FileSystemName = "NTFS";
 
-            var dokanBuilder = new DokanInstanceBuilder(_dokan)
-                .ConfigureOptions(options =>
-                {
-                    options.Options = DokanOptions.WriteProtection | DokanOptions.FixedDrive | DokanOptions.MountManager;
-                    options.MountPoint = _mountSettings.MountPoint;
-                });
+            // Mount the file system
+            // WinFsp mount point format: drive letter with trailing backslash
+            string mountPoint = _mountSettings.MountPoint;
+            int result = _host.Mount(mountPoint);
+            if (result < 0)
+            {
+                _logger.LogError("WinFsp mount failed with NTSTATUS 0x{Status:X8}. Ensure WinFsp is installed from https://winfsp.dev/rel/",
+                    (uint)result);
+                _lifetime.StopApplication();
+                return;
+            }
 
-            _dokanInstance = dokanBuilder.Build(_adapter);
+            _logger.LogInformation("Drive mounted at {MountPoint}. Press Ctrl+C to unmount.", mountPoint);
 
-            _logger.LogInformation("Drive mounted at {MountPoint}. Press Ctrl+C to unmount.", _mountSettings.MountPoint);
-
-            // Step 4: Block until Dokan file system is closed
-            await _dokanInstance.WaitForFileSystemClosedAsync(uint.MaxValue);
+            // Block until cancellation
+            try
+            {
+                await Task.Delay(Timeout.Infinite, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown — fall through to StopAsync
+            }
         }
         catch (DllNotFoundException)
         {
-            _logger.LogError("Dokany driver is not installed. ZipDrive requires Dokany to mount virtual drives");
+            _logger.LogError("WinFsp driver is not installed. ZipDrive requires WinFsp to mount virtual drives");
             UserNotice.Error(
-                "Dokany driver is not installed.\n" +
-                "ZipDrive requires Dokany to mount virtual drives.\n" +
-                "Download and install from: https://github.com/dokan-dev/dokany/releases");
+                "WinFsp driver is not installed.\n" +
+                "ZipDrive requires WinFsp to mount virtual drives.\n" +
+                "Download and install from: https://winfsp.dev/rel/");
             WaitForKeyAndStop();
-        }
-        catch (DokanException ex)
-        {
-            _logger.LogError(ex, "Dokan mount failed. Ensure Dokany v2.3.1.1000 is installed from https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000");
-            _lifetime.StopApplication();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -201,10 +206,7 @@ public sealed class DokanHostedService : BackgroundService
 
         try
         {
-            if (_dokan != null)
-            {
-                _dokan.RemoveMountPoint(_mountSettings.MountPoint);
-            }
+            _host?.Unmount();
         }
         catch (Exception ex)
         {
@@ -223,8 +225,7 @@ public sealed class DokanHostedService : BackgroundService
             _logger.LogWarning(ex, "Error unmounting VFS");
         }
 
-        _dokanInstance?.Dispose();
-        _dokan?.Dispose();
+        _host?.Dispose();
 
         _logger.LogInformation("Drive unmounted cleanly");
 
@@ -542,23 +543,5 @@ public sealed class DokanHostedService : BackgroundService
         }
 
         _lifetime.StopApplication();
-    }
-
-    /// <summary>
-    /// Adapter for DokanNet's ILogger to Microsoft.Extensions.Logging.
-    /// </summary>
-    private sealed class DokanNetLogger : DokanNet.Logging.ILogger
-    {
-        private readonly ILogger _logger;
-
-        public DokanNetLogger(ILogger logger) => _logger = logger;
-
-        public void Debug(string message, params object[] args) => _logger.LogDebug(message, args);
-        public void Info(string message, params object[] args) => _logger.LogInformation(message, args);
-        public void Warn(string message, params object[] args) => _logger.LogWarning(message, args);
-        public void Error(string message, params object[] args) => _logger.LogError(message, args);
-        public void Fatal(string message, params object[] args) => _logger.LogCritical(message, args);
-
-        public bool DebugEnabled => _logger.IsEnabled(LogLevel.Debug);
     }
 }

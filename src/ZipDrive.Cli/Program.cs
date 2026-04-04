@@ -109,7 +109,7 @@ builder.ConfigureServices((context, services) =>
             .WithMetrics(m => m
                 .AddMeter("ZipDrive.Caching")
                 .AddMeter("ZipDrive.Zip")
-                .AddMeter("ZipDrive.Dokan")
+                .AddMeter("ZipDrive.FileSystem")
                 .AddRuntimeInstrumentation()
                 .AddProcessInstrumentation()
                 .AddOtlpExporter((exporterOptions, readerOptions) =>
@@ -123,7 +123,7 @@ builder.ConfigureServices((context, services) =>
             .WithTracing(t => t
                 .AddSource("ZipDrive.Caching")
                 .AddSource("ZipDrive.Zip")
-                .AddSource("ZipDrive.Dokan")
+                .AddSource("ZipDrive.FileSystem")
                 .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
     }
     else
@@ -169,12 +169,12 @@ builder.ConfigureServices((context, services) =>
     // Cache maintenance (periodic eviction + cleanup)
     services.AddHostedService<CacheMaintenanceService>();
 
-    // VFS and Dokan
+    // VFS and WinFsp
     services.AddSingleton<ArchiveVirtualFileSystem>();
     services.AddSingleton<IVirtualFileSystem>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
     services.AddSingleton<IArchiveManager>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
-    services.AddSingleton<DokanFileSystemAdapter>();
-    services.AddHostedService<DokanHostedService>();
+    services.AddSingleton<WinFspFileSystemAdapter>();
+    services.AddHostedService<WinFspHostedService>();
 });
 
 var host = builder.Build();
