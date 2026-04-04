@@ -105,8 +105,8 @@ internal sealed class ChunkedStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        // DokanNet may call Stream.Read() synchronously.
-        // Safe: extraction uses IOCP threads (async I/O), DokanNet has its own thread pool.
+        // WinFsp may call Stream.Read() synchronously.
+        // Safe: extraction uses IOCP threads (async I/O), WinFsp has its own thread pool.
         return ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None)
             .AsTask().GetAwaiter().GetResult();
     }

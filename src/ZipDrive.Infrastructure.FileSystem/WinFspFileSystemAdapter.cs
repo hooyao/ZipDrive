@@ -120,6 +120,7 @@ public sealed class WinFspFileSystemAdapter : FileSystemBase
                 Path = FileName,
                 IsDirectory = vfsInfo.IsDirectory
             };
+            // WinFsp FileDesc is unused — we carry all state in FileNode (FileContext).
             FileDesc = null!;
             FileInfo = ToWinFspFileInfo(vfsInfo);
             NormalizedName = null!;

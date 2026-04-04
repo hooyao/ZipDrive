@@ -2,7 +2,7 @@ namespace ZipDrive.Infrastructure.FileSystem;
 
 /// <summary>
 /// Identifies Windows shell metadata paths that never exist inside ZIP archives.
-/// Short-circuiting these in the Dokan adapter avoids eagerly parsing ZIP Central
+/// Short-circuiting these in the file system adapter avoids eagerly parsing ZIP Central
 /// Directories just to return FileNotFound for probes like <c>\archive.zip\desktop.ini</c>.
 /// </summary>
 public static class ShellMetadataFilter

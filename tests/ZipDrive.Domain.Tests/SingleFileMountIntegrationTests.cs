@@ -121,7 +121,7 @@ public class SingleFileMountIntegrationTests : IDisposable
 
         var (vfs, _, formatRegistry) = CreateInfrastructure();
 
-        // Simulate the DokanHostedService logic: check format
+        // Simulate the WinFspHostedService logic: check format
         string? formatId = formatRegistry.DetectFormat(txtPath);
         formatId.Should().BeNull("docx is not a supported format");
 
@@ -139,7 +139,7 @@ public class SingleFileMountIntegrationTests : IDisposable
 
         File.Exists(fakePath).Should().BeFalse();
         Directory.Exists(fakePath).Should().BeFalse();
-        // DokanHostedService would show UserNotice.Error and WaitForKeyAndStop
+        // WinFspHostedService would show UserNotice.Error and WaitForKeyAndStop
     }
 
     // === 5.4 Empty directory mounts with zero archives ===
@@ -159,7 +159,7 @@ public class SingleFileMountIntegrationTests : IDisposable
         // Cast to IArchiveManager to check registered archives
         IArchiveManager manager = vfs;
         manager.GetRegisteredArchives().Should().BeEmpty(
-            "DokanHostedService checks this and shows a WARNING notice");
+            "WinFspHostedService checks this and shows a WARNING notice");
     }
 
     // === 5.5 Directory with archives — existing behavior unchanged ===
@@ -203,7 +203,7 @@ public class SingleFileMountIntegrationTests : IDisposable
 
         result.Should().BeTrue();
         vfs.IsMounted.Should().BeTrue();
-        // No FileSystemWatcher is created — that's DokanHostedService's responsibility
+        // No FileSystemWatcher is created — that's WinFspHostedService's responsibility
         // and it only calls StartWatcher() in the directory branch.
     }
 }

@@ -160,7 +160,7 @@ public sealed class WinFspHostedService : BackgroundService
             if (result < 0)
             {
                 _logger.LogError("WinFsp mount failed with NTSTATUS 0x{Status:X8}. Ensure WinFsp is installed from https://winfsp.dev/rel/",
-                    (uint)result);
+                    unchecked((uint)result));
                 _lifetime.StopApplication();
                 return;
             }
