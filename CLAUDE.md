@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts archive files (ZIP, RAR, and extensible to other formats) as accessible Windows drives using DokanNet. The project has a **format-agnostic caching layer, streaming ZIP reader, and RAR support via SharpCompress**.
+**ZipDrive** is a clean-architecture rewrite of the ZipDrive virtual file system. It mounts archive files (ZIP, RAR, and extensible to other formats) as accessible Windows drives using WinFsp. The project has a **format-agnostic caching layer, streaming ZIP reader, and RAR support via SharpCompress**.
 
-**Current Status**: Multi-format archive support with format-agnostic provider architecture (`IArchiveStructureBuilder`, `IArchiveEntryExtractor`, `IPrefetchStrategy`, `IFormatRegistry`). ZIP provider with chunked incremental extraction, streaming Central Directory reader, sibling prefetch with coalescing batch reader. RAR provider via SharpCompress with binary signature detection (RAR4/RAR5 magic bytes + solid flag in ~64 bytes). Solid RAR archives shown as `name.rar (NOT SUPPORTED)` with warning file, or hidden via `Mount:HideUnsupportedArchives`. File content cache with strategy-owned materialization, OpenTelemetry observability, DokanNet adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch. Per-archive dynamic reload with multi-format FileSystemWatcher. The caching layer (`Infrastructure.Caching`) has zero format-specific dependencies — all format operations accessed through Domain interfaces. Concurrency model formally verified with TLA+ (`specs/formal/`). 450+ tests passing, 12-hour endurance soak validated.
+**Current Status**: Multi-format archive support with format-agnostic provider architecture (`IArchiveStructureBuilder`, `IArchiveEntryExtractor`, `IPrefetchStrategy`, `IFormatRegistry`). ZIP provider with chunked incremental extraction, streaming Central Directory reader, sibling prefetch with coalescing batch reader. RAR provider via SharpCompress with binary signature detection (RAR4/RAR5 magic bytes + solid flag in ~64 bytes). Solid RAR archives shown as `name.rar (NOT SUPPORTED)` with warning file, or hidden via `Mount:HideUnsupportedArchives`. File content cache with strategy-owned materialization, OpenTelemetry observability, WinFsp adapter, background cache maintenance, automatic charset detection for non-UTF8 filenames, drag-and-drop folder launch. Per-archive dynamic reload with multi-format FileSystemWatcher. The caching layer (`Infrastructure.Caching`) has zero format-specific dependencies — all format operations accessed through Domain interfaces. Concurrency model formally verified with TLA+ (`specs/formal/`). 450+ tests passing, 12-hour endurance soak validated.
 
 ## Development Workflow Requirements
 
@@ -35,7 +35,7 @@ Code Change → Build → Write Tests → Run Tests → Pass → Done
 
 ## Cross-Platform Considerations
 
-ZipDrive's CLI and DokanNet adapter are **Windows-only**, but the underlying infrastructure libraries (`ZipDrive.Infrastructure.Caching`, `ZipDrive.Infrastructure.Archives.Zip`, `ZipDrive.Domain`, `ZipDrive.Application`) are designed to be **cross-platform**. Key platform-specific handling:
+ZipDrive's CLI and WinFsp adapter are **Windows-only**, but the underlying infrastructure libraries (`ZipDrive.Infrastructure.Caching`, `ZipDrive.Infrastructure.Archives.Zip`, `ZipDrive.Domain`, `ZipDrive.Application`) are designed to be **cross-platform**. Key platform-specific handling:
 
 - **Sparse file creation** (`ChunkedDiskStorageStrategy.SetSparseAttribute`): On Windows/NTFS, must explicitly call `FSCTL_SET_SPARSE` via `DeviceIoControl` P/Invoke before `SetLength`, otherwise the OS pre-allocates the full file size. On Linux (ext4/btrfs/xfs), `SetLength` creates sparse files by default — no ioctl needed. The method uses `OperatingSystem.IsWindows()` to branch.
 - **File sharing** (`FileShare.Read` / `FileShare.ReadWrite`): Used by `ChunkedFileEntry` (writer) and `ChunkedStream` (readers) for concurrent access to the backing sparse file. Works on both Windows and Linux.
@@ -43,8 +43,8 @@ ZipDrive's CLI and DokanNet adapter are **Windows-only**, but the underlying inf
 
 ## Prerequisites
 
-- **Windows x64 only** - Uses DokanNet which is Windows-specific
-- **Dokany v2.3.1.1000** must be installed from https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000
+- **Windows x64 only** - Uses WinFsp which is Windows-specific
+- **WinFsp v2.0+** must be installed from https://winfsp.dev/rel/
 - **.NET 10.0 SDK** (Note: Currently targets .NET 10 preview - may need adjustment to .NET 8 LTS for production)
 
 ## Build and Run Commands
@@ -122,7 +122,7 @@ ZipDrive follows **Clean Architecture** (Onion Architecture) with strict depende
 │                           Complete Read Flow                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  1. DokanNet: ReadFile("R:\archive.zip\folder\file.txt", offset=5000)       │
+│  1. WinFsp: ReadFile("R:\archive.zip\folder\file.txt", offset=5000)         │
 │     ↓                                                                       │
 │  2. Archive Prefix Tree: Resolve path                                       │
 │     ├── archiveKey = "archive.zip"                                          │
@@ -140,7 +140,7 @@ ZipDrive follows **Clean Architecture** (Onion Architecture) with strict depende
 │     ├── HIT: Return cached random-access stream                             │
 │     └── MISS: Stream extract → Materialize → Cache → Return                 │
 │     ↓                                                                       │
-│  6. Stream: Seek(5000), Read(4096) → Return to DokanNet                     │
+│  6. Stream: Seek(5000), Read(4096) → Return to WinFsp                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -361,25 +361,25 @@ RAR archive support via SharpCompress (MIT, pure managed C#).
 
 #### **FileSystem (`src/ZipDrive.Infrastructure.FileSystem`)**
 
-DokanNet integration for Windows file system mounting.
+WinFsp integration for Windows file system mounting.
 
 **Key Components**:
-- `DokanFileSystemAdapter`: Implements `IDokanOperations2`, translates Dokan calls to `IVirtualFileSystem`
-- `DokanHostedService`: `IHostedService` that manages mount/unmount lifecycle
-- `DokanTelemetry`: Static `Meter("ZipDrive.Dokan")` with read latency histogram
+- `WinFspFileSystemAdapter`: Extends `Fsp.FileSystemBase`, translates WinFsp calls to `IVirtualFileSystem`
+- `WinFspHostedService`: `IHostedService` that manages mount/unmount lifecycle
+- `FileSystemTelemetry`: Static `Meter("ZipDrive.FileSystem")` with read latency histogram
 - `ShellMetadataFilter`: Zero-allocation static helper that identifies Windows shell metadata paths (`desktop.ini`, `thumbs.db`, `$RECYCLE.BIN`, etc.) using `ReadOnlySpan<char>` matching
 - `MountSettings` (in `Domain.Configuration`): Configuration POCO with all mount options including `ShortCircuitShellMetadata`, `FallbackEncoding`, `EncodingConfidenceThreshold`, `DynamicReloadQuietPeriodSeconds`, and `UseFolderNameAsVolumeLabel`
 - **ArchiveChangeConsolidator**: Queues `FileSystemWatcher` events, consolidates into net deltas after configurable quiet period (`DynamicReloadQuietPeriodSeconds`). State machine: Created+Deleted=Noop, Deleted+Created=Modified. Atomic flush via `Interlocked.Exchange`. `DisposeAsync` awaits in-flight flush.
 - **IArchiveManager**: Interface separating archive lifecycle (`AddArchiveAsync`, `RemoveArchiveAsync`, `GetRegisteredArchives`) from file system operations (ISP). Implemented by `ZipVirtualFileSystem`.
-- **DokanFileSystemAdapter.Guarded*Async**: Five public async methods for test consumption without Dokany runtime (`GuardedReadFileAsync`, `GuardedListDirectoryAsync`, `GuardedGetFileInfoAsync`, `GuardedFileExistsAsync`, `GuardedDirectoryExistsAsync`).
+- **WinFspFileSystemAdapter.Guarded*Async**: Five public async methods for test consumption without WinFsp runtime (`GuardedReadFileAsync`, `GuardedListDirectoryAsync`, `GuardedGetFileInfoAsync`, `GuardedFileExistsAsync`, `GuardedDirectoryExistsAsync`).
 
-**ReadFile Buffer Pooling**: `DokanFileSystemAdapter.ReadFile()` uses `ArrayPool<byte>.Shared.Rent()` to avoid per-read `byte[]` allocations. The rented array may be larger than the Dokan native buffer, so `bytesRead` is capped to `buffer.Span.Length` and only valid bytes are copied via `AsSpan(0, bytesRead).CopyTo(buffer.Span)`. The array is returned in a `finally` block. **Do NOT return the rented array via `buffer.ReturnArray(rentedArray, copyBack: true)`** — when `copyBack` is `true` the API copies the entire rented array back to the native buffer (no byte-count parameter), which leaks stale `ArrayPool` data beyond `bytesRead`.
+**ReadFile Buffer Pooling**: `WinFspFileSystemAdapter.ReadFile()` uses `ArrayPool<byte>.Shared.Rent()` to avoid per-read `byte[]` allocations. The rented array may be larger than the WinFsp native buffer, so `bytesRead` is capped to `buffer.Span.Length` and only valid bytes are copied via `AsSpan(0, bytesRead).CopyTo(buffer.Span)`. The array is returned in a `finally` block. **Do NOT return the rented array via `buffer.ReturnArray(rentedArray, copyBack: true)`** — when `copyBack` is `true` the API copies the entire rented array back to the native buffer (no byte-count parameter), which leaks stale `ArrayPool` data beyond `bytesRead`.
 
 **Shell Metadata Short-Circuit**: Windows Explorer probes every folder for metadata files like `desktop.ini`, `thumbs.db`, and `autorun.inf`. Without filtering, these probes trigger unnecessary ZIP Central Directory parsing. The `ShellMetadataFilter` intercepts these in `CreateFile` before any string allocation occurs, returning `FileNotFound` immediately. Controlled via `Mount:ShortCircuitShellMetadata` in `appsettings.jsonc`.
 
-**Unmanaged Memory (~394MB)**: Profiling shows ~394MB unmanaged memory at runtime. This is almost entirely **Dokany driver infrastructure** (Dokany kernel driver and user-mode library `dokan2.dll` communication buffers), not ZipDrive code. The managed heap is typically ~1-2MB. This is the normal baseline cost of a FUSE-like file system on Windows and is outside our control.
+**Unmanaged Memory (~394MB)**: Profiling shows ~394MB unmanaged memory at runtime. This is almost entirely **WinFsp driver infrastructure** (WinFsp kernel driver and user-mode library `winfsp-x64.dll` communication buffers), not ZipDrive code. The managed heap is typically ~1-2MB. This is the normal baseline cost of a FUSE-like file system on Windows and is outside our control.
 
-**Debug Logging**: All Dokan file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
+**Debug Logging**: All WinFsp file system operations log at `Debug` level with the command name and file path, enabling detailed diagnostics when the Serilog minimum level is lowered.
 
 ### Presentation Layer (`src/ZipDrive.Cli`)
 
@@ -394,7 +394,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 
 **Drag-and-Drop Support**: When a folder is dragged onto `ZipDrive.exe`, Windows passes the path as a bare positional arg (`args[0]`). `ArgPreprocessor.RewriteBareArgs()` detects this (first arg not starting with `--`) and prepends `--Mount:ArchiveDirectory=<path>` to the args array. Prepending ensures an explicit `--Mount:ArchiveDirectory` later in the args wins (last-wins semantics). The host builder uses `UseContentRoot(AppContext.BaseDirectory)` so config files are found relative to the exe, not the dragged folder's location. Command-line args are re-added at the end of `ConfigureAppConfiguration` to override `appsettings.jsonc` defaults.
 
-**Validation UX**: `DokanHostedService` validates `ArchiveDirectory` is a non-empty, existing directory. On validation failure, the error is printed to stderr and `Console.ReadKey()` keeps the auto-created console window open so drag-and-drop users can read the message.
+**Validation UX**: `WinFspHostedService` validates `ArchiveDirectory` is a non-empty, existing directory. On validation failure, the error is printed to stderr and `Console.ReadKey()` keeps the auto-created console window open so drag-and-drop users can read the message.
 
 ## Key Design Patterns
 
@@ -408,7 +408,7 @@ Command-line interface entry point with OpenTelemetry SDK wiring.
 | **Chunked Extraction** | `ChunkedDiskStorageStrategy`, `ChunkedFileEntry`, `ChunkedStream` | Incremental decompression with per-chunk TCS signaling |
 | **Async Cleanup** | `ChunkedDiskStorageStrategy` | Non-blocking eviction |
 | **Dual-Tier Routing** | `FileContentCache` | Size-based memory/disk routing |
-| **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `DokanTelemetry` | Zero-DI metrics/tracing |
+| **Static Telemetry** | `CacheTelemetry`, `ZipTelemetry`, `FileSystemTelemetry` | Zero-DI metrics/tracing |
 | **Object Pooling** | Archive sessions (future) | Reuse expensive resources |
 | **Bytes-First Decoding** | `ZipCentralDirectoryEntry.FileNameBytes` | Defer string decode until encoding is known |
 | **Arg Rewriting** | `ArgPreprocessor` | Translate bare positional args to named config keys for drag-and-drop |
@@ -428,7 +428,7 @@ When working with the caching layer:
 6. **Borrow/Return pattern is mandatory** - Always dispose `ICacheHandle<T>` to allow eviction
 7. **Entries with RefCount > 0 are protected** - Never evict borrowed entries
 8. **ChunkedStream readers must use unbuffered FileStream** - `bufferSize: 1` prevents stale reads from sparse file regions written by the background extractor (the internal FileStream buffer can cache zeros from unwritten regions before the chunk is extracted)
-9. **ArchiveTrie uses ReaderWriterLockSlim** - Reads (every Dokan callback) take shared lock; writes (add/remove) take exclusive lock. `ListFolder` materializes results inside the lock.
+9. **ArchiveTrie uses ReaderWriterLockSlim** - Reads (every WinFsp callback) take shared lock; writes (add/remove) take exclusive lock. `ListFolder` materializes results inside the lock.
 10. **ArchiveNode drain prevents new operations** - `TryEnter()` returns false during drain. Prefetch must hold the guard and use `DrainToken` for cancellation.
 
 ## Testing Strategy
@@ -643,7 +643,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Component | Status | Description |
 |-----------|--------|-------------|
 | ZipArchiveProvider | ⏳ Pending | `IArchiveProvider` implementation |
-| DokanNet Adapter | ✅ Complete | `DokanFileSystemAdapter` + `DokanHostedService` |
+| WinFsp Adapter | ✅ Complete | `WinFspFileSystemAdapter` + `WinFspHostedService` |
 | CLI | ✅ Complete | OTel wiring, FileContentCache DI, config binding, single-file publish |
 | Multi-archive | ✅ Complete | `ArchiveTrie` + `ArchiveDiscovery` |
 | Observability | ✅ Complete | OpenTelemetry metrics/tracing, Aspire Dashboard |
@@ -652,13 +652,13 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 | Chunked Extraction | ✅ Complete | `ChunkedDiskStorageStrategy` with incremental 10MB chunks, per-chunk TCS signaling, 66 new tests |
 | Endurance Testing | ✅ Complete | 24-hour soak test with 100 concurrent tasks, full + partial SHA-256 verification, fail-fast diagnostics, latency reporting |
 | Charset Detection | ✅ Complete | Automatic encoding detection for non-UTF8 ZIP filenames (Shift-JIS, GBK, EUC-KR, etc.) |
-| Drag-and-Drop Launch | ✅ Complete | `ArgPreprocessor` rewrites bare args, `DokanHostedService` validates directory + press-any-key UX |
+| Drag-and-Drop Launch | ✅ Complete | `ArgPreprocessor` rewrites bare args, `WinFspHostedService` validates directory + press-any-key UX |
 | Sibling Prefetch | ✅ Complete | `SpanSelector` + coalescing batch reader; fire-and-forget on cold reads and directory listings, per-directory in-flight guard, fill-ratio span selection, 15 new tests |
 | Dynamic Reload | ✅ Complete | Per-archive add/remove with FileSystemWatcher, ArchiveChangeConsolidator, ArchiveNode drain guard, GenericCache.TryRemove, FileContentCache.RemoveArchive, IArchiveManager, DynamicReloadSuite endurance test |
 
 ## Known Limitations / Future Work
 
-- [x] Mount/Unmount implementation (DokanNet integration) - **Implemented**
+- [x] Mount/Unmount implementation (WinFsp integration) - **Implemented**
 - [x] CLI argument parsing and hosted service - **Implemented**
 - [x] Dual-tier coordinator (automatic memory/disk routing) - **Implemented**
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard) - **Implemented**
@@ -715,7 +715,7 @@ Refer to [`IMPLEMENTATION_CHECKLIST.md`](src/Docs/IMPLEMENTATION_CHECKLIST.md) f
 ZipDrive is considered complete when:
 - [x] Caching layer fully implemented with 80%+ test coverage (149 tests including chunked extraction)
 - [x] ZIP reader implemented and tested (33 tests, including encoding detection)
-- [x] DokanNet adapter functional (mount/unmount works)
+- [x] WinFsp adapter functional (mount/unmount works)
 - [x] CLI accepts arguments and mounts drives
 - [x] Dual-tier cache coordinator with strategy-owned materialization (6 tests)
 - [x] OpenTelemetry observability (metrics, tracing, Aspire Dashboard)
