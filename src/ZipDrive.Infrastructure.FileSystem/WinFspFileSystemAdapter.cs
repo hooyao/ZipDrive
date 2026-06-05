@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
@@ -16,7 +17,7 @@ namespace ZipDrive.Infrastructure.FileSystem;
 /// Read-only: all write operations return AccessDenied.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
+public sealed class WinFspFileSystemAdapter : IFileSystem
 {
     private const uint FileAttributeReadonly = 0x00000001;
     private const uint FileAttributeDirectory = 0x00000010;
@@ -136,21 +137,22 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
     {
         _logger.LogDebug("ReadFile: {Path} offset={Offset} length={Length}", fileName, offset, buffer.Length);
         long startTimestamp = Stopwatch.GetTimestamp();
+        byte[] rentedArray = ArrayPool<byte>.Shared.Rent(buffer.Length);
 
         try
         {
-            byte[] temp = new byte[buffer.Length];
-            int read = await _vfs.ReadFileAsync(fileName, temp, checked((long)offset), ct).ConfigureAwait(false);
+            int read = await _vfs.ReadFileAsync(fileName, rentedArray, checked((long)offset), ct).ConfigureAwait(false);
             if (read <= 0)
                 return ReadResult.EndOfFile();
 
-            temp.AsSpan(0, Math.Min(read, buffer.Length)).CopyTo(buffer.Span);
+            int bytesRead = Math.Min(read, buffer.Length);
+            rentedArray.AsSpan(0, bytesRead).CopyTo(buffer.Span);
 
             WinFspTelemetry.ReadDuration.Record(
                 Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 new KeyValuePair<string, object?>("result", "success"));
 
-            return ReadResult.Success((uint)read);
+            return ReadResult.Success((uint)bytesRead);
         }
         catch (VfsFileNotFoundException) { return ReadResult.Error(NtStatus.ObjectNameNotFound); }
         catch (VfsAccessDeniedException) { return ReadResult.Error(NtStatus.AccessDenied); }
@@ -163,6 +165,10 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
 
             _logger.LogError(ex, "ReadFile error: {Path}", fileName);
             return ReadResult.Error(NtStatus.UnexpectedIoError);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedArray);
         }
     }
 
@@ -182,7 +188,9 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
 
         try
         {
-            VfsFileInfo vfsInfo = info.Context as VfsFileInfo ?? await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
+            VfsFileInfo vfsInfo = info.Context is VfsFileInfo cachedInfo
+                ? cachedInfo
+                : await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
             return FsResult.Success(ConvertToFileInfo(vfsInfo));
         }
         catch (VfsFileNotFoundException) { return FsResult.Error(NtStatus.ObjectNameNotFound); }
@@ -216,25 +224,7 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
         try
         {
             IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(fileName, ct).ConfigureAwait(false);
-            uint bytesTransferred = 0;
-
-            foreach (VfsFileInfo entry in entries)
-            {
-                if (marker != null && string.Compare(entry.Name, marker, StringComparison.OrdinalIgnoreCase) <= 0)
-                    continue;
-
-                var dirInfo = new FspDirInfo
-                {
-                    FileInfo = ConvertToFileInfo(entry)
-                };
-                dirInfo.SetFileName(entry.Name);
-
-                if (!WinFspFileSystem.AddDirInfo(&dirInfo, buffer, length, &bytesTransferred))
-                    return ReadDirectoryResult.Success(bytesTransferred);
-            }
-
-            WinFspFileSystem.EndDirInfo(buffer, length, &bytesTransferred);
-            return ReadDirectoryResult.Success(bytesTransferred);
+            return WriteDirectoryBuffer(entries, marker, buffer, length);
         }
         catch (VfsDirectoryNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectPathNotFound); }
         catch (VfsFileNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectNameNotFound); }
@@ -243,6 +233,30 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
             _logger.LogError(ex, "ReadDirectory error: {Path}", fileName);
             return ReadDirectoryResult.Error(NtStatus.UnexpectedIoError);
         }
+    }
+
+    private static unsafe ReadDirectoryResult WriteDirectoryBuffer(
+        IReadOnlyList<VfsFileInfo> entries, string? marker, nint buffer, uint length)
+    {
+        uint bytesTransferred = 0;
+
+        foreach (VfsFileInfo entry in entries)
+        {
+            if (marker != null && string.Compare(entry.Name, marker, StringComparison.OrdinalIgnoreCase) <= 0)
+                continue;
+
+            var dirInfo = new FspDirInfo
+            {
+                FileInfo = ConvertToFileInfo(entry)
+            };
+            dirInfo.SetFileName(entry.Name);
+
+            if (!WinFspFileSystem.AddDirInfo(&dirInfo, buffer, length, &bytesTransferred))
+                return ReadDirectoryResult.Success(bytesTransferred);
+        }
+
+        WinFspFileSystem.EndDirInfo(buffer, length, &bytesTransferred);
+        return ReadDirectoryResult.Success(bytesTransferred);
     }
 
     public ValueTask<FsResult> FlushFileBuffers(string? fileName, FileOperationInfo info, CancellationToken ct)
@@ -256,8 +270,6 @@ public sealed unsafe class WinFspFileSystemAdapter : IFileSystem
 
     public void Close(FileOperationInfo info)
     {
-        if (info.FileName is { } fileName)
-            _logger.LogDebug("Close: {Path}", fileName);
         info.Context = null;
     }
 
