@@ -7,7 +7,6 @@
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="DokanNet" Version="2.3.0.3" />
     <PackageVersion Include="FluentAssertions" Version="8.1.1" />
     <PackageVersion Include="KTrie" Version="3.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
@@ -24,6 +23,7 @@
     <PackageVersion Include="Spectre.Console" Version="0.50.0" />
     <PackageVersion Include="Serilog.Expressions" Version="5.0.0" />
     <PackageVersion Include="UTF.Unknown" Version="2.6.0" />
+    <PackageVersion Include="WinFsp.Native" Version="0.1.1" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <PackageVersion Include="Serilog.Settings.Configuration" Version="9.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />

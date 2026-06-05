@@ -12,11 +12,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="DokanNet" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="WinFsp.Native" />
+    <PackageReference Include="WinFsp.Native" Version="*" />
   </ItemGroup>
 
   <ItemGroup>

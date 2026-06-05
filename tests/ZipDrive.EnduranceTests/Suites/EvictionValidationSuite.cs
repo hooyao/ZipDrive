@@ -17,7 +17,7 @@ public sealed class EvictionValidationSuite : EnduranceSuiteBase
     public override int TaskCount => 10;
 
     public EvictionValidationSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
