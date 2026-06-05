@@ -14,6 +14,7 @@ public sealed class ArchiveTrie : IArchiveTrie
 {
     private readonly TrieDictionary<ArchiveDescriptor> _trie;
     private readonly HashSet<string> _virtualFolders;
+    private readonly Dictionary<string, int> _virtualFolderRefCounts;
     private readonly StringComparer _folderComparer;
     private readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.NoRecursion);
 
@@ -36,6 +37,7 @@ public sealed class ArchiveTrie : IArchiveTrie
             : StringComparer.Ordinal;
 
         _virtualFolders = new HashSet<string>(_folderComparer);
+        _virtualFolderRefCounts = new Dictionary<string, int>(_folderComparer);
     }
 
     /// <inheritdoc />
@@ -46,18 +48,12 @@ public sealed class ArchiveTrie : IArchiveTrie
         _lock.EnterWriteLock();
         try
         {
-            // Key with trailing /
             string key = archive.VirtualPath + "/";
-            _trie[key] = archive;
+            if (_trie.TryGetValue(key, out ArchiveDescriptor? existing))
+                RemoveFolderReferences(existing.VirtualPath);
 
-            // Register all ancestor virtual folders
-            string[] parts = archive.VirtualPath.Split('/');
-            string current = "";
-            for (int i = 0; i < parts.Length - 1; i++) // Exclude the ZIP name itself
-            {
-                current = i == 0 ? parts[i] : current + "/" + parts[i];
-                _virtualFolders.Add(current);
-            }
+            _trie[key] = archive;
+            AddFolderReferences(archive.VirtualPath);
         }
         finally
         {
@@ -198,7 +194,7 @@ public sealed class ArchiveTrie : IArchiveTrie
             string key = virtualPath + "/";
             bool removed = _trie.Remove(key);
             if (removed)
-                RebuildVirtualFolders();
+                RemoveFolderReferences(virtualPath);
             return removed;
         }
         finally
@@ -241,21 +237,43 @@ public sealed class ArchiveTrie : IArchiveTrie
         }
     }
 
-    /// <summary>
-    /// Rebuilds _virtualFolders from remaining archives. Must be called inside write lock.
-    /// </summary>
-    private void RebuildVirtualFolders()
+    private void AddFolderReferences(string virtualPath)
     {
-        _virtualFolders.Clear();
-        foreach (ArchiveDescriptor archive in _trie.Values)
+        foreach (string folder in EnumerateAncestorFolders(virtualPath))
         {
-            string[] parts = archive.VirtualPath.Split('/');
-            string current = "";
-            for (int i = 0; i < parts.Length - 1; i++)
+            _virtualFolderRefCounts.TryGetValue(folder, out int count);
+            _virtualFolderRefCounts[folder] = count + 1;
+            _virtualFolders.Add(folder);
+        }
+    }
+
+    private void RemoveFolderReferences(string virtualPath)
+    {
+        foreach (string folder in EnumerateAncestorFolders(virtualPath))
+        {
+            if (!_virtualFolderRefCounts.TryGetValue(folder, out int count))
+                continue;
+
+            if (count <= 1)
             {
-                current = i == 0 ? parts[i] : current + "/" + parts[i];
-                _virtualFolders.Add(current);
+                _virtualFolderRefCounts.Remove(folder);
+                _virtualFolders.Remove(folder);
             }
+            else
+            {
+                _virtualFolderRefCounts[folder] = count - 1;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateAncestorFolders(string virtualPath)
+    {
+        string[] parts = virtualPath.Split('/');
+        string current = "";
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            current = i == 0 ? parts[i] : current + "/" + parts[i];
+            yield return current;
         }
     }
 }
