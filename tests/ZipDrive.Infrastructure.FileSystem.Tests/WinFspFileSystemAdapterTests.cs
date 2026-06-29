@@ -17,17 +17,23 @@ public class WinFspFileSystemAdapterTests
     public async Task OpenFile_ExistingFile_ReturnsMetadataAndCachesContext()
     {
         var file = FileInfo("readme.txt", "archive.zip/readme.txt", size: 123);
-        var adapter = CreateAdapter(new FakeVirtualFileSystem { FileInfo = _ => file });
+        var vfs = new FakeVirtualFileSystem { FileInfo = _ => file };
+        var adapter = CreateAdapter(vfs);
         var info = new FileOperationInfo();
 
         CreateResult result = await adapter.OpenFile("archive.zip/readme.txt", 0, 0, info, CancellationToken.None);
 
         result.Status.Should().Be(NtStatus.Success);
         result.FileInfo.FileSize.Should().Be(123UL);
-        (result.FileInfo.FileAttributes & 0x00000001u).Should().Be(0x00000001u); // READONLY
-        (result.FileInfo.FileAttributes & 0x00000080u).Should().Be(0x00000080u); // NORMAL
-        info.Context.Should().Be(file);
+        (result.FileInfo.FileAttributes & 0x00000001u).Should().Be(0x00000001u); // READONLY set
+        (result.FileInfo.FileAttributes & 0x00000080u).Should().Be(0u); // NORMAL stripped (invalid alongside other bits)
+        info.Context.Should().NotBeNull();
         info.IsDirectory.Should().BeFalse();
+
+        // Cached context is reused — GetFileInformation must not re-query the VFS.
+        FsResult infoResult = await adapter.GetFileInformation("archive.zip/readme.txt", info, CancellationToken.None);
+        infoResult.FileInfo.FileSize.Should().Be(123UL);
+        vfs.GetFileInfoCalls.Should().Be(1); // only the OpenFile lookup
     }
 
     [Theory]
@@ -62,20 +68,20 @@ public class WinFspFileSystemAdapterTests
     }
 
     [Fact]
-    public void GetFileSecurityByName_ShellMetadataWithBackslashes_ShortCircuitsBeforeVfsLookup()
+    public async Task GetFileSecurityByName_ShellMetadataWithBackslashes_ShortCircuitsBeforeVfsLookup()
     {
         var vfs = new FakeVirtualFileSystem
         {
             FileInfo = _ => throw new InvalidOperationException("VFS should not be called for shell metadata")
         };
         var adapter = CreateAdapter(vfs);
-        byte[]? descriptor = null;
 
-        int status = adapter.GetFileSecurityByName(@"\archive.zip\desktop.ini", out uint attributes, ref descriptor);
+        SecurityByNameResult result = await adapter.GetFileSecurityByName(
+            @"\archive.zip\desktop.ini", getSecurityDescriptor: true, CancellationToken.None);
 
-        status.Should().Be(NtStatus.ObjectNameNotFound);
-        attributes.Should().Be(0);
-        descriptor.Should().BeNull();
+        result.Status.Should().Be(NtStatus.ObjectNameNotFound);
+        result.FileAttributes.Should().Be(0u);
+        result.SecurityDescriptor.Should().BeNull();
         vfs.GetFileInfoCalls.Should().Be(0);
     }
 
@@ -94,21 +100,19 @@ public class WinFspFileSystemAdapterTests
     }
 
     [Fact]
-    public async Task ReadFile_CopiesOnlyBytesReadAndCapsToDestinationLength()
+    public async Task ReadFile_WritesDirectlyIntoCallerBufferAndReturnsCount()
     {
         var adapter = CreateAdapter(new FakeVirtualFileSystem
         {
             ReadFile = (_, buffer, offset) =>
             {
+                // Zero-copy: the adapter passes WinFsp's buffer straight through (exact length, no rent).
                 offset.Should().Be(5);
-                buffer.Length.Should().BeGreaterThanOrEqualTo(4);
-                buffer[0] = 1;
-                buffer[1] = 2;
-                buffer[2] = 3;
-                buffer[3] = 4;
-                if (buffer.Length > 4)
-                    buffer[4] = 99;
-                return 4;
+                buffer.Length.Should().Be(3);
+                buffer.Span[0] = 1;
+                buffer.Span[1] = 2;
+                buffer.Span[2] = 3;
+                return 3;
             }
         });
         byte[] destination = [0, 0, 0];
@@ -117,7 +121,7 @@ public class WinFspFileSystemAdapterTests
 
         result.Status.Should().Be(NtStatus.Success);
         result.BytesTransferred.Should().Be(3);
-        destination.Should().Equal(1, 2, 3);
+        destination.Should().Equal(1, 2, 3); // VFS wrote straight into the caller's buffer
     }
 
     [Fact]
@@ -169,31 +173,35 @@ public class WinFspFileSystemAdapterTests
     }
 
     [Fact]
-    public void GetDirInfoByName_FindsEntryCaseInsensitively()
+    public async Task GetDirInfoByName_ResolvesSingleEntryViaVfsGetFileInfo()
     {
-        var adapter = CreateAdapter(new FakeVirtualFileSystem
-        {
-            DirectoryEntries = _ => [FileInfo("Readme.TXT", "archive.zip/Readme.TXT", size: 9)]
-        });
+        var file = FileInfo("Readme.TXT", "archive.zip/Readme.TXT", size: 9);
+        var vfs = new FakeVirtualFileSystem { FileInfo = _ => file };
+        var adapter = CreateAdapter(vfs);
 
-        int status = adapter.GetDirInfoByName("archive.zip", "readme.txt", out FspDirInfo dirInfo, new FileOperationInfo());
+        DirInfoByNameResult result = await adapter.GetDirInfoByName(
+            "archive.zip", "readme.txt", new FileOperationInfo(), CancellationToken.None);
 
-        status.Should().Be(NtStatus.Success);
-        dirInfo.FileInfo.FileSize.Should().Be(9UL);
+        result.Status.Should().Be(NtStatus.Success);
+        result.DirInfo.FileInfo.FileSize.Should().Be(9UL);
+        // O(1) single lookup — must not enumerate the whole parent directory.
+        vfs.ListDirectoryCalls.Should().Be(0);
+        vfs.GetFileInfoCalls.Should().Be(1);
     }
 
     [Fact]
-    public void GetDirInfoByName_MissingEntry_ReturnsObjectNameNotFound()
+    public async Task GetDirInfoByName_MissingEntry_ReturnsObjectNameNotFound()
     {
         var adapter = CreateAdapter(new FakeVirtualFileSystem
         {
-            DirectoryEntries = _ => [FileInfo("present.txt", "archive.zip/present.txt")]
+            FileInfo = p => throw new VfsFileNotFoundException(p)
         });
 
-        int status = adapter.GetDirInfoByName("archive.zip", "missing.txt", out FspDirInfo dirInfo, new FileOperationInfo());
+        DirInfoByNameResult result = await adapter.GetDirInfoByName(
+            "archive.zip", "missing.txt", new FileOperationInfo(), CancellationToken.None);
 
-        status.Should().Be(NtStatus.ObjectNameNotFound);
-        dirInfo.Should().Be(default(FspDirInfo));
+        result.Status.Should().Be(NtStatus.ObjectNameNotFound);
+        result.DirInfo.Should().Be(default(FspDirInfo));
     }
 
     [Fact]
@@ -220,6 +228,94 @@ public class WinFspFileSystemAdapterTests
 
         result.Status.Should().Be(NtStatus.Success);
         result.FileInfo.FileSize.Should().Be(456UL);
+    }
+
+    [Fact]
+    public async Task GetFileInformation_PreEpochTimestamp_ClampsToZeroInsteadOfThrowing()
+    {
+        // RAR entries lacking a modification time arrive as DateTime.MinValue (year 0001).
+        // DateTime.ToFileTimeUtc() throws for pre-1601 dates, which previously failed the operation.
+        var file = new VfsFileInfo
+        {
+            Name = "no-timestamp.bin",
+            FullPath = "archive.rar/no-timestamp.bin",
+            IsDirectory = false,
+            SizeBytes = 10,
+            CreationTimeUtc = DateTime.MinValue,
+            LastWriteTimeUtc = DateTime.MinValue,
+            LastAccessTimeUtc = DateTime.MinValue,
+            Attributes = FileAttributes.Normal
+        };
+        var adapter = CreateAdapter(new FakeVirtualFileSystem { FileInfo = _ => file });
+
+        FsResult result = await adapter.GetFileInformation(
+            "archive.rar/no-timestamp.bin", new FileOperationInfo(), CancellationToken.None);
+
+        result.Status.Should().Be(NtStatus.Success);
+        result.FileInfo.CreationTime.Should().Be(0UL);
+        result.FileInfo.LastWriteTime.Should().Be(0UL);
+        result.FileInfo.LastAccessTime.Should().Be(0UL);
+        result.FileInfo.ChangeTime.Should().Be(0UL);
+    }
+
+    [Fact]
+    public async Task GetFileInformation_Directory_ReportsZeroSizeAndDirectoryAttribute()
+    {
+        var dir = FileInfo("sub", "archive.zip/sub", size: 0, isDirectory: true);
+        var adapter = CreateAdapter(new FakeVirtualFileSystem { FileInfo = _ => dir });
+
+        FsResult result = await adapter.GetFileInformation(
+            "archive.zip/sub", new FileOperationInfo(), CancellationToken.None);
+
+        result.Status.Should().Be(NtStatus.Success);
+        result.FileInfo.FileSize.Should().Be(0UL);
+        result.FileInfo.AllocationSize.Should().Be(0UL);
+        (result.FileInfo.FileAttributes & 0x00000010u).Should().Be(0x00000010u); // DIRECTORY
+        (result.FileInfo.FileAttributes & 0x00000001u).Should().Be(0x00000001u); // READONLY
+    }
+
+    [Fact]
+    public async Task DirectoryPagination_ResumesStrictlyAfterMarker()
+    {
+        var adapter = CreateAdapter(new FakeVirtualFileSystem
+        {
+            DirectoryEntries = _ =>
+            [
+                FileInfo("a.txt", "a.txt"),
+                FileInfo("b.txt", "b.txt"),
+                FileInfo("c.txt", "c.txt"),
+                FileInfo("d.txt", "d.txt"),
+            ]
+        });
+
+        IReadOnlyList<VfsFileInfo> page1 = await adapter.GuardedPrepareDirectoryEntriesAsync("");
+        IReadOnlyList<VfsFileInfo> page2 = await adapter.GuardedPrepareDirectoryEntriesAsync("", marker: "b.txt");
+
+        page1.Select(e => e.Name).Should().Equal("a.txt", "b.txt", "c.txt", "d.txt");
+        page2.Select(e => e.Name).Should().Equal("c.txt", "d.txt"); // resumes after marker, no dupes/skips
+    }
+
+    [Fact]
+    public async Task DirectoryPagination_CaseOnlyDuplicateSiblings_SurviveMarkerResume()
+    {
+        // Two entries differing only by case (possible in a case-sensitive archive). The composite
+        // comparer gives them a total order so the marker resume can't collapse them and drop one.
+        var adapter = CreateAdapter(new FakeVirtualFileSystem
+        {
+            DirectoryEntries = _ =>
+            [
+                FileInfo("README", "README"),
+                FileInfo("readme", "readme"),
+                FileInfo("zzz", "zzz"),
+            ]
+        });
+
+        IReadOnlyList<VfsFileInfo> all = await adapter.GuardedPrepareDirectoryEntriesAsync("");
+        all.Select(e => e.Name).Should().Equal("README", "readme", "zzz");
+
+        // Page boundary right after "README" — the lowercase sibling must NOT be skipped.
+        IReadOnlyList<VfsFileInfo> resumed = await adapter.GuardedPrepareDirectoryEntriesAsync("", marker: "README");
+        resumed.Select(e => e.Name).Should().Equal("readme", "zzz");
     }
 
     private static WinFspFileSystemAdapter CreateAdapter(FakeVirtualFileSystem vfs, MountSettings? mountSettings = null)
@@ -257,9 +353,10 @@ public class WinFspFileSystemAdapterTests
     {
         public Func<string, VfsFileInfo> FileInfo { get; init; } = path => WinFspFileSystemAdapterTests.FileInfo(Path.GetFileName(path), path);
         public Func<string, IReadOnlyList<VfsFileInfo>> DirectoryEntries { get; init; } = _ => [];
-        public Func<string, byte[], long, int> ReadFile { get; init; } = (_, _, _) => 0;
+        public Func<string, Memory<byte>, long, int> ReadFile { get; init; } = (_, _, _) => 0;
 
         public int GetFileInfoCalls { get; private set; }
+        public int ListDirectoryCalls { get; private set; }
 
         public bool IsMounted => true;
         public event EventHandler<bool>? MountStateChanged { add { } remove { } }
@@ -275,9 +372,12 @@ public class WinFspFileSystemAdapterTests
         }
 
         public Task<IReadOnlyList<VfsFileInfo>> ListDirectoryAsync(string path, CancellationToken cancellationToken = default)
-            => Task.FromResult(DirectoryEntries(path));
+        {
+            ListDirectoryCalls++;
+            return Task.FromResult(DirectoryEntries(path));
+        }
 
-        public Task<int> ReadFileAsync(string path, byte[] buffer, long offset, CancellationToken cancellationToken = default)
+        public Task<int> ReadFileAsync(string path, Memory<byte> buffer, long offset, CancellationToken cancellationToken = default)
             => Task.FromResult(ReadFile(path, buffer, offset));
 
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken = default) => Task.FromResult(true);

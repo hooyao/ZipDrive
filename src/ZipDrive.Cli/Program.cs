@@ -4,12 +4,13 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
-using Serilog.Templates;
-using Serilog.Templates.Themes;
+using Serilog.Events;
+using Serilog.Sinks.SystemConsole.Themes;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
@@ -22,7 +23,8 @@ using ZipDrive.Infrastructure.FileSystem;
 
 [assembly: SupportedOSPlatform("windows")]
 
-// Required for ZIP entry name encoding
+// Required for ZIP entry name encoding (Shift-JIS, GBK, etc.). Code-page data is
+// independent of globalization/ICU, so this works under Native AOT.
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var informationalVersion = Assembly.GetExecutingAssembly()
@@ -33,9 +35,9 @@ var informationalVersion = Assembly.GetExecutingAssembly()
 var plusIndex = informationalVersion.IndexOf('+');
 var version = plusIndex >= 0 ? informationalVersion[..plusIndex] : informationalVersion;
 
-Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
-    .CreateBootstrapLogger();
+// Bootstrap logger (console, Information) so the startup banner and any early
+// drag-and-drop / config errors have somewhere to go before the host is built.
+Log.Logger = ProgramLogging.Build(LogEventLevel.Information, LogEventLevel.Information);
 
 Log.Information("ZipDrive {Version} starting", version);
 
@@ -58,48 +60,34 @@ var builder = Host.CreateDefaultBuilder(args)
         // Re-add command line so it wins over jsonc files (last source wins).
         // Without this, appsettings.jsonc overrides the rewritten drag-and-drop args.
         config.AddCommandLine(args);
-    });
-
-builder.UseSerilog((context, config) =>
-{
-    var logTheme = new TemplateTheme(new Dictionary<TemplateThemeStyle, string>
+    })
+    .ConfigureLogging((context, logging) =>
     {
-        // Value types from Literate theme (colored arguments in log messages)
-        [TemplateThemeStyle.String] = "\x1b[38;5;0045m",
-        [TemplateThemeStyle.Number] = "\x1b[38;5;0200m",
-        [TemplateThemeStyle.Boolean] = "\x1b[38;5;0027m",
-        [TemplateThemeStyle.Scalar] = "\x1b[38;5;0085m",
-        [TemplateThemeStyle.Null] = "\x1b[38;5;0027m",
-        [TemplateThemeStyle.Name] = "\x1b[38;5;0007m",
-        [TemplateThemeStyle.Invalid] = "\x1b[38;5;0011m",
-        // Custom level colors
-        [TemplateThemeStyle.LevelVerbose] = "\x1b[90m",
-        [TemplateThemeStyle.LevelDebug] = "\x1b[90m",
-        [TemplateThemeStyle.LevelInformation] = "\x1b[32m",
-        [TemplateThemeStyle.LevelWarning] = "\x1b[33m",
-        [TemplateThemeStyle.LevelError] = "\x1b[31m",
-        [TemplateThemeStyle.LevelFatal] = "\x1b[1;31m",
+        // Configure Serilog in code (Native-AOT clean — no Settings.Configuration
+        // reflection, no Expressions dynamic codegen) and wire it into the
+        // Microsoft.Extensions.Logging pipeline via Serilog.Extensions.Logging.
+        Log.Logger = ProgramLogging.BuildFromConfiguration(context.Configuration);
+        logging.ClearProviders();
+        logging.AddSerilog(Log.Logger, dispose: true);
     });
-
-    config.ReadFrom.Configuration(context.Configuration)
-          .WriteTo.Console(new ExpressionTemplate(
-              "[{@t:HH:mm:ss} {@l:u3}][\x1b[90m{Substring(SourceContext, LastIndexOf(SourceContext, '.') + 1)}\x1b[0m] {@m}\n{#if @x is not null}{@x}\n{#end}",
-              theme: logTheme));
-});
 
 builder.ConfigureServices((context, services) =>
 {
-    // Bind configuration sections
+    // Bind configuration sections (source-generated binding under EnableConfigurationBindingGenerator).
     services.Configure<MountSettings>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
     services.Configure<PrefetchOptions>(context.Configuration.GetSection("Cache:Prefetch"));
 
-    // OpenTelemetry (opt-in: only when Endpoint is configured)
+    // OpenTelemetry (opt-in: only when Endpoint is configured). The OTLP exporter and
+    // SDK are Native-AOT ready; instrumentation is added only on the opt-in path.
     var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"];
 
     if (!string.IsNullOrEmpty(otlpEndpoint))
     {
-        var metricExportIntervalSeconds = context.Configuration.GetValue("OpenTelemetry:MetricExportIntervalSeconds", 5);
+        // Read the interval with int.TryParse (indexer) rather than the reflection-based
+        // GetValue<int> so the path stays AOT-clean.
+        int metricExportIntervalSeconds =
+            int.TryParse(context.Configuration["OpenTelemetry:MetricExportIntervalSeconds"], out var s) ? s : 5;
         var metricExportIntervalMs = metricExportIntervalSeconds > 0 && metricExportIntervalSeconds <= int.MaxValue / 1000
             ? metricExportIntervalSeconds * 1000
             : 5_000;
@@ -179,3 +167,35 @@ builder.ConfigureServices((context, services) =>
 
 var host = builder.Build();
 await host.RunAsync();
+
+/// <summary>
+/// Native-AOT-safe Serilog setup, configured entirely in code.
+/// </summary>
+internal static class ProgramLogging
+{
+    private const string OutputTemplate =
+        "[{Timestamp:HH:mm:ss} {Level:u3}][{SourceContext}] {Message:lj}{NewLine}{Exception}";
+
+    public static Serilog.ILogger Build(LogEventLevel defaultLevel, LogEventLevel microsoftLevel) =>
+        new LoggerConfiguration()
+            .MinimumLevel.Is(defaultLevel)
+            .MinimumLevel.Override("Microsoft", microsoftLevel)
+            .WriteTo.Console(outputTemplate: OutputTemplate, theme: AnsiConsoleTheme.Code)
+            .CreateLogger();
+
+    /// <summary>
+    /// Builds the logger from the "Serilog:MinimumLevel" config section using plain
+    /// indexer reads (no reflection binding), so it stays AOT-clean.
+    /// </summary>
+    public static Serilog.ILogger BuildFromConfiguration(IConfiguration configuration)
+    {
+        LogEventLevel defaultLevel = ParseLevel(
+            configuration["Serilog:MinimumLevel:Default"], LogEventLevel.Information);
+        LogEventLevel microsoftLevel = ParseLevel(
+            configuration["Serilog:MinimumLevel:Override:Microsoft"], LogEventLevel.Warning);
+        return Build(defaultLevel, microsoftLevel);
+    }
+
+    private static LogEventLevel ParseLevel(string? value, LogEventLevel fallback) =>
+        Enum.TryParse(value, ignoreCase: true, out LogEventLevel level) ? level : fallback;
+}

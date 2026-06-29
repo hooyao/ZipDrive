@@ -53,11 +53,12 @@ public interface IVirtualFileSystem
     /// Reads file content at a specified offset into the provided buffer.
     /// </summary>
     /// <param name="path">Virtual path to the file.</param>
-    /// <param name="buffer">Buffer to write data into.</param>
+    /// <param name="buffer">Buffer to write data into. The implementation writes directly into it,
+    /// enabling zero-copy reads when the caller supplies a kernel/native buffer.</param>
     /// <param name="offset">Byte offset in the file to start reading from.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Number of bytes actually read.</returns>
-    Task<int> ReadFileAsync(string path, byte[] buffer, long offset, CancellationToken cancellationToken = default);
+    /// <returns>Number of bytes actually read (never more than <paramref name="buffer"/> length).</returns>
+    Task<int> ReadFileAsync(string path, Memory<byte> buffer, long offset, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if a file (not directory) exists at the given path.

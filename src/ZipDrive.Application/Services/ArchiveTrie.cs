@@ -13,7 +13,7 @@ namespace ZipDrive.Application.Services;
 public sealed class ArchiveTrie : IArchiveTrie
 {
     private readonly TrieDictionary<ArchiveDescriptor> _trie;
-    private readonly HashSet<string> _virtualFolders;
+    // A virtual folder exists iff its reference count (number of archives nested under it) is > 0.
     private readonly Dictionary<string, int> _virtualFolderRefCounts;
     private readonly StringComparer _folderComparer;
     private readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.NoRecursion);
@@ -36,7 +36,6 @@ public sealed class ArchiveTrie : IArchiveTrie
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
-        _virtualFolders = new HashSet<string>(_folderComparer);
         _virtualFolderRefCounts = new Dictionary<string, int>(_folderComparer);
     }
 
@@ -50,10 +49,10 @@ public sealed class ArchiveTrie : IArchiveTrie
         {
             string key = archive.VirtualPath + "/";
             if (_trie.TryGetValue(key, out ArchiveDescriptor? existing))
-                RemoveFolderReferences(existing.VirtualPath);
+                AdjustFolderReferences(existing.VirtualPath, -1);
 
             _trie[key] = archive;
-            AddFolderReferences(archive.VirtualPath);
+            AdjustFolderReferences(archive.VirtualPath, +1);
         }
         finally
         {
@@ -98,7 +97,7 @@ public sealed class ArchiveTrie : IArchiveTrie
             // Check if it's a virtual folder
             // Strip trailing slash for folder comparison
             string folderPath = normalizedPath.TrimEnd('/');
-            if (_virtualFolders.Contains(folderPath))
+            if (_virtualFolderRefCounts.ContainsKey(folderPath))
             {
                 return ArchiveTrieResult.Folder(folderPath);
             }
@@ -177,7 +176,7 @@ public sealed class ArchiveTrie : IArchiveTrie
         try
         {
             string trimmed = path.TrimEnd('/');
-            return !string.IsNullOrEmpty(trimmed) && _virtualFolders.Contains(trimmed);
+            return !string.IsNullOrEmpty(trimmed) && _virtualFolderRefCounts.ContainsKey(trimmed);
         }
         finally
         {
@@ -194,7 +193,7 @@ public sealed class ArchiveTrie : IArchiveTrie
             string key = virtualPath + "/";
             bool removed = _trie.Remove(key);
             if (removed)
-                RemoveFolderReferences(virtualPath);
+                AdjustFolderReferences(virtualPath, -1);
             return removed;
         }
         finally
@@ -237,43 +236,36 @@ public sealed class ArchiveTrie : IArchiveTrie
         }
     }
 
-    private void AddFolderReferences(string virtualPath)
+    /// <summary>
+    /// Adjusts the reference count of every ancestor virtual folder of <paramref name="virtualPath"/>
+    /// by <paramref name="delta"/>. A folder is present iff its count is &gt; 0; entries that reach
+    /// zero are removed. Must be called inside the write lock.
+    /// </summary>
+    private void AdjustFolderReferences(string virtualPath, int delta)
     {
         foreach (string folder in EnumerateAncestorFolders(virtualPath))
         {
             _virtualFolderRefCounts.TryGetValue(folder, out int count);
-            _virtualFolderRefCounts[folder] = count + 1;
-            _virtualFolders.Add(folder);
-        }
-    }
-
-    private void RemoveFolderReferences(string virtualPath)
-    {
-        foreach (string folder in EnumerateAncestorFolders(virtualPath))
-        {
-            if (!_virtualFolderRefCounts.TryGetValue(folder, out int count))
-                continue;
-
-            if (count <= 1)
-            {
+            int updated = count + delta;
+            if (updated <= 0)
                 _virtualFolderRefCounts.Remove(folder);
-                _virtualFolders.Remove(folder);
-            }
             else
-            {
-                _virtualFolderRefCounts[folder] = count - 1;
-            }
+                _virtualFolderRefCounts[folder] = updated;
         }
     }
 
+    /// <summary>
+    /// Yields each ancestor virtual folder of <paramref name="virtualPath"/> — every "/"-delimited
+    /// prefix, excluding the archive name itself — allocating only the substrings actually used
+    /// (no Split array or intermediate concatenations).
+    /// </summary>
     private static IEnumerable<string> EnumerateAncestorFolders(string virtualPath)
     {
-        string[] parts = virtualPath.Split('/');
-        string current = "";
-        for (int i = 0; i < parts.Length - 1; i++)
+        int slash = virtualPath.IndexOf('/');
+        while (slash >= 0)
         {
-            current = i == 0 ? parts[i] : current + "/" + parts[i];
-            yield return current;
+            yield return virtualPath[..slash];
+            slash = virtualPath.IndexOf('/', slash + 1);
         }
     }
 }

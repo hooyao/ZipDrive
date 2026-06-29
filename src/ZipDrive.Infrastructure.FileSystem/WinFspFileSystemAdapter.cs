@@ -1,7 +1,5 @@
-using System.Buffers;
 using System.Diagnostics;
 using System.IO.Enumeration;
-using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,6 +21,14 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
     private const uint FileAttributeReadonly = 0x00000001;
     private const uint FileAttributeDirectory = 0x00000010;
     private const uint FileAttributeNormal = 0x00000080;
+
+    // 1601-01-01 is the FILETIME epoch; DateTime.ToFileTimeUtc() throws for anything earlier.
+    private static readonly DateTime FileTimeEpochUtc = new(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    // Kernel metadata cache window. A small positive value lets WinFsp serve repeated attribute/
+    // info probes (Explorer refreshes) from its cache instead of re-issuing blocking VFS lookups.
+    // Bounded so a dynamically added/removed archive becomes visible within ~1s.
+    private const uint FileInfoTimeoutMs = 1000;
 
     private readonly IVirtualFileSystem _vfs;
     private readonly ILogger<WinFspFileSystemAdapter> _logger;
@@ -48,6 +54,7 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         host.PersistentAcls = false;
         host.PostCleanupWhenModifiedOnly = true;
         host.PassQueryDirectoryPattern = true;
+        host.FileInfoTimeout = FileInfoTimeoutMs;
         // Report as "NTFS" so Windows path resolution works for elevated processes.
         host.FileSystemName = "NTFS";
         return NtStatus.Success;
@@ -67,34 +74,39 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
     public int GetVolumeInfo(out ulong totalSize, out ulong freeSize, out string volumeLabel)
     {
         _logger.LogDebug("GetVolumeInfo");
-        VfsVolumeInfo vol = _vfs.GetVolumeInfo();
-        totalSize = (ulong)Math.Max(0, vol.TotalBytes);
+        totalSize = 0;
         freeSize = 0;
-        volumeLabel = vol.VolumeLabel;
-        return NtStatus.Success;
-    }
-
-    public int GetFileSecurityByName(string fileName, out uint fileAttributes, ref byte[]? securityDescriptor)
-    {
-        fileAttributes = 0;
-        securityDescriptor = null;
-
-        if (ShouldShortCircuitShellMetadata(fileName))
-            return NtStatus.ObjectNameNotFound;
+        volumeLabel = "";
 
         try
         {
-            VfsFileInfo vfsInfo = _vfs.GetFileInfoAsync(fileName).GetAwaiter().GetResult();
-            fileAttributes = ToWin32Attributes(vfsInfo);
+            VfsVolumeInfo vol = _vfs.GetVolumeInfo();
+            totalSize = (ulong)Math.Max(0, vol.TotalBytes);
+            volumeLabel = vol.VolumeLabel;
             return NtStatus.Success;
         }
-        catch (VfsFileNotFoundException) { return NtStatus.ObjectNameNotFound; }
-        catch (VfsDirectoryNotFoundException) { return NtStatus.ObjectPathNotFound; }
-        catch (VfsAccessDeniedException) { return NtStatus.AccessDenied; }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetFileSecurityByName error: {Path}", fileName);
+            _logger.LogError(ex, "GetVolumeInfo error");
             return NtStatus.UnexpectedIoError;
+        }
+    }
+
+    public async ValueTask<SecurityByNameResult> GetFileSecurityByName(
+        string fileName, bool getSecurityDescriptor, CancellationToken ct)
+    {
+        if (ShouldShortCircuitShellMetadata(fileName))
+            return SecurityByNameResult.Error(NtStatus.ObjectNameNotFound);
+
+        try
+        {
+            VfsFileInfo vfsInfo = await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
+            // SecurityDescriptor left null → WinFsp skips access checks (read-only volume).
+            return SecurityByNameResult.Success(ToWin32Attributes(vfsInfo));
+        }
+        catch (Exception ex)
+        {
+            return SecurityByNameResult.Error(MapVfsException(ex, fileName));
         }
     }
 
@@ -104,7 +116,7 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         FileOperationInfo info, CancellationToken ct)
     {
         _logger.LogDebug("CreateFile denied: {Path} options=0x{Options:X} access=0x{Access:X}", fileName, createOptions, grantedAccess);
-        return V(CreateResult.Error(NtStatus.AccessDenied));
+        return new ValueTask<CreateResult>(CreateResult.Error(NtStatus.AccessDenied));
     }
 
     public async ValueTask<CreateResult> OpenFile(
@@ -119,17 +131,13 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         try
         {
             VfsFileInfo vfsInfo = await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
-            info.Context = vfsInfo;
+            info.Context = new HandleContext(vfsInfo);
             info.IsDirectory = vfsInfo.IsDirectory;
             return new CreateResult(NtStatus.Success, ConvertToFileInfo(vfsInfo));
         }
-        catch (VfsFileNotFoundException) { return CreateResult.Error(NtStatus.ObjectNameNotFound); }
-        catch (VfsDirectoryNotFoundException) { return CreateResult.Error(NtStatus.ObjectPathNotFound); }
-        catch (VfsAccessDeniedException) { return CreateResult.Error(NtStatus.AccessDenied); }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "OpenFile error: {Path}", fileName);
-            return CreateResult.Error(NtStatus.UnexpectedIoError);
+            return CreateResult.Error(MapVfsException(ex, fileName));
         }
     }
 
@@ -139,35 +147,33 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
     {
         _logger.LogDebug("ReadFile: {Path} offset={Offset} length={Length}", fileName, offset, buffer.Length);
         long startTimestamp = Stopwatch.GetTimestamp();
-        byte[] rentedArray = ArrayPool<byte>.Shared.Rent(buffer.Length);
+
+        // A read at/after EOF (or a pathological offset that overflows a signed long) returns no data.
+        if (offset > (ulong)long.MaxValue)
+        {
+            RecordReadDuration(startTimestamp, "eof");
+            return ReadResult.EndOfFile();
+        }
 
         try
         {
-            int read = await _vfs.ReadFileAsync(fileName, rentedArray, checked((long)offset), ct).ConfigureAwait(false);
+            // Zero-copy: the VFS writes decompressed bytes directly into WinFsp's kernel buffer.
+            // The cache caps the read at buffer.Length, so `read` never exceeds it.
+            int read = await _vfs.ReadFileAsync(fileName, buffer, (long)offset, ct).ConfigureAwait(false);
             if (read <= 0)
             {
                 RecordReadDuration(startTimestamp, "eof");
                 return ReadResult.EndOfFile();
             }
 
-            int bytesRead = Math.Min(read, buffer.Length);
-            rentedArray.AsSpan(0, bytesRead).CopyTo(buffer.Span);
-
             RecordReadDuration(startTimestamp, "success");
-            return ReadResult.Success((uint)bytesRead);
+            return ReadResult.Success((uint)read);
         }
-        catch (VfsFileNotFoundException) { return ReadResult.Error(NtStatus.ObjectNameNotFound); }
-        catch (VfsAccessDeniedException) { return ReadResult.Error(NtStatus.AccessDenied); }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return ReadResult.Error(NtStatus.Cancelled); }
         catch (Exception ex)
         {
-            RecordReadDuration(startTimestamp, "error");
-            _logger.LogError(ex, "ReadFile error: {Path}", fileName);
-            return ReadResult.Error(NtStatus.UnexpectedIoError);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rentedArray);
+            int status = MapVfsException(ex, fileName);
+            RecordReadDuration(startTimestamp, status == NtStatus.Cancelled ? "cancelled" : "error");
+            return ReadResult.Error(status);
         }
     }
 
@@ -177,28 +183,24 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         FileOperationInfo info, CancellationToken ct)
     {
         _logger.LogDebug("WriteFile denied: {Path}", fileName);
-        return V(WriteResult.Error(NtStatus.AccessDenied));
+        return new ValueTask<WriteResult>(WriteResult.Error(NtStatus.AccessDenied));
     }
 
     public async ValueTask<FsResult> FlushFileBuffers(string? fileName, FileOperationInfo info, CancellationToken ct)
     {
-        if (info.Context is VfsFileInfo vfsInfo)
-            return FsResult.Success(ConvertToFileInfo(vfsInfo));
+        if (info.Context is HandleContext ctx)
+            return FsResult.Success(ConvertToFileInfo(ctx.Info));
 
         if (!string.IsNullOrEmpty(fileName))
         {
             try
             {
-                vfsInfo = await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
+                VfsFileInfo vfsInfo = await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
                 return FsResult.Success(ConvertToFileInfo(vfsInfo));
             }
-            catch (VfsFileNotFoundException) { return FsResult.Error(NtStatus.ObjectNameNotFound); }
-            catch (VfsDirectoryNotFoundException) { return FsResult.Error(NtStatus.ObjectPathNotFound); }
-            catch (VfsAccessDeniedException) { return FsResult.Error(NtStatus.AccessDenied); }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "FlushFileBuffers error: {Path}", fileName);
-                return FsResult.Error(NtStatus.UnexpectedIoError);
+                return FsResult.Error(MapVfsException(ex, fileName));
             }
         }
 
@@ -212,52 +214,54 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
 
         try
         {
-            VfsFileInfo vfsInfo = info.Context is VfsFileInfo cachedInfo
-                ? cachedInfo
+            VfsFileInfo vfsInfo = info.Context is HandleContext ctx
+                ? ctx.Info
                 : await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
             return FsResult.Success(ConvertToFileInfo(vfsInfo));
         }
-        catch (VfsFileNotFoundException) { return FsResult.Error(NtStatus.ObjectNameNotFound); }
-        catch (VfsDirectoryNotFoundException) { return FsResult.Error(NtStatus.ObjectPathNotFound); }
-        catch (VfsAccessDeniedException) { return FsResult.Error(NtStatus.AccessDenied); }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetFileInformation error: {Path}", fileName);
-            return FsResult.Error(NtStatus.UnexpectedIoError);
+            return FsResult.Error(MapVfsException(ex, fileName));
         }
     }
 
     public ValueTask<int> CanDelete(string fileName, FileOperationInfo info, CancellationToken ct)
     {
         _logger.LogDebug("CanDelete denied: {Path}", fileName);
-        return V(NtStatus.AccessDenied);
+        return new ValueTask<int>(NtStatus.AccessDenied);
     }
 
-    public ValueTask<ReadDirectoryResult> ReadDirectory(
+    public async ValueTask<ReadDirectoryResult> ReadDirectory(
         string fileName, string? pattern, string? marker,
         nint buffer, uint length,
         FileOperationInfo info, CancellationToken ct)
-    {
-        return ReadDirectoryCoreAsync(fileName, pattern, marker, buffer, length, ct);
-    }
-
-    private async ValueTask<ReadDirectoryResult> ReadDirectoryCoreAsync(
-        string fileName, string? pattern, string? marker, nint buffer, uint length, CancellationToken ct)
     {
         _logger.LogDebug("ReadDirectory: {Path} pattern={Pattern} marker={Marker}", fileName, pattern, marker);
 
         try
         {
-            IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(fileName, ct).ConfigureAwait(false);
-            return WriteDirectoryBuffer(PrepareDirectoryEntries(entries, pattern, marker), buffer, length);
+            // Build the sorted, pattern-filtered snapshot once per enumeration (marker == null) and
+            // cache it on the handle. Continuation pages reuse it and resume via binary search, so a
+            // paginated listing is O(N log N) total instead of re-listing + re-sorting on every page.
+            var ctx = info.Context as HandleContext;
+            VfsFileInfo[] listing;
+            if (marker == null || ctx?.Listing is null)
+            {
+                IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(fileName, ct).ConfigureAwait(false);
+                listing = SortAndFilter(entries, pattern);
+                if (ctx != null)
+                    ctx.Listing = listing;
+            }
+            else
+            {
+                listing = ctx.Listing;
+            }
+
+            return WriteDirectoryBuffer(listing, ResolveResumeIndex(listing, marker), buffer, length);
         }
-        catch (VfsDirectoryNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectPathNotFound); }
-        catch (VfsFileNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectNameNotFound); }
-        catch (VfsAccessDeniedException) { return ReadDirectoryResult.Error(NtStatus.AccessDenied); }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "ReadDirectory error: {Path}", fileName);
-            return ReadDirectoryResult.Error(NtStatus.UnexpectedIoError);
+            return ReadDirectoryResult.Error(MapVfsException(ex, fileName));
         }
     }
 
@@ -265,72 +269,95 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         string path, string? pattern = null, string? marker = null, CancellationToken ct = default)
     {
         IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(path, ct).ConfigureAwait(false);
-        return PrepareDirectoryEntries(entries, pattern, marker).ToArray();
+        VfsFileInfo[] sorted = SortAndFilter(entries, pattern);
+        return sorted[ResolveResumeIndex(sorted, marker)..];
     }
 
-    public int GetDirInfoByName(string dirName, string entryName, out FspDirInfo dirInfo, FileOperationInfo info)
+    public async ValueTask<DirInfoByNameResult> GetDirInfoByName(
+        string dirName, string entryName, FileOperationInfo info, CancellationToken ct)
     {
-        dirInfo = default;
+        string fullPath = dirName.Length == 0 || dirName[^1] is '\\' or '/'
+            ? dirName + entryName
+            : dirName + "\\" + entryName;
+
+        if (ShouldShortCircuitShellMetadata(fullPath))
+            return DirInfoByNameResult.Error(NtStatus.ObjectNameNotFound);
 
         try
         {
-            IReadOnlyList<VfsFileInfo> entries = _vfs.ListDirectoryAsync(dirName).GetAwaiter().GetResult();
-            foreach (VfsFileInfo entry in entries)
-            {
-                if (!string.Equals(entry.Name, entryName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                dirInfo = ToDirInfo(entry);
-                return NtStatus.Success;
-            }
-
-            return NtStatus.ObjectNameNotFound;
+            // O(1) single-entry lookup via the VFS dictionary — avoids listing the entire parent.
+            VfsFileInfo entry = await _vfs.GetFileInfoAsync(fullPath, ct).ConfigureAwait(false);
+            return DirInfoByNameResult.Success(ToDirInfo(entry));
         }
-        catch (VfsDirectoryNotFoundException) { return NtStatus.ObjectPathNotFound; }
-        catch (VfsFileNotFoundException) { return NtStatus.ObjectNameNotFound; }
-        catch (VfsAccessDeniedException) { return NtStatus.AccessDenied; }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetDirInfoByName error: {Dir}/{Entry}", dirName, entryName);
-            return NtStatus.UnexpectedIoError;
+            return DirInfoByNameResult.Error(MapVfsException(ex, $"{dirName}/{entryName}"));
         }
     }
 
     private static unsafe ReadDirectoryResult WriteDirectoryBuffer(
-        IEnumerable<VfsFileInfo> entries, nint buffer, uint length)
+        VfsFileInfo[] entries, int start, nint buffer, uint length)
     {
         uint bytesTransferred = 0;
 
-        foreach (VfsFileInfo entry in entries)
+        for (int i = start; i < entries.Length; i++)
         {
-            FspDirInfo dirInfo = ToDirInfo(entry);
+            FspDirInfo dirInfo = ToDirInfo(entries[i]);
 
             if (!WinFspFileSystem.AddDirInfo(&dirInfo, buffer, length, &bytesTransferred))
-                return ReadDirectoryResult.Success(bytesTransferred);
+                return ReadDirectoryResult.Success(bytesTransferred); // buffer full; WinFsp re-calls with marker
         }
 
         WinFspFileSystem.EndDirInfo(buffer, length, &bytesTransferred);
         return ReadDirectoryResult.Success(bytesTransferred);
     }
 
-    internal static IEnumerable<VfsFileInfo> PrepareDirectoryEntries(
-        IEnumerable<VfsFileInfo> entries, string? pattern, string? marker)
+    /// <summary>
+    /// Sorts directory entries by name (OrdinalIgnoreCase) after applying the Win32 wildcard
+    /// pattern. The stable, deterministic ordering lets paginated reads resume by marker.
+    /// </summary>
+    internal static VfsFileInfo[] SortAndFilter(IEnumerable<VfsFileInfo> entries, string? pattern)
     {
         IEnumerable<VfsFileInfo> query = entries;
 
         if (!string.IsNullOrWhiteSpace(pattern) && pattern != "*")
-        {
             query = query.Where(e => FileSystemName.MatchesWin32Expression(pattern, e.Name, ignoreCase: true));
-        }
 
-        query = query.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase);
+        return query.OrderBy(e => e.Name, EntryNameComparer).ToArray();
+    }
 
-        if (!string.IsNullOrEmpty(marker))
+    /// <summary>
+    /// Returns the index of the first entry whose name sorts strictly after <paramref name="marker"/>.
+    /// Binary search over the sorted snapshot — O(log N) per page.
+    /// </summary>
+    internal static int ResolveResumeIndex(VfsFileInfo[] sorted, string? marker)
+    {
+        if (string.IsNullOrEmpty(marker))
+            return 0;
+
+        int lo = 0, hi = sorted.Length;
+        while (lo < hi)
         {
-            query = query.Where(e => string.Compare(e.Name, marker, StringComparison.OrdinalIgnoreCase) > 0);
+            int mid = (int)(((uint)lo + (uint)hi) >> 1);
+            if (CompareEntryNames(sorted[mid].Name, marker) <= 0)
+                lo = mid + 1;
+            else
+                hi = mid;
         }
+        return lo;
+    }
 
-        return query;
+    private static readonly IComparer<string> EntryNameComparer = Comparer<string>.Create(CompareEntryNames);
+
+    /// <summary>
+    /// Total ordering of entry names: case-insensitive primary (matching the volume's
+    /// case-insensitivity) with an ordinal tiebreaker. The tiebreaker keeps entries that differ
+    /// only by case distinct, so none is dropped or duplicated across a paginated marker resume.
+    /// </summary>
+    private static int CompareEntryNames(string a, string b)
+    {
+        int c = string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+        return c != 0 ? c : string.CompareOrdinal(a, b);
     }
 
     public void Cleanup(string? fileName, FileOperationInfo info, CleanupFlags flags)
@@ -370,6 +397,24 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
     public Task<bool> GuardedDirectoryExistsAsync(string path, CancellationToken ct = default)
         => _vfs.DirectoryExistsAsync(path, ct);
 
+    /// <summary>
+    /// Maps a VFS exception to the corresponding NTSTATUS. Single source of truth shared by every
+    /// callback so the mapping cannot drift between handlers.
+    /// </summary>
+    private int MapVfsException(Exception ex, string? path)
+    {
+        switch (ex)
+        {
+            case VfsFileNotFoundException: return NtStatus.ObjectNameNotFound;
+            case VfsDirectoryNotFoundException: return NtStatus.ObjectPathNotFound;
+            case VfsAccessDeniedException: return NtStatus.AccessDenied;
+            case OperationCanceledException: return NtStatus.Cancelled;
+            default:
+                _logger.LogError(ex, "VFS operation failed: {Path}", path);
+                return NtStatus.UnexpectedIoError;
+        }
+    }
+
     private bool ShouldShortCircuitShellMetadata(string path)
     {
         if (!_shortCircuitShellMetadata)
@@ -406,11 +451,12 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
 
     private static uint ToWin32Attributes(VfsFileInfo entry)
     {
-        uint attributes = (uint)entry.Attributes | FileAttributeReadonly;
+        // ReadOnly is always set (read-only volume). FILE_ATTRIBUTE_NORMAL is only valid in
+        // isolation, so strip it — with ReadOnly always present it would otherwise form the invalid
+        // Normal|<other> combination (archive entries are commonly seeded with Normal).
+        uint attributes = ((uint)entry.Attributes | FileAttributeReadonly) & ~FileAttributeNormal;
         if (entry.IsDirectory)
             attributes |= FileAttributeDirectory;
-        else if ((attributes & FileAttributeDirectory) == 0)
-            attributes |= FileAttributeNormal;
         return attributes;
     }
 
@@ -418,7 +464,12 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         => size == 0 ? 0 : ((size + 4095UL) / 4096UL) * 4096UL;
 
     private static ulong ToFileTime(DateTime dt)
-        => (ulong)(dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime()).ToFileTimeUtc();
+    {
+        DateTime utc = dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
+        // Clamp pre-epoch timestamps (e.g. DateTime.MinValue from archive entries lacking a
+        // timestamp) to FILETIME 0; ToFileTimeUtc() would otherwise throw and fail the operation.
+        return utc < FileTimeEpochUtc ? 0UL : (ulong)utc.ToFileTimeUtc();
+    }
 
     private static void RecordReadDuration(long startTimestamp, string result)
     {
@@ -427,10 +478,14 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
             new KeyValuePair<string, object?>("result", result));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ValueTask<CreateResult> V(CreateResult r) => new(r);
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ValueTask<WriteResult> V(WriteResult r) => new(r);
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ValueTask<int> V(int r) => new(r);
+    /// <summary>
+    /// Per-handle state cached in <see cref="FileOperationInfo.Context"/>: the opened entry's
+    /// metadata plus, for directory handles, the sorted enumeration snapshot reused across
+    /// paginated <see cref="ReadDirectory"/> calls.
+    /// </summary>
+    private sealed class HandleContext(VfsFileInfo info)
+    {
+        public VfsFileInfo Info { get; } = info;
+        public VfsFileInfo[]? Listing { get; set; }
+    }
 }

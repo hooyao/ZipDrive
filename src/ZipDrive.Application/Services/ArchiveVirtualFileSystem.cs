@@ -342,7 +342,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     }
 
     /// <inheritdoc />
-    public async Task<int> ReadFileAsync(string path, byte[] buffer, long offset, CancellationToken cancellationToken = default)
+    public async Task<int> ReadFileAsync(string path, Memory<byte> buffer, long offset, CancellationToken cancellationToken = default)
     {
         EnsureMounted();
 
