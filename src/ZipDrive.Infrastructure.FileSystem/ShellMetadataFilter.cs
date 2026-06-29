@@ -36,23 +36,47 @@ public static class ShellMetadataFilter
     /// </summary>
     public static bool IsShellMetadataPath(ReadOnlySpan<char> path)
     {
-        // Check the last segment (filename) against known metadata filenames
-        int lastSep = path.LastIndexOf('\\');
+        int lastSep = LastSeparatorIndex(path);
         ReadOnlySpan<char> lastSegment = lastSep >= 0 ? path[(lastSep + 1)..] : path;
 
         if (lastSegment.Length > 0 && SpanMatchesAny(lastSegment, MetadataFileNames))
             return true;
 
-        // Check the first meaningful path segment against known shell prefixes
-        // e.g., \$RECYCLE.BIN or \System Volume Information
-        ReadOnlySpan<char> trimmed = path.TrimStart('\\');
-        int sep = trimmed.IndexOf('\\');
+        ReadOnlySpan<char> trimmed = TrimLeadingSeparators(path);
+        int sep = SeparatorIndex(trimmed);
         ReadOnlySpan<char> firstSegment = sep >= 0 ? trimmed[..sep] : trimmed;
 
         if (firstSegment.Length > 0 && SpanMatchesAny(firstSegment, MetadataPathPrefixes))
             return true;
 
         return false;
+    }
+
+    private static int LastSeparatorIndex(ReadOnlySpan<char> path)
+    {
+        int backslash = path.LastIndexOf('\\');
+        int slash = path.LastIndexOf('/');
+        return Math.Max(backslash, slash);
+    }
+
+    private static int SeparatorIndex(ReadOnlySpan<char> path)
+    {
+        int backslash = path.IndexOf('\\');
+        int slash = path.IndexOf('/');
+
+        if (backslash < 0)
+            return slash;
+        if (slash < 0)
+            return backslash;
+        return Math.Min(backslash, slash);
+    }
+
+    private static ReadOnlySpan<char> TrimLeadingSeparators(ReadOnlySpan<char> path)
+    {
+        int index = 0;
+        while (index < path.Length && (path[index] == '\\' || path[index] == '/'))
+            index++;
+        return path[index..];
     }
 
     private static bool SpanMatchesAny(ReadOnlySpan<char> value, string[] candidates)

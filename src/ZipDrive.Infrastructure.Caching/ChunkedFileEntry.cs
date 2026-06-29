@@ -246,26 +246,5 @@ internal sealed class ChunkedFileEntry : IDisposable
 
         ExtractionCts.Dispose();
         CancelPendingChunks();
-
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                if (!File.Exists(BackingFilePath))
-                    return;
-
-                File.Delete(BackingFilePath);
-                return;
-            }
-            catch when (attempt < 4)
-            {
-                Thread.Sleep(25);
-            }
-            catch
-            {
-                // Non-fatal — file may still be locked briefly, or the cache directory
-                // may have been deleted during shutdown (DirectoryNotFoundException).
-            }
-        }
     }
 }

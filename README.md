@@ -158,7 +158,7 @@ src/
   ZipDrive.Infrastructure.Archives.Zip/   Streaming ZIP reader with ZIP64 support
   ZipDrive.Infrastructure.Archives.Rar/   RAR4/RAR5 provider via SharpCompress
   ZipDrive.Infrastructure.Caching/        Generic cache, chunked extraction, dual-tier routing
-  ZipDrive.Infrastructure.FileSystem/     DokanNet adapter, mount lifecycle, user notices
+  ZipDrive.Infrastructure.FileSystem/     WinFsp adapter, mount lifecycle, user notices
   ZipDrive.Cli/                           Entry point, DI, OpenTelemetry wiring
 ```
 

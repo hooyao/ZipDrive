@@ -170,7 +170,7 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
                 {
                     if (File.Exists(tempPath))
                     {
-                        File.Delete(tempPath);
+                        DeleteBackingFileWithRetry(tempPath);
                         _logger.LogDebug("Cleaned up partial temp file: {Path}", tempPath);
                     }
                 }
@@ -197,8 +197,41 @@ public sealed class ChunkedDiskStorageStrategy : IStorageStrategy<Stream>
     {
         ArgumentNullException.ThrowIfNull(stored);
         ChunkedFileEntry entry = (ChunkedFileEntry)stored.Data;
+        string backingFilePath = entry.BackingFilePath;
+
         entry.Dispose();
+        DeleteBackingFileWithRetry(backingFilePath);
     }
+
+    private void DeleteBackingFileWithRetry(string backingFilePath)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                if (!File.Exists(backingFilePath))
+                    return;
+
+                File.Delete(backingFilePath);
+                return;
+            }
+            catch (Exception ex) when (attempt < 4 && IsTransientDeleteException(ex))
+            {
+                Thread.Sleep(25);
+            }
+            catch (Exception ex) when (IsDeleteCleanupException(ex))
+            {
+                _logger.LogDebug(ex, "Failed to delete chunked cache backing file: {Path}", backingFilePath);
+                return;
+            }
+        }
+    }
+
+    private static bool IsTransientDeleteException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException;
+
+    private static bool IsDeleteCleanupException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException;
 
     /// <inheritdoc />
     public bool RequiresAsyncCleanup => true;

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.IO.Enumeration;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
@@ -46,6 +47,7 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         host.ReadOnlyVolume = true;
         host.PersistentAcls = false;
         host.PostCleanupWhenModifiedOnly = true;
+        host.PassQueryDirectoryPattern = true;
         // Report as "NTFS" so Windows path resolution works for elevated processes.
         host.FileSystemName = "NTFS";
         return NtStatus.Success;
@@ -143,15 +145,15 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         {
             int read = await _vfs.ReadFileAsync(fileName, rentedArray, checked((long)offset), ct).ConfigureAwait(false);
             if (read <= 0)
+            {
+                RecordReadDuration(startTimestamp, "eof");
                 return ReadResult.EndOfFile();
+            }
 
             int bytesRead = Math.Min(read, buffer.Length);
             rentedArray.AsSpan(0, bytesRead).CopyTo(buffer.Span);
 
-            WinFspTelemetry.ReadDuration.Record(
-                Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                new KeyValuePair<string, object?>("result", "success"));
-
+            RecordReadDuration(startTimestamp, "success");
             return ReadResult.Success((uint)bytesRead);
         }
         catch (VfsFileNotFoundException) { return ReadResult.Error(NtStatus.ObjectNameNotFound); }
@@ -159,10 +161,7 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return ReadResult.Error(NtStatus.Cancelled); }
         catch (Exception ex)
         {
-            WinFspTelemetry.ReadDuration.Record(
-                Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                new KeyValuePair<string, object?>("result", "error"));
-
+            RecordReadDuration(startTimestamp, "error");
             _logger.LogError(ex, "ReadFile error: {Path}", fileName);
             return ReadResult.Error(NtStatus.UnexpectedIoError);
         }
@@ -181,6 +180,31 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         return V(WriteResult.Error(NtStatus.AccessDenied));
     }
 
+    public async ValueTask<FsResult> FlushFileBuffers(string? fileName, FileOperationInfo info, CancellationToken ct)
+    {
+        if (info.Context is VfsFileInfo vfsInfo)
+            return FsResult.Success(ConvertToFileInfo(vfsInfo));
+
+        if (!string.IsNullOrEmpty(fileName))
+        {
+            try
+            {
+                vfsInfo = await _vfs.GetFileInfoAsync(fileName, ct).ConfigureAwait(false);
+                return FsResult.Success(ConvertToFileInfo(vfsInfo));
+            }
+            catch (VfsFileNotFoundException) { return FsResult.Error(NtStatus.ObjectNameNotFound); }
+            catch (VfsDirectoryNotFoundException) { return FsResult.Error(NtStatus.ObjectPathNotFound); }
+            catch (VfsAccessDeniedException) { return FsResult.Error(NtStatus.AccessDenied); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "FlushFileBuffers error: {Path}", fileName);
+                return FsResult.Error(NtStatus.UnexpectedIoError);
+            }
+        }
+
+        return FsResult.Success();
+    }
+
     public async ValueTask<FsResult> GetFileInformation(
         string fileName, FileOperationInfo info, CancellationToken ct)
     {
@@ -195,6 +219,7 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         }
         catch (VfsFileNotFoundException) { return FsResult.Error(NtStatus.ObjectNameNotFound); }
         catch (VfsDirectoryNotFoundException) { return FsResult.Error(NtStatus.ObjectPathNotFound); }
+        catch (VfsAccessDeniedException) { return FsResult.Error(NtStatus.AccessDenied); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "GetFileInformation error: {Path}", fileName);
@@ -213,21 +238,22 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         nint buffer, uint length,
         FileOperationInfo info, CancellationToken ct)
     {
-        return ReadDirectoryCoreAsync(fileName, marker, buffer, length, ct);
+        return ReadDirectoryCoreAsync(fileName, pattern, marker, buffer, length, ct);
     }
 
     private async ValueTask<ReadDirectoryResult> ReadDirectoryCoreAsync(
-        string fileName, string? marker, nint buffer, uint length, CancellationToken ct)
+        string fileName, string? pattern, string? marker, nint buffer, uint length, CancellationToken ct)
     {
-        _logger.LogDebug("ReadDirectory: {Path} marker={Marker}", fileName, marker);
+        _logger.LogDebug("ReadDirectory: {Path} pattern={Pattern} marker={Marker}", fileName, pattern, marker);
 
         try
         {
             IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(fileName, ct).ConfigureAwait(false);
-            return WriteDirectoryBuffer(entries, marker, buffer, length);
+            return WriteDirectoryBuffer(PrepareDirectoryEntries(entries, pattern, marker), buffer, length);
         }
         catch (VfsDirectoryNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectPathNotFound); }
         catch (VfsFileNotFoundException) { return ReadDirectoryResult.Error(NtStatus.ObjectNameNotFound); }
+        catch (VfsAccessDeniedException) { return ReadDirectoryResult.Error(NtStatus.AccessDenied); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "ReadDirectory error: {Path}", fileName);
@@ -235,21 +261,49 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         }
     }
 
+    internal async Task<IReadOnlyList<VfsFileInfo>> GuardedPrepareDirectoryEntriesAsync(
+        string path, string? pattern = null, string? marker = null, CancellationToken ct = default)
+    {
+        IReadOnlyList<VfsFileInfo> entries = await _vfs.ListDirectoryAsync(path, ct).ConfigureAwait(false);
+        return PrepareDirectoryEntries(entries, pattern, marker).ToArray();
+    }
+
+    public int GetDirInfoByName(string dirName, string entryName, out FspDirInfo dirInfo, FileOperationInfo info)
+    {
+        dirInfo = default;
+
+        try
+        {
+            IReadOnlyList<VfsFileInfo> entries = _vfs.ListDirectoryAsync(dirName).GetAwaiter().GetResult();
+            foreach (VfsFileInfo entry in entries)
+            {
+                if (!string.Equals(entry.Name, entryName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                dirInfo = ToDirInfo(entry);
+                return NtStatus.Success;
+            }
+
+            return NtStatus.ObjectNameNotFound;
+        }
+        catch (VfsDirectoryNotFoundException) { return NtStatus.ObjectPathNotFound; }
+        catch (VfsFileNotFoundException) { return NtStatus.ObjectNameNotFound; }
+        catch (VfsAccessDeniedException) { return NtStatus.AccessDenied; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetDirInfoByName error: {Dir}/{Entry}", dirName, entryName);
+            return NtStatus.UnexpectedIoError;
+        }
+    }
+
     private static unsafe ReadDirectoryResult WriteDirectoryBuffer(
-        IReadOnlyList<VfsFileInfo> entries, string? marker, nint buffer, uint length)
+        IEnumerable<VfsFileInfo> entries, nint buffer, uint length)
     {
         uint bytesTransferred = 0;
 
         foreach (VfsFileInfo entry in entries)
         {
-            if (marker != null && string.Compare(entry.Name, marker, StringComparison.OrdinalIgnoreCase) <= 0)
-                continue;
-
-            var dirInfo = new FspDirInfo
-            {
-                FileInfo = ConvertToFileInfo(entry)
-            };
-            dirInfo.SetFileName(entry.Name);
+            FspDirInfo dirInfo = ToDirInfo(entry);
 
             if (!WinFspFileSystem.AddDirInfo(&dirInfo, buffer, length, &bytesTransferred))
                 return ReadDirectoryResult.Success(bytesTransferred);
@@ -259,8 +313,25 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         return ReadDirectoryResult.Success(bytesTransferred);
     }
 
-    public ValueTask<FsResult> FlushFileBuffers(string? fileName, FileOperationInfo info, CancellationToken ct)
-        => V(FsResult.Success(info.Context is VfsFileInfo vfsInfo ? ConvertToFileInfo(vfsInfo) : default));
+    internal static IEnumerable<VfsFileInfo> PrepareDirectoryEntries(
+        IEnumerable<VfsFileInfo> entries, string? pattern, string? marker)
+    {
+        IEnumerable<VfsFileInfo> query = entries;
+
+        if (!string.IsNullOrWhiteSpace(pattern) && pattern != "*")
+        {
+            query = query.Where(e => FileSystemName.MatchesWin32Expression(pattern, e.Name, ignoreCase: true));
+        }
+
+        query = query.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrEmpty(marker))
+        {
+            query = query.Where(e => string.Compare(e.Name, marker, StringComparison.OrdinalIgnoreCase) > 0);
+        }
+
+        return query;
+    }
 
     public void Cleanup(string? fileName, FileOperationInfo info, CleanupFlags flags)
     {
@@ -304,13 +375,22 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
         if (!_shortCircuitShellMetadata)
             return false;
 
-        string normalized = path.Replace('\\', '/');
-        if (!ShellMetadataFilter.IsShellMetadataPath(normalized.AsSpan()))
+        if (!ShellMetadataFilter.IsShellMetadataPath(path.AsSpan()))
             return false;
 
         if (_logger.IsEnabled(LogLevel.Debug))
             _logger.LogDebug("Short-circuit shell metadata: {Path}", path);
         return true;
+    }
+
+    private static FspDirInfo ToDirInfo(VfsFileInfo entry)
+    {
+        var dirInfo = new FspDirInfo
+        {
+            FileInfo = ConvertToFileInfo(entry)
+        };
+        dirInfo.SetFileName(entry.Name);
+        return dirInfo;
     }
 
     private static FspFileInfo ConvertToFileInfo(VfsFileInfo entry) => new()
@@ -340,10 +420,15 @@ public sealed class WinFspFileSystemAdapter : IFileSystem
     private static ulong ToFileTime(DateTime dt)
         => (ulong)(dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime()).ToFileTimeUtc();
 
+    private static void RecordReadDuration(long startTimestamp, string result)
+    {
+        WinFspTelemetry.ReadDuration.Record(
+            Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+            new KeyValuePair<string, object?>("result", result));
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ValueTask<CreateResult> V(CreateResult r) => new(r);
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ValueTask<FsResult> V(FsResult r) => new(r);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ValueTask<WriteResult> V(WriteResult r) => new(r);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

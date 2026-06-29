@@ -116,7 +116,7 @@ public class ChunkedDiskStorageStrategyTests : IDisposable
     }
 
     [Fact]
-    public async Task Dispose_CancelsExtractionAndDeletesFile()
+    public async Task Dispose_CancelsExtractionAndDeletesBackingFile()
     {
         // Use a slow factory to ensure extraction is still running
         byte[] data = new byte[10240]; // 10 chunks of 1KB
@@ -132,7 +132,7 @@ public class ChunkedDiskStorageStrategyTests : IDisposable
 
         _strategy.Dispose(stored);
 
-        // File should be deleted
+        // Strategy cleanup owns backing file deletion
         File.Exists(filePath).Should().BeFalse();
     }
 
