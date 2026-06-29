@@ -237,7 +237,7 @@ internal sealed class ChunkedFileEntry : IDisposable
         // Best-effort wait for extraction task to observe cancellation
         try
         {
-            ExtractionTask.Wait(TimeSpan.FromSeconds(2));
+            ExtractionTask.Wait(TimeSpan.FromSeconds(5));
         }
         catch
         {
@@ -246,16 +246,5 @@ internal sealed class ChunkedFileEntry : IDisposable
 
         ExtractionCts.Dispose();
         CancelPendingChunks();
-
-        try
-        {
-            if (File.Exists(BackingFilePath))
-                File.Delete(BackingFilePath);
-        }
-        catch
-        {
-            // Non-fatal — file may still be locked briefly, or the cache directory
-            // may have been deleted during shutdown (DirectoryNotFoundException).
-        }
     }
 }

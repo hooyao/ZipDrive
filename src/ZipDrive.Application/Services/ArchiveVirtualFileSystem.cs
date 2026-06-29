@@ -142,8 +142,8 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     /// <remarks>
     /// Hard stop: clears archive nodes without draining. In-flight operations may
     /// call Exit() on detached nodes (safe — operates on the object, not the dictionary).
-    /// This is acceptable because StopAsync in DokanHostedService removes the Dokan mount
-    /// point first, which stops new Dokan callbacks from arriving.
+    /// This is acceptable because StopAsync in WinFspHostedService removes the WinFsp mount
+    /// point first, which stops new WinFsp callbacks from arriving.
     /// </remarks>
     public Task UnmountAsync(CancellationToken cancellationToken = default)
     {
@@ -342,7 +342,7 @@ public sealed class ArchiveVirtualFileSystem : IVirtualFileSystem, IArchiveManag
     }
 
     /// <inheritdoc />
-    public async Task<int> ReadFileAsync(string path, byte[] buffer, long offset, CancellationToken cancellationToken = default)
+    public async Task<int> ReadFileAsync(string path, Memory<byte> buffer, long offset, CancellationToken cancellationToken = default)
     {
         EnsureMounted();
 

@@ -79,7 +79,7 @@ public sealed class FileContentCache : IFileContentCache
         ArchiveEntryInfo entry,
         string internalPath,
         string cacheKey,
-        byte[] buffer,
+        Memory<byte> buffer,
         long offset,
         CancellationToken cancellationToken = default)
     {
@@ -131,7 +131,7 @@ public sealed class FileContentCache : IFileContentCache
         while (totalRead < bytesToRead)
         {
             int read = await stream.ReadAsync(
-                buffer.AsMemory(totalRead, bytesToRead - totalRead),
+                buffer.Slice(totalRead, bytesToRead - totalRead),
                 cancellationToken).ConfigureAwait(false);
 
             if (read == 0)

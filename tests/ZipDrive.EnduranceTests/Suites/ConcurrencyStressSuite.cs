@@ -17,7 +17,7 @@ public sealed class ConcurrencyStressSuite : EnduranceSuiteBase
     public override int TaskCount => 20;
 
     public ConcurrencyStressSuite(
-        DokanFileSystemAdapter adapter,
+        WinFspFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

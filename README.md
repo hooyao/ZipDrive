@@ -36,8 +36,8 @@ ZipDrive turns ZIP and RAR archives into a browsable Windows drive letter. Unlik
 
 ## Prerequisites
 
-- **Windows x64** (DokanNet is Windows-specific)
-- **[Dokany v2.3.1.1000](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000)** — Dokan file system driver
+- **Windows x64** (WinFsp is Windows-specific)
+- **[WinFsp 2.x](https://winfsp.dev/rel/)** — WinFsp file system driver
 - **.NET 10.0 Runtime** — Required to run (SDK required for building from source)
 
 ## Quick Start
@@ -136,17 +136,17 @@ ZipDrive follows **Clean Architecture** with strict dependency rules:
 Presentation (CLI)
   -> Application (orchestration)
     -> Domain (interfaces, models — zero external dependencies)
-  <- Infrastructure (caching, ZIP reader, RAR reader, Dokan adapter)
+  <- Infrastructure (caching, ZIP reader, RAR reader, WinFsp adapter)
 ```
 
 ### Data Flow
 
 ```
-DokanNet ReadFile("R:\archive.zip\folder\file.txt")
+WinFsp.Native ReadFile("R:\archive.zip\folder\file.txt")
   -> Archive Prefix Tree: resolve path -> archive key + internal path
   -> Structure Cache: get/build parsed Central Directory
   -> File Content Cache: get/decompress file data (memory or chunked disk tier)
-  -> Stream: seek + read -> return to DokanNet
+  -> Stream: seek + read -> return to WinFsp.Native
 ```
 
 ### Project Structure
@@ -158,7 +158,7 @@ src/
   ZipDrive.Infrastructure.Archives.Zip/   Streaming ZIP reader with ZIP64 support
   ZipDrive.Infrastructure.Archives.Rar/   RAR4/RAR5 provider via SharpCompress
   ZipDrive.Infrastructure.Caching/        Generic cache, chunked extraction, dual-tier routing
-  ZipDrive.Infrastructure.FileSystem/     DokanNet adapter, mount lifecycle, user notices
+  ZipDrive.Infrastructure.FileSystem/     WinFsp adapter, mount lifecycle, user notices
   ZipDrive.Cli/                           Entry point, DI, OpenTelemetry wiring
 ```
 
@@ -180,7 +180,7 @@ Detailed design docs in [`src/Docs/`](src/Docs/):
 
 ## Technology Stack
 
-- **.NET 10.0** / C# 13 — [DokanNet](https://github.com/dokan-dev/dokan-dotnet) — [SharpCompress](https://github.com/adamhathcock/sharpcompress) — [Spectre.Console](https://spectreconsole.net/) — [OpenTelemetry](https://opentelemetry.io/) — [Serilog](https://serilog.net/) — [UtfUnknown](https://github.com/CharsetDetector/UTF-unknown) — [XUnit](https://xunit.net/) + [FluentAssertions](https://fluentassertions.com/) — [BenchmarkDotNet](https://benchmarkdotnet.org/)
+- **.NET 10.0** / C# 13 — [WinFsp.Native](https://github.com/hooyao/winfsp-native) — [SharpCompress](https://github.com/adamhathcock/sharpcompress) — [Spectre.Console](https://spectreconsole.net/) — [OpenTelemetry](https://opentelemetry.io/) — [Serilog](https://serilog.net/) — [UtfUnknown](https://github.com/CharsetDetector/UTF-unknown) — [XUnit](https://xunit.net/) + [FluentAssertions](https://fluentassertions.com/) — [BenchmarkDotNet](https://benchmarkdotnet.org/)
 
 ## License
 
