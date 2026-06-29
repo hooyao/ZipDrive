@@ -411,8 +411,3 @@ specs/formal/states/
 
 # Proprietary tools (not redistributable)
 **/Rar.exe
-
-# Vendored WinFsp.Native package — carries the async GetFileSecurityByName/GetDirInfoByName
-# API ahead of its nuget.org publish. Must be tracked so CI restores it from the
-# local-packages source declared in nuget.config. Remove once the package is public.
-!local-packages/*.nupkg

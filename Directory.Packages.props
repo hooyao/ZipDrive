@@ -23,7 +23,7 @@
     <PackageVersion Include="SharpCompress" Version="0.47.3" />
     <PackageVersion Include="Spectre.Console" Version="0.50.0" />
     <PackageVersion Include="UTF.Unknown" Version="2.6.0" />
-    <PackageVersion Include="WinFsp.Native" Version="0.1.3-pre.2" />
+    <PackageVersion Include="WinFsp.Native" Version="0.1.3-pre.3" />
     <!-- Serilog 4.3+ is Native-AOT clean; configured in code (no Settings.Configuration
          reflection, no Expressions dynamic codegen). Wired into M.E.Logging via
          Serilog.Extensions.Logging. -->
