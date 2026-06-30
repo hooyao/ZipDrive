@@ -411,3 +411,11 @@ specs/formal/states/
 
 # Proprietary tools (not redistributable)
 **/Rar.exe
+
+# Diagnostic / traceable build output (not AOT) — built locally per machine
+publish-jit/
+publish-jit-build.log
+
+# Diagnostic capture artifacts (machine-specific, large) — keep scripts/docs, ignore output
+diag/out/
+diag/dumps/
