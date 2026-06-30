@@ -5,7 +5,10 @@ cached image fine, then goes unresponsive** while browsing a NAS-hosted ZIP (smo
 Dokan build). Everything here is standalone — usable on a different test machine with no prior
 context.
 
+> **操作者中文一步步流程 → [`RUNBOOK.md`](RUNBOOK.md)**（建 build、复现、间隔抓 dump、交给 Claude Code 分析）。
+
 ## Read in this order
+0. **[`RUNBOOK.md`](RUNBOOK.md)** — 中文操作手册（step-by-step runbook for the operator）.
 1. **[`ANALYSIS.md`](ANALYSIS.md)** — what's going wrong and why (root cause, evidence, sources).
 2. **[`CAPTURE.md`](CAPTURE.md)** — build the diagnostic exe, reproduce, capture dumps.
 3. **[`ANALYZE.md`](ANALYZE.md)** — how to read the dumps (signature → root-cause table). Hand this
