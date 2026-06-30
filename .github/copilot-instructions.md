@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-ZipDrive is a clean-architecture Windows application that mounts ZIP archives as virtual drives using DokanNet. It targets .NET 10.0 / C# 13 and runs on Windows x64 only.
+ZipDrive is a clean-architecture Windows application that mounts ZIP and RAR archives as virtual drives using WinFsp (via the managed [WinFsp.Native](https://github.com/hooyao/winfsp-native) binding). It targets .NET 10.0 / C# 13, publishes as a Native AOT executable, and runs on Windows x64/ARM64 only.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ The solution follows Clean Architecture (Onion Architecture) with strict depende
 
 - **Domain** (`src/ZipDrive.Domain`): Interfaces, models, exceptions. Zero external dependencies.
 - **Application** (`src/ZipDrive.Application`): Path resolution, archive discovery, VFS orchestration.
-- **Infrastructure**: Caching (`Infrastructure.Caching`), ZIP reader (`Infrastructure.Archives.Zip`), DokanNet adapter (`Infrastructure.FileSystem`).
+- **Infrastructure**: Caching (`Infrastructure.Caching`), ZIP reader (`Infrastructure.Archives.Zip`), RAR reader (`Infrastructure.Archives.Rar`), WinFsp adapter (`Infrastructure.FileSystem`).
 - **Presentation** (`src/ZipDrive.Cli`): Entry point, DI, OpenTelemetry wiring.
 
 Dependencies flow inward: Presentation -> Application -> Domain <- Infrastructure. Infrastructure implements Domain interfaces but never depends on Application or Presentation.
