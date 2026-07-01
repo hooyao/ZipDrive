@@ -4,13 +4,12 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
-using Serilog.Events;
-using Serilog.Sinks.SystemConsole.Themes;
+using Serilog.Templates;
+using Serilog.Templates.Themes;
 using ZipDrive.Application.Services;
 using ZipDrive.Domain;
 using ZipDrive.Domain.Abstractions;
@@ -23,8 +22,7 @@ using ZipDrive.Infrastructure.FileSystem;
 
 [assembly: SupportedOSPlatform("windows")]
 
-// Required for ZIP entry name encoding (Shift-JIS, GBK, etc.). Code-page data is
-// independent of globalization/ICU, so this works under Native AOT.
+// Required for ZIP entry name encoding
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var informationalVersion = Assembly.GetExecutingAssembly()
@@ -35,9 +33,9 @@ var informationalVersion = Assembly.GetExecutingAssembly()
 var plusIndex = informationalVersion.IndexOf('+');
 var version = plusIndex >= 0 ? informationalVersion[..plusIndex] : informationalVersion;
 
-// Bootstrap logger (console, Information) so the startup banner and any early
-// drag-and-drop / config errors have somewhere to go before the host is built.
-Log.Logger = ProgramLogging.Build(LogEventLevel.Information, LogEventLevel.Information);
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
 
 Log.Information("ZipDrive {Version} starting", version);
 
@@ -60,34 +58,48 @@ var builder = Host.CreateDefaultBuilder(args)
         // Re-add command line so it wins over jsonc files (last source wins).
         // Without this, appsettings.jsonc overrides the rewritten drag-and-drop args.
         config.AddCommandLine(args);
-    })
-    .ConfigureLogging((context, logging) =>
-    {
-        // Configure Serilog in code (Native-AOT clean — no Settings.Configuration
-        // reflection, no Expressions dynamic codegen) and wire it into the
-        // Microsoft.Extensions.Logging pipeline via Serilog.Extensions.Logging.
-        Log.Logger = ProgramLogging.BuildFromConfiguration(context.Configuration);
-        logging.ClearProviders();
-        logging.AddSerilog(Log.Logger, dispose: true);
     });
+
+builder.UseSerilog((context, config) =>
+{
+    var logTheme = new TemplateTheme(new Dictionary<TemplateThemeStyle, string>
+    {
+        // Value types from Literate theme (colored arguments in log messages)
+        [TemplateThemeStyle.String] = "\x1b[38;5;0045m",
+        [TemplateThemeStyle.Number] = "\x1b[38;5;0200m",
+        [TemplateThemeStyle.Boolean] = "\x1b[38;5;0027m",
+        [TemplateThemeStyle.Scalar] = "\x1b[38;5;0085m",
+        [TemplateThemeStyle.Null] = "\x1b[38;5;0027m",
+        [TemplateThemeStyle.Name] = "\x1b[38;5;0007m",
+        [TemplateThemeStyle.Invalid] = "\x1b[38;5;0011m",
+        // Custom level colors
+        [TemplateThemeStyle.LevelVerbose] = "\x1b[90m",
+        [TemplateThemeStyle.LevelDebug] = "\x1b[90m",
+        [TemplateThemeStyle.LevelInformation] = "\x1b[32m",
+        [TemplateThemeStyle.LevelWarning] = "\x1b[33m",
+        [TemplateThemeStyle.LevelError] = "\x1b[31m",
+        [TemplateThemeStyle.LevelFatal] = "\x1b[1;31m",
+    });
+
+    config.ReadFrom.Configuration(context.Configuration)
+          .WriteTo.Console(new ExpressionTemplate(
+              "[{@t:HH:mm:ss} {@l:u3}][\x1b[90m{Substring(SourceContext, LastIndexOf(SourceContext, '.') + 1)}\x1b[0m] {@m}\n{#if @x is not null}{@x}\n{#end}",
+              theme: logTheme));
+});
 
 builder.ConfigureServices((context, services) =>
 {
-    // Bind configuration sections (source-generated binding under EnableConfigurationBindingGenerator).
+    // Bind configuration sections
     services.Configure<MountSettings>(context.Configuration.GetSection("Mount"));
     services.Configure<CacheOptions>(context.Configuration.GetSection("Cache"));
     services.Configure<PrefetchOptions>(context.Configuration.GetSection("Cache:Prefetch"));
 
-    // OpenTelemetry (opt-in: only when Endpoint is configured). The OTLP exporter and
-    // SDK are Native-AOT ready; instrumentation is added only on the opt-in path.
+    // OpenTelemetry (opt-in: only when Endpoint is configured)
     var otlpEndpoint = context.Configuration["OpenTelemetry:Endpoint"];
 
     if (!string.IsNullOrEmpty(otlpEndpoint))
     {
-        // Read the interval with int.TryParse (indexer) rather than the reflection-based
-        // GetValue<int> so the path stays AOT-clean.
-        int metricExportIntervalSeconds =
-            int.TryParse(context.Configuration["OpenTelemetry:MetricExportIntervalSeconds"], out var s) ? s : 5;
+        var metricExportIntervalSeconds = context.Configuration.GetValue("OpenTelemetry:MetricExportIntervalSeconds", 5);
         var metricExportIntervalMs = metricExportIntervalSeconds > 0 && metricExportIntervalSeconds <= int.MaxValue / 1000
             ? metricExportIntervalSeconds * 1000
             : 5_000;
@@ -97,7 +109,7 @@ builder.ConfigureServices((context, services) =>
             .WithMetrics(m => m
                 .AddMeter("ZipDrive.Caching")
                 .AddMeter("ZipDrive.Zip")
-                .AddMeter("ZipDrive.WinFsp")
+                .AddMeter("ZipDrive.Dokan")
                 .AddRuntimeInstrumentation()
                 .AddProcessInstrumentation()
                 .AddOtlpExporter((exporterOptions, readerOptions) =>
@@ -111,7 +123,7 @@ builder.ConfigureServices((context, services) =>
             .WithTracing(t => t
                 .AddSource("ZipDrive.Caching")
                 .AddSource("ZipDrive.Zip")
-                .AddSource("ZipDrive.WinFsp")
+                .AddSource("ZipDrive.Dokan")
                 .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
     }
     else
@@ -157,45 +169,13 @@ builder.ConfigureServices((context, services) =>
     // Cache maintenance (periodic eviction + cleanup)
     services.AddHostedService<CacheMaintenanceService>();
 
-    // VFS and WinFsp
+    // VFS and Dokan
     services.AddSingleton<ArchiveVirtualFileSystem>();
     services.AddSingleton<IVirtualFileSystem>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
     services.AddSingleton<IArchiveManager>(sp => sp.GetRequiredService<ArchiveVirtualFileSystem>());
-    services.AddSingleton<WinFspFileSystemAdapter>();
-    services.AddHostedService<WinFspHostedService>();
+    services.AddSingleton<DokanFileSystemAdapter>();
+    services.AddHostedService<DokanHostedService>();
 });
 
 var host = builder.Build();
 await host.RunAsync();
-
-/// <summary>
-/// Native-AOT-safe Serilog setup, configured entirely in code.
-/// </summary>
-internal static class ProgramLogging
-{
-    private const string OutputTemplate =
-        "[{Timestamp:HH:mm:ss} {Level:u3}][{SourceContext}] {Message:lj}{NewLine}{Exception}";
-
-    public static Serilog.ILogger Build(LogEventLevel defaultLevel, LogEventLevel microsoftLevel) =>
-        new LoggerConfiguration()
-            .MinimumLevel.Is(defaultLevel)
-            .MinimumLevel.Override("Microsoft", microsoftLevel)
-            .WriteTo.Console(outputTemplate: OutputTemplate, theme: AnsiConsoleTheme.Code)
-            .CreateLogger();
-
-    /// <summary>
-    /// Builds the logger from the "Serilog:MinimumLevel" config section using plain
-    /// indexer reads (no reflection binding), so it stays AOT-clean.
-    /// </summary>
-    public static Serilog.ILogger BuildFromConfiguration(IConfiguration configuration)
-    {
-        LogEventLevel defaultLevel = ParseLevel(
-            configuration["Serilog:MinimumLevel:Default"], LogEventLevel.Information);
-        LogEventLevel microsoftLevel = ParseLevel(
-            configuration["Serilog:MinimumLevel:Override:Microsoft"], LogEventLevel.Warning);
-        return Build(defaultLevel, microsoftLevel);
-    }
-
-    private static LogEventLevel ParseLevel(string? value, LogEventLevel fallback) =>
-        Enum.TryParse(value, ignoreCase: true, out LogEventLevel level) ? level : fallback;
-}

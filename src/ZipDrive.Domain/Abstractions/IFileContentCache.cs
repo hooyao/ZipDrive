@@ -18,7 +18,7 @@ public interface IFileContentCache
     /// <param name="entry">Format-agnostic entry metadata from the structure cache.</param>
     /// <param name="internalPath">Entry path within the archive (forward slashes, no leading /).</param>
     /// <param name="cacheKey">Unique cache key for this entry.</param>
-    /// <param name="buffer">Output buffer to write decompressed bytes into (written directly for zero-copy reads).</param>
+    /// <param name="buffer">Output buffer to write decompressed bytes into.</param>
     /// <param name="offset">Byte offset within the decompressed file to start reading from.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of bytes actually read (0 if offset is at or beyond EOF).</returns>
@@ -28,7 +28,7 @@ public interface IFileContentCache
         ArchiveEntryInfo entry,
         string internalPath,
         string cacheKey,
-        Memory<byte> buffer,
+        byte[] buffer,
         long offset,
         CancellationToken cancellationToken = default);
 

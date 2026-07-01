@@ -2,7 +2,7 @@ namespace ZipDrive.Infrastructure.FileSystem;
 
 /// <summary>
 /// Identifies Windows shell metadata paths that never exist inside ZIP archives.
-/// Short-circuiting these in the WinFsp adapter avoids eagerly parsing ZIP Central
+/// Short-circuiting these in the Dokan adapter avoids eagerly parsing ZIP Central
 /// Directories just to return FileNotFound for probes like <c>\archive.zip\desktop.ini</c>.
 /// </summary>
 public static class ShellMetadataFilter
@@ -36,47 +36,23 @@ public static class ShellMetadataFilter
     /// </summary>
     public static bool IsShellMetadataPath(ReadOnlySpan<char> path)
     {
-        int lastSep = LastSeparatorIndex(path);
+        // Check the last segment (filename) against known metadata filenames
+        int lastSep = path.LastIndexOf('\\');
         ReadOnlySpan<char> lastSegment = lastSep >= 0 ? path[(lastSep + 1)..] : path;
 
         if (lastSegment.Length > 0 && SpanMatchesAny(lastSegment, MetadataFileNames))
             return true;
 
-        ReadOnlySpan<char> trimmed = TrimLeadingSeparators(path);
-        int sep = SeparatorIndex(trimmed);
+        // Check the first meaningful path segment against known shell prefixes
+        // e.g., \$RECYCLE.BIN or \System Volume Information
+        ReadOnlySpan<char> trimmed = path.TrimStart('\\');
+        int sep = trimmed.IndexOf('\\');
         ReadOnlySpan<char> firstSegment = sep >= 0 ? trimmed[..sep] : trimmed;
 
         if (firstSegment.Length > 0 && SpanMatchesAny(firstSegment, MetadataPathPrefixes))
             return true;
 
         return false;
-    }
-
-    private static int LastSeparatorIndex(ReadOnlySpan<char> path)
-    {
-        int backslash = path.LastIndexOf('\\');
-        int slash = path.LastIndexOf('/');
-        return Math.Max(backslash, slash);
-    }
-
-    private static int SeparatorIndex(ReadOnlySpan<char> path)
-    {
-        int backslash = path.IndexOf('\\');
-        int slash = path.IndexOf('/');
-
-        if (backslash < 0)
-            return slash;
-        if (slash < 0)
-            return backslash;
-        return Math.Min(backslash, slash);
-    }
-
-    private static ReadOnlySpan<char> TrimLeadingSeparators(ReadOnlySpan<char> path)
-    {
-        int index = 0;
-        while (index < path.Length && (path[index] == '\\' || path[index] == '/'))
-            index++;
-        return path[index..];
     }
 
     private static bool SpanMatchesAny(ReadOnlySpan<char> value, string[] candidates)

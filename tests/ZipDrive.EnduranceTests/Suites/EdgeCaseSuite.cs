@@ -17,7 +17,7 @@ public sealed class EdgeCaseSuite : EnduranceSuiteBase
     public override int TaskCount => 10;
 
     public EdgeCaseSuite(
-        WinFspFileSystemAdapter adapter,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,

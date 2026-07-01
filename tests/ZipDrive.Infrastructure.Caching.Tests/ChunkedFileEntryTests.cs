@@ -262,14 +262,14 @@ public class ChunkedFileEntryTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_DoesNotDeleteBackingFile()
+    public void Dispose_DeletesBackingFile()
     {
         string path = CreateTempFile(100);
         var entry = new ChunkedFileEntry(path, 100, 10);
         File.Exists(path).Should().BeTrue();
 
         entry.Dispose();
-        File.Exists(path).Should().BeTrue("file deletion is owned by ChunkedDiskStorageStrategy pending cleanup");
+        File.Exists(path).Should().BeFalse();
     }
 
     [Fact]

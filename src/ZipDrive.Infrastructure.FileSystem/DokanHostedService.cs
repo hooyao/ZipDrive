@@ -1,5 +1,5 @@
 using System.Runtime.Versioning;
-using WinFsp.Native;
+using DokanNet;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,35 +11,36 @@ using ZipDrive.Domain.Models;
 namespace ZipDrive.Infrastructure.FileSystem;
 
 /// <summary>
-/// Background service that manages the WinFsp mount lifecycle and dynamic reload.
+/// Background service that manages the Dokan mount lifecycle and dynamic reload.
 /// Mounts VFS on start, watches for archive directory changes, and unmounts on Ctrl+C / host shutdown.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WinFspHostedService : BackgroundService
+public sealed class DokanHostedService : BackgroundService
 {
     private readonly IVirtualFileSystem _vfs;
     private readonly IArchiveManager _archiveManager;
     private readonly IArchiveDiscovery _discovery;
-    private readonly WinFspFileSystemAdapter _adapter;
+    private readonly DokanFileSystemAdapter _adapter;
     private readonly MountSettings _mountSettings;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly IFormatRegistry _formatRegistry;
-    private readonly ILogger<WinFspHostedService> _logger;
+    private readonly ILogger<DokanHostedService> _logger;
 
-    private FileSystemHost? _host;
+    private Dokan? _dokan;
+    private DokanInstance? _dokanInstance;
     private FileSystemWatcher? _watcher;
     private ArchiveChangeConsolidator? _consolidator;
     private CancellationToken _stoppingToken;
 
-    public WinFspHostedService(
+    public DokanHostedService(
         IVirtualFileSystem vfs,
         IArchiveManager archiveManager,
         IArchiveDiscovery discovery,
-        WinFspFileSystemAdapter adapter,
+        DokanFileSystemAdapter adapter,
         IOptions<MountSettings> mountSettings,
         IFormatRegistry formatRegistry,
         IHostApplicationLifetime lifetime,
-        ILogger<WinFspHostedService> logger)
+        ILogger<DokanHostedService> logger)
     {
         _vfs = vfs;
         _archiveManager = archiveManager;
@@ -149,50 +150,36 @@ public sealed class WinFspHostedService : BackgroundService
                 return;
             }
 
-            _host = new FileSystemHost(_adapter);
+            // Create Dokan instance
+            _dokan = new Dokan(new DokanNetLogger(_logger));
 
-            string driveLetter = _mountSettings.MountPoint.TrimEnd('\\');
-            string mountManagerPoint = @"\\.\" + driveLetter;
-
-            int result = _host.Mount(mountManagerPoint);
-            if (result >= 0)
-            {
-                _logger.LogInformation("Drive mounted at {MountPoint} via WinFsp Mount Manager. Press Ctrl+C to unmount.",
-                    _mountSettings.MountPoint);
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "WinFsp Mount Manager mount failed (0x{Status:X8}). Falling back to DefineDosDevice mount.",
-                    result);
-
-                // FileSystemHost is not reusable after a failed mount.
-                _host.Dispose();
-                _host = new FileSystemHost(_adapter);
-
-                result = _host.Mount(driveLetter);
-                if (result < 0)
+            var dokanBuilder = new DokanInstanceBuilder(_dokan)
+                .ConfigureOptions(options =>
                 {
-                    _logger.LogError("WinFsp mount failed: 0x{Status:X8}", result);
-                    Environment.ExitCode = 1;
-                    _lifetime.StopApplication();
-                    return;
-                }
+                    options.Options = DokanOptions.WriteProtection | DokanOptions.FixedDrive | DokanOptions.MountManager;
+                    options.MountPoint = _mountSettings.MountPoint;
+                });
 
-                _logger.LogInformation("Drive mounted at {MountPoint} via WinFsp DefineDosDevice. Press Ctrl+C to unmount.",
-                    _mountSettings.MountPoint);
-            }
+            _dokanInstance = dokanBuilder.Build(_adapter);
 
-            await Task.Delay(Timeout.Infinite, stoppingToken);
+            _logger.LogInformation("Drive mounted at {MountPoint}. Press Ctrl+C to unmount.", _mountSettings.MountPoint);
+
+            // Step 4: Block until Dokan file system is closed
+            await _dokanInstance.WaitForFileSystemClosedAsync(uint.MaxValue);
         }
         catch (DllNotFoundException)
         {
-            _logger.LogError("WinFsp is not installed. ZipDrive requires WinFsp to mount virtual drives");
+            _logger.LogError("Dokany driver is not installed. ZipDrive requires Dokany to mount virtual drives");
             UserNotice.Error(
-                "WinFsp is not installed.\n" +
-                "ZipDrive requires WinFsp to mount virtual drives.\n" +
-                "Download and install from: https://winfsp.dev/rel/");
+                "Dokany driver is not installed.\n" +
+                "ZipDrive requires Dokany to mount virtual drives.\n" +
+                "Download and install from: https://github.com/dokan-dev/dokany/releases");
             WaitForKeyAndStop();
+        }
+        catch (DokanException ex)
+        {
+            _logger.LogError(ex, "Dokan mount failed. Ensure Dokany v2.3.1.1000 is installed from https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000");
+            _lifetime.StopApplication();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -214,12 +201,14 @@ public sealed class WinFspHostedService : BackgroundService
 
         try
         {
-            _host?.Dispose();
-            _host = null;
+            if (_dokan != null)
+            {
+                _dokan.RemoveMountPoint(_mountSettings.MountPoint);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error during WinFsp unmount");
+            _logger.LogWarning(ex, "Error removing mount point");
         }
 
         try
@@ -233,6 +222,9 @@ public sealed class WinFspHostedService : BackgroundService
         {
             _logger.LogWarning(ex, "Error unmounting VFS");
         }
+
+        _dokanInstance?.Dispose();
+        _dokan?.Dispose();
 
         _logger.LogInformation("Drive unmounted cleanly");
 
@@ -550,5 +542,23 @@ public sealed class WinFspHostedService : BackgroundService
         }
 
         _lifetime.StopApplication();
+    }
+
+    /// <summary>
+    /// Adapter for DokanNet's ILogger to Microsoft.Extensions.Logging.
+    /// </summary>
+    private sealed class DokanNetLogger : DokanNet.Logging.ILogger
+    {
+        private readonly ILogger _logger;
+
+        public DokanNetLogger(ILogger logger) => _logger = logger;
+
+        public void Debug(string message, params object[] args) => _logger.LogDebug(message, args);
+        public void Info(string message, params object[] args) => _logger.LogInformation(message, args);
+        public void Warn(string message, params object[] args) => _logger.LogWarning(message, args);
+        public void Error(string message, params object[] args) => _logger.LogError(message, args);
+        public void Fatal(string message, params object[] args) => _logger.LogCritical(message, args);
+
+        public bool DebugEnabled => _logger.IsEnabled(LogLevel.Debug);
     }
 }

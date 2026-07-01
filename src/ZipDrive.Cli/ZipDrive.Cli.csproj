@@ -10,27 +10,17 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <!-- Keep de-committed segments; avoids re-alloc churn in cache grow/shrink cycles -->
     <RetainVMGarbageCollection>true</RetainVMGarbageCollection>
-
-    <!-- Native AOT. `dotnet build`/`dotnet test` stay JIT; only `dotnet publish -r <rid>`
-         produces the native image. The WinFsp migration exists to enable this. -->
-    <PublishAot>true</PublishAot>
-    <OptimizationPreference>Speed</OptimizationPreference>
-    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
-    <!-- Source-generated IConfiguration -> POCO binding (AOT-safe Configure<T>). -->
-    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
-    <!-- Surface any residual trim/AOT issues from this project as warnings. -->
-    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Process" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
-    <PackageReference Include="Serilog" />
-    <PackageReference Include="Serilog.Extensions.Logging" />
+    <PackageReference Include="Serilog.Expressions" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
     <PackageReference Include="Serilog.Sinks.Console" />
   </ItemGroup>
 
@@ -46,11 +36,9 @@
   <ItemGroup>
     <None Update="appsettings.jsonc">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
     <None Update="appsettings.dev.jsonc" Condition="Exists('appsettings.dev.jsonc')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 

@@ -12,13 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="DokanNet" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Spectre.Console" />
-    <!-- WinFsp.Native binding (managed-only; native winfsp-*.dll comes from the system
-         WinFsp install). Resolved from the vendored local-packages feed until published. -->
-    <PackageReference Include="WinFsp.Native" />
   </ItemGroup>
 
   <ItemGroup>

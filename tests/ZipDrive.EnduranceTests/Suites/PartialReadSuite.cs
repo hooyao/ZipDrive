@@ -17,7 +17,7 @@ public sealed class PartialReadSuite : EnduranceSuiteBase
     public override int TaskCount => 20;
 
     public PartialReadSuite(
-        WinFspFileSystemAdapter adapter,
+        DokanFileSystemAdapter adapter,
         ConcurrentDictionary<string, ZipManifest> manifests,
         List<string> archivePaths,
         FileContentCache fileCache,
