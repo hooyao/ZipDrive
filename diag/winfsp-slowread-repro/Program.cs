@@ -20,6 +20,17 @@ internal static class Program
             return 0;
         }
 
+        // Sub-command: D4 — partial-return + consumer re-read; does a same-file OPEN slip through?
+        if (args.Length > 0 && string.Equals(args[0], "d4", StringComparison.OrdinalIgnoreCase))
+        {
+            RepeatReadExperiment.Run(
+                budgetMs: GetInt(args, "budgetMs", 800),
+                threadCountArg: GetInt(args, "threadCount", 0),
+                probeSeconds: GetInt(args, "probeSeconds", 6),
+                slowThreads: GetInt(args, "slowThreads", 1));
+            return 0;
+        }
+
         // Parameters tuned to mirror the ZipDrive repro:
         //  - several concurrent slow reads (videos extracting), each ~2s
         //  - many fast reads (image thumbnails) that should stay snappy

@@ -50,4 +50,4 @@ AsyncDelay 8 个慢读背景下 fast 读 p99≈2.3ms（不同文件不受影响�
 只有 `SlowInOpen`（慢在同步回调 OpenFile）在 threadCount 小于慢操作数时会堵——但真实 dump 证明
 ZipDrive 的 OpenFile 不慢（dumpasync 无同步回调挂起），故非本例 root cause。
 
-详见 `../out/ROOT-CAUSE-CONFIRMED.md`。
+详见 `../out/FINAL-REPORT.md`。

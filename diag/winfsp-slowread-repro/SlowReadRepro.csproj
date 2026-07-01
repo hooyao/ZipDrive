@@ -10,8 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Same WinFsp binding + version ZipDrive uses; already in the global NuGet cache. -->
-    <PackageReference Include="WinFsp.Native" Version="0.1.3-pre.3" />
+    <!-- Same WinFsp binding + version ZipDrive uses. Version comes from the repo-root
+         Directory.Packages.props (Central Package Management), so no Version attribute here. -->
+    <PackageReference Include="WinFsp.Native" />
   </ItemGroup>
 
 </Project>

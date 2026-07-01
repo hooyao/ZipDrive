@@ -1,0 +1,7 @@
+# Diagnostic repro build artifacts — source + build scripts are enough to rebuild.
+*.exe
+*.obj
+*.pdb
+*.ilk
+bin/
+obj/
