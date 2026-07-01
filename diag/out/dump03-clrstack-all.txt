@@ -1,0 +1,196 @@
+Loading core dump: diag/dumps/zipdrive-20260630-221236-03-221250.dmp ...
+OS Thread Id: 0x60e8
+        Child SP               IP Call Site
+000000B2FF17F830 00007ffaf1820bb4 [DebuggerU2MCatchHandlerFrame: 000000b2ff17f830] 
+OS Thread Id: 0x76ec
+        Child SP               IP Call Site
+000000B2FDF7E5C0 00007ffaf1820bb4 [InlinedCallFrame: 000000b2fdf7e5c0] 
+000000B2FDF7E5C0 00007ffa205a3517 [InlinedCallFrame: 000000b2fdf7e5c0] 
+000000B2FDF7E590 00007FFA205A3517 System.Threading.Monitor.Wait(System.Object, Int32) [/_/src/runtime/src/coreclr/System.Private.CoreLib/src/System/Threading/Monitor.CoreCLR.cs @ 312]
+000000B2FDF7E660 00007FFA205B086F System.Threading.ManualResetEventSlim.Wait(Int32, System.Threading.CancellationToken) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/ManualResetEventSlim.cs @ 587]
+000000B2FDF7E700 00007FFA205CB6D5 System.Threading.Tasks.Task.SpinThenBlockingWait(Int32, System.Threading.CancellationToken) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/Task.cs @ 3090]
+000000B2FDF7E770 00007FFA205CB487 System.Threading.Tasks.Task.InternalWaitCore(Int32, System.Threading.CancellationToken)
+000000B2FDF7E7F0 00007FFA205CB3C6 System.Threading.Tasks.Task.InternalWait(Int32, System.Threading.CancellationToken) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/Task.cs @ 2965]
+000000B2FDF7E820 00007FFA2062CAF5 System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(System.Threading.Tasks.Task, System.Threading.Tasks.ConfigureAwaitOptions) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/TaskAwaiter.cs @ 104]
+000000B2FDF7E860 00007FF9C2B51897 Program.<Main>(System.String[])
+OS Thread Id: 0x4f7c
+        Child SP               IP Call Site
+000000B28153F738 00007ffaf1823034 [InlinedCallFrame: 000000b28153f738] 
+000000B28153F738 00007ffa205c5258 [InlinedCallFrame: 000000b28153f738] 
+000000B28153F6D0 00007FFA205C5258 System.Threading.PortableThreadPool+IOCompletionPoller.Poll() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.IO.Windows.cs @ 242]
+000000B28153F7E0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28153FA30 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28153fa30] 
+OS Thread Id: 0x6de4
+        Child SP               IP Call Site
+000000B2815BFB78 00007ffaf1823034 [InlinedCallFrame: 000000b2815bfb78] 
+000000B2815BFB78 00007ffa205c5258 [InlinedCallFrame: 000000b2815bfb78] 
+000000B2815BFB10 00007FFA205C5258 System.Threading.PortableThreadPool+IOCompletionPoller.Poll() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.IO.Windows.cs @ 242]
+000000B2815BFC20 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B2815BFE70 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b2815bfe70] 
+OS Thread Id: 0x3b38
+        Child SP               IP Call Site
+000000B28163F498 00007ffaf1823034 [InlinedCallFrame: 000000b28163f498] 
+000000B28163F498 00007ffa205c5258 [InlinedCallFrame: 000000b28163f498] 
+000000B28163F430 00007FFA205C5258 System.Threading.PortableThreadPool+IOCompletionPoller.Poll() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.IO.Windows.cs @ 242]
+000000B28163F540 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28163F790 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28163f790] 
+OS Thread Id: 0x746c
+        Child SP               IP Call Site
+000000B2817FF8E8 00007ffaf1820184 [InlinedCallFrame: 000000b2817ff8e8] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B2817FF8E8 00007ff9c362d9cc [InlinedCallFrame: 000000b2817ff8e8] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B2817FF8B0 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B2817FF980 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B2817FFA30 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B2817FFB30 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B2817FFD80 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b2817ffd80] 
+OS Thread Id: 0x4f98
+        Child SP               IP Call Site
+000000B2819BF7F0 00007ffaf1820bb4 [InlinedCallFrame: 000000b2819bf7f0] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B2819BF7F0 00007ff9c34e9527 [InlinedCallFrame: 000000b2819bf7f0] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B2819BF7C0 00007FF9C34E9527 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, System.Object, WaitHandleWaitSourceMap) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/WaitHandle.cs @ 183]
+000000B2819BF880 00007FFA205C33A9 System.Threading.PortableThreadPool+GateThread.GateThreadStart()
+000000B2819BF9C0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B2819BFC10 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b2819bfc10] 
+OS Thread Id: 0x6110
+        Child SP               IP Call Site
+000000B281B7F538 00007ffaf1820184 [InlinedCallFrame: 000000b281b7f538] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B281B7F538 00007ff9c362d9cc [InlinedCallFrame: 000000b281b7f538] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B281B7F500 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B281B7F5D0 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B281B7F680 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B281B7F780 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B281B7F9D0 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b281b7f9d0] 
+OS Thread Id: 0x68c4
+        Child SP               IP Call Site
+000000B28217F620 00007ffaf1820bb4 [InlinedCallFrame: 000000b28217f620] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B28217F620 00007ff9c34e9527 [InlinedCallFrame: 000000b28217f620] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B28217F5F0 00007FF9C34E9527 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, System.Object, WaitHandleWaitSourceMap) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/WaitHandle.cs @ 183]
+000000B28217F6B0 00007FFA205BC565 System.Threading.TimerQueue.TimerThread() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/TimerQueue.Portable.cs @ 93]
+000000B28217F750 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28217F9A0 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28217f9a0] 
+OS Thread Id: 0x1084
+        Child SP               IP Call Site
+OS Thread Id: 0x4954
+        Child SP               IP Call Site
+OS Thread Id: 0x6e68
+        Child SP               IP Call Site
+OS Thread Id: 0x4d00
+        Child SP               IP Call Site
+000000B28137F720 00007ffaf18200e4 [DebuggerU2MCatchHandlerFrame: 000000b28137f720] 
+OS Thread Id: 0x6528
+        Child SP               IP Call Site
+OS Thread Id: 0x3848
+        Child SP               IP Call Site
+000000B28577FB00 00007ffaf1820bb4 [InlinedCallFrame: 000000b28577fb00] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B28577FB00 00007ff9c34e9527 [InlinedCallFrame: 000000b28577fb00] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B28577FAD0 00007FF9C34E9527 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, System.Object, WaitHandleWaitSourceMap) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/WaitHandle.cs @ 183]
+000000B28577FB90 00007FFA206C66CE System.Diagnostics.Tracing.CounterGroup.PollForValues() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Diagnostics/Tracing/CounterGroup.cs @ 332]
+000000B28577FC50 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28577FEA0 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28577fea0] 
+OS Thread Id: 0x7230
+        Child SP               IP Call Site
+000000B285A7F510 00007ffaf1820bb4 [InlinedCallFrame: 000000b285a7f510] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B285A7F510 00007ff9c34e9527 [InlinedCallFrame: 000000b285a7f510] System.Threading.WaitHandle.<WaitOneCore>g____PInvoke|0_0(IntPtr, Int32, Int32)
+000000B285A7F4E0 00007FF9C34E9527 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, System.Object, WaitHandleWaitSourceMap) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/WaitHandle.cs @ 183]
+000000B285A7F5A0 00007FFA205A7F58 System.Threading.WaitHandle.WaitOne(System.TimeSpan) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/WaitHandle.cs @ 502]
+000000B285A7F5E0 00007FFAA0352721 System.Diagnostics.Metrics.AggregationManager.CollectWorker() [/_/src/runtime/src/libraries/System.Diagnostics.DiagnosticSource/src/System/Diagnostics/Metrics/AggregationManager.cs @ 267]
+000000B285A7F670 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B285A7F8C0 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b285a7f8c0] 
+OS Thread Id: 0x6ae0
+        Child SP               IP Call Site
+OS Thread Id: 0x7104
+        Child SP               IP Call Site
+000000B2861FF498 00007ffaf1820184 [InlinedCallFrame: 000000b2861ff498] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B2861FF498 00007ff9c362d9cc [InlinedCallFrame: 000000b2861ff498] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B2861FF460 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B2861FF530 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B2861FF5E0 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B2861FF6E0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B2861FF930 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b2861ff930] 
+OS Thread Id: 0x6b38
+        Child SP               IP Call Site
+000000B28607E760 00007ffaf1820124 [InlinedCallFrame: 000000b28607e760] Interop+Kernel32.<ReadFile>g____PInvoke|199_0(IntPtr, Byte*, Int32, IntPtr, System.Threading.NativeOverlapped*)
+000000B28607E760 00007ff9c365a91c [InlinedCallFrame: 000000b28607e760] Interop+Kernel32.<ReadFile>g____PInvoke|199_0(IntPtr, Byte*, Int32, IntPtr, System.Threading.NativeOverlapped*)
+000000B28607E730 00007FF9C365A91C ILStubClass.IL_STUB_PInvoke(IntPtr, Byte*, Int32, IntPtr, System.Threading.NativeOverlapped*)
+000000B28607E7F0 00007FF9C3679C99 System.IO.RandomAccess.QueueAsyncReadFile(Microsoft.Win32.SafeHandles.SafeFileHandle, System.Memory`1<Byte>, Int64, System.Threading.CancellationToken, System.IO.Strategies.OSFileStreamStrategy)
+000000B28607E8D0 00007FF9C367F9C3 System.IO.Strategies.BufferedFileStreamStrategy+<ReadAsyncSlowPath>d__37.MoveNext() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/IO/Strategies/BufferedFileStreamStrategy.cs @ 445]
+000000B28607EA90 00007FF9C3687724 System.IO.Strategies.BufferedFileStreamStrategy.ReadAsyncSlowPath(System.Threading.Tasks.Task, System.Memory`1<Byte>, System.Threading.CancellationToken)
+000000B28607EB60 00007FF9C37ADF55 ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21.MoveNext()
+000000B28607ECA0 00007FF9C37AED57 System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d.MoveNext() [/_/src/runtime/src/libraries/System.IO.Compression/src/System/IO/Compression/DeflateZLib/DeflateStream.cs @ 459]
+000000B28607EE00 00007FF9C37B15A3 ZipDrive.Infrastructure.Caching.ChunkedFileEntry+<ExtractAsync>d__39.MoveNext()
+000000B28607F0A0 00007FF9C3627BE8 System.Threading.ExecutionContext.RunInternal(System.Threading.ExecutionContext, System.Threading.ContextCallback, System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/ExecutionContext.cs @ 179]
+000000B28607F110 00007FF9C3674588 System.Threading.Tasks.AwaitTaskContinuation.RunOrScheduleAction(System.Runtime.CompilerServices.IAsyncStateMachineBox, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/TaskContinuation.cs @ 795]
+000000B28607F190 00007FF9C3673D0D System.Threading.Tasks.Task.RunContinuations(System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/Task.cs @ 3475]
+000000B28607F220 00007FF9C37B023F System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1[[System.Int32, System.Private.CoreLib]].SetExistingTaskResult(System.Threading.Tasks.Task`1<Int32>, Int32)
+000000B28607F260 00007FF9C37AF349 System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d.MoveNext() [/_/src/runtime/src/libraries/System.IO.Compression/src/System/IO/Compression/DeflateZLib/DeflateStream.cs @ 501]
+000000B28607F3C0 00007FF9C3627BE8 System.Threading.ExecutionContext.RunInternal(System.Threading.ExecutionContext, System.Threading.ContextCallback, System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/ExecutionContext.cs @ 179]
+000000B28607F430 00007FF9C37B0F4A System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1+AsyncStateMachineBox`1[[System.Int32, System.Private.CoreLib],[System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d, System.IO.Compression]].MoveNext()
+000000B28607F470 00007FF9C36743D3 System.Threading.Tasks.AwaitTaskContinuation.RunOrScheduleAction(System.Runtime.CompilerServices.IAsyncStateMachineBox, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/TaskContinuation.cs @ 795]
+000000B28607F4F0 00007FF9C3673D0D System.Threading.Tasks.Task.RunContinuations(System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/Task.cs @ 3475]
+000000B28607F580 00007FF9C37B023F System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1[[System.Int32, System.Private.CoreLib]].SetExistingTaskResult(System.Threading.Tasks.Task`1<Int32>, Int32)
+000000B28607F5C0 00007FF9C37AE367 ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21.MoveNext() [F:\MyProjects\ZipDrive\src\ZipDrive.Infrastructure.Archives.Zip\SubStream.cs @ 179]
+000000B28607F700 00007FF9C3627BE8 System.Threading.ExecutionContext.RunInternal(System.Threading.ExecutionContext, System.Threading.ContextCallback, System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/ExecutionContext.cs @ 179]
+000000B28607F770 00007FF9C37B032C System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1+AsyncStateMachineBox`1[[System.Int32, System.Private.CoreLib],[ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21, ZipDrive.Infrastructure.Archives.Zip]].MoveNext(System.Threading.Thread)
+000000B28607F7C0 00007FF9C36804BE System.IO.Strategies.BufferedFileStreamStrategy+<ReadAsyncSlowPath>d__37.MoveNext() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/IO/Strategies/BufferedFileStreamStrategy.cs @ 456]
+000000B28607F980 00007FF9C3627BE8 System.Threading.ExecutionContext.RunInternal(System.Threading.ExecutionContext, System.Threading.ContextCallback, System.Object) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/ExecutionContext.cs @ 179]
+000000B28607F9F0 00007FF9C362A1E9 System.Threading.ThreadPoolWorkQueue.Dispatch()
+000000B28607FAB0 00007FFA205C614A System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 118]
+000000B28607FBB0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28607FE00 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28607fe00] 
+OS Thread Id: 0x4c2c
+        Child SP               IP Call Site
+OS Thread Id: 0x7ac0
+        Child SP               IP Call Site
+OS Thread Id: 0x1f8
+        Child SP               IP Call Site
+OS Thread Id: 0x5124
+        Child SP               IP Call Site
+000000B28667F388 00007ffaf1820184 [InlinedCallFrame: 000000b28667f388] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B28667F388 00007ff9c362d9cc [InlinedCallFrame: 000000b28667f388] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B28667F350 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B28667F420 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B28667F4D0 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B28667F5D0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28667F820 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28667f820] 
+OS Thread Id: 0x39a0
+        Child SP               IP Call Site
+000000B28697F9C8 00007ffaf1820184 [InlinedCallFrame: 000000b28697f9c8] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B28697F9C8 00007ff9c362d9cc [InlinedCallFrame: 000000b28697f9c8] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B28697F990 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B28697FA60 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B28697FB10 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B28697FC10 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B28697FE60 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b28697fe60] 
+OS Thread Id: 0x1220
+        Child SP               IP Call Site
+OS Thread Id: 0x78d8
+        Child SP               IP Call Site
+000000B286F7F378 00007ffaf1820184 [InlinedCallFrame: 000000b286f7f378] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B286F7F378 00007ff9c362d9cc [InlinedCallFrame: 000000b286f7f378] Interop+Kernel32.<GetQueuedCompletionStatus>g____PInvoke|51_0(IntPtr, UInt32*, UIntPtr*, IntPtr*, Int32)
+000000B286F7F340 00007FF9C362D9CC System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 160]
+000000B286F7F410 00007FF9C362AD09 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean) [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/LowLevelLifoSemaphore.cs @ 85]
+000000B286F7F4C0 00007FFA205C618F System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart() [/_/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.WorkerThread.cs @ 116]
+000000B286F7F5C0 00007FFA205A3CCB System.Threading.Thread.StartCallback()
+000000B286F7F810 00007ffa22798743 [DebuggerU2MCatchHandlerFrame: 000000b286f7f810] 
+OS Thread Id: 0x7454
+        Child SP               IP Call Site
+OS Thread Id: 0xdec
+        Child SP               IP Call Site
+OS Thread Id: 0x7380
+        Child SP               IP Call Site
+OS Thread Id: 0x7028
+        Child SP               IP Call Site
+OS Thread Id: 0x1f78
+        Child SP               IP Call Site
+OS Thread Id: 0x2b54
+        Child SP               IP Call Site
+OS Thread Id: 0x5b74
+        Child SP               IP Call Site
+OS Thread Id: 0x79a8
+        Child SP               IP Call Site
+OS Thread Id: 0x4c90
+        Child SP               IP Call Site
+OS Thread Id: 0x670c
+        Child SP               IP Call Site
+OS Thread Id: 0x6d44
+        Child SP               IP Call Site

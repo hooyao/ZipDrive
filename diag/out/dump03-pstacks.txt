@@ -1,0 +1,62 @@
+Loading core dump: diag/dumps/zipdrive-20260630-221236-03-221250.dmp ...
+
+________________________________________________
+ ~~~~ 76ec
+    1 System.Threading.Monitor.Wait(Object, Int32)
+    1 System.Threading.ManualResetEventSlim.Wait(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.SpinThenBlockingWait(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.InternalWaitCore(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.InternalWait(Int32, CancellationToken)
+    1 System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task, ConfigureAwaitOptions)
+    1 Program.<Main>(String[])
+
+
+________________________________________________
+      ~~~~ 4f98
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.PortableThreadPool+GateThread.GateThreadStart()
+      ~~~~ 68c4
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.TimerQueue.TimerThread()
+      ~~~~ 3848
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Diagnostics.Tracing.CounterGroup.PollForValues()
+      ~~~~ 7230
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.WaitHandle.WaitOne(TimeSpan)
+         1 System.Diagnostics.Metrics.AggregationManager.CollectWorker()
+      ~~~~ 4f7c,6de4,3b38
+         3 System.Threading.PortableThreadPool+IOCompletionPoller.Poll()
+           ~~~~ 6b38
+              1 (dynamicClass).IL_STUB_PInvoke(IntPtr, Byte*, Int32, IntPtr, NativeOverlapped*)
+              1 System.IO.RandomAccess.QueueAsyncReadFile(SafeFileHandle, Memory<Byte>, Int64, CancellationToken, OSFileStreamStrategy)
+              1 System.IO.Strategies.BufferedFileStreamStrategy+<ReadAsyncSlowPath>d__37.MoveNext()
+              1 System.IO.Strategies.BufferedFileStreamStrategy.ReadAsyncSlowPath(Task, Memory<Byte>, CancellationToken)
+              1 ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21.MoveNext()
+              1 System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d.MoveNext()
+              1 ZipDrive.Infrastructure.Caching.ChunkedFileEntry+<ExtractAsync>d__39.MoveNext()
+              1 System.Threading.ExecutionContext.RunInternal(ExecutionContext, ContextCallback, Object)
+              1 System.Threading.Tasks.AwaitTaskContinuation.RunOrScheduleAction(IAsyncStateMachineBox, Boolean)
+              1 System.Threading.Tasks.Task.RunContinuations(Object)
+              1 System.Runtime.CompilerServices.AsyncTaskMethodBuilder<System.Int32>.SetExistingTaskResult(Task<Int32>, Int32)
+              1 System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d.MoveNext()
+              1 System.Threading.ExecutionContext.RunInternal(ExecutionContext, ContextCallback, Object)
+              1 System.Runtime.CompilerServices.AsyncTaskMethodBuilder<System.Int32>+AsyncStateMachineBox<System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d>.MoveNext()
+              1 System.Threading.Tasks.AwaitTaskContinuation.RunOrScheduleAction(IAsyncStateMachineBox, Boolean)
+              1 System.Threading.Tasks.Task.RunContinuations(Object)
+              1 System.Runtime.CompilerServices.AsyncTaskMethodBuilder<System.Int32>.SetExistingTaskResult(Task<Int32>, Int32)
+              1 ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21.MoveNext()
+              1 System.Threading.ExecutionContext.RunInternal(ExecutionContext, ContextCallback, Object)
+              1 System.Runtime.CompilerServices.AsyncTaskMethodBuilder<System.Int32>+AsyncStateMachineBox<ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21>.MoveNext(Thread)
+              1 System.IO.Strategies.BufferedFileStreamStrategy+<ReadAsyncSlowPath>d__37.MoveNext()
+              1 System.Threading.ExecutionContext.RunInternal(ExecutionContext, ContextCallback, Object)
+              1 System.Threading.ThreadPoolWorkQueue.Dispatch()
+           ~~~~ 746c,6110,7104,5124...
+              6 System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)
+              6 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean)
+         7 System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+   14 System.Threading.Thread.StartCallback()
+
+
+==> 15 threads with 2 roots
+

@@ -1,0 +1,38 @@
+Loading core dump: diag/dumps/zipdrive-20260630-221236-04-221257.dmp ...
+
+________________________________________________
+ ~~~~ 76ec
+    1 System.Threading.Monitor.Wait(Object, Int32)
+    1 System.Threading.ManualResetEventSlim.Wait(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.SpinThenBlockingWait(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.InternalWaitCore(Int32, CancellationToken)
+    1 System.Threading.Tasks.Task.InternalWait(Int32, CancellationToken)
+    1 System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task, ConfigureAwaitOptions)
+    1 Program.<Main>(String[])
+
+
+________________________________________________
+      ~~~~ 4f98
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.PortableThreadPool+GateThread.GateThreadStart()
+      ~~~~ 68c4
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.TimerQueue.TimerThread()
+      ~~~~ 3848
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Diagnostics.Tracing.CounterGroup.PollForValues()
+      ~~~~ 7230
+         1 System.Threading.WaitHandle.WaitOneNoCheck(Int32, Boolean, Object, WaitHandleWaitSourceMap)
+         1 System.Threading.WaitHandle.WaitOne(TimeSpan)
+         1 System.Diagnostics.Metrics.AggregationManager.CollectWorker()
+      ~~~~ 4f7c,6de4,3b38
+         3 System.Threading.PortableThreadPool+IOCompletionPoller.Poll()
+      ~~~~ 746c,6110,7104,6b38...
+         7 System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)
+         7 System.Threading.LowLevelLifoSemaphore.Wait(Int32, Boolean)
+         7 System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+   14 System.Threading.Thread.StartCallback()
+
+
+==> 15 threads with 2 roots
+

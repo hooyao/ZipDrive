@@ -1,0 +1,10 @@
+Loading core dump: diag/dumps/zipdrive-20260630-231124-02-231131.dmp ...
+MT               Count    Type
+00007ff6e9dc18c0 2        Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+00007ff6e9e96c98 2        DokanNet.DokanInstance+<WaitForFileSystemClosedAsync>d__35
+00007ff6e9dcbc88 1        Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<WaitForShutdownAsync>d__5
+00007ff6e9dcdfa0 1        Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<RunAsync>d__4
+00007ff6e9dce630 1        Program+<<Main>$>d__0
+00007ff6e9dc98b8 1        ZipDrive.Infrastructure.Caching.CacheMaintenanceService+<ExecuteAsync>d__5
+00007ff6e9dda250 1        ZipDrive.Infrastructure.FileSystem.DokanHostedService+<ExecuteAsync>d__14
+00007ff6e9e97e38 1        DokanNet.DokanInstance+<<-ctor>g__KeepReferenceAlive|32_0>d

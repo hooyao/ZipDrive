@@ -10,6 +10,8 @@
     <InternalsVisibleTo Include="ZipDrive.Infrastructure.Tests" />
     <InternalsVisibleTo Include="ZipDrive.Infrastructure.Caching.Tests" />
     <InternalsVisibleTo Include="ZipDrive.EnduranceTests" />
+    <!-- DIAGNOSTIC (diag/winfsp-photos-hang): lets Program.cs set CacheTelemetry.DiagLogger. Remove with diag kit. -->
+    <InternalsVisibleTo Include="ZipDrive" />
   </ItemGroup>
 
   <ItemGroup>

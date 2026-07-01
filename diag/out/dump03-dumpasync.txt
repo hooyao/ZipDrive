@@ -1,0 +1,17 @@
+Loading core dump: diag/dumps/zipdrive-20260630-221236-03-221250.dmp ...
+MT               Count    Type
+00007ff9c30f79f8 2        Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+00007ff9c3747008 2        ZipDrive.Infrastructure.Caching.ChunkedFileEntry+<ExtractAsync>d__39
+00007ff9c3747470 2        ZipDrive.Infrastructure.Caching.ChunkedDiskStorageStrategy+<>c__DisplayClass4_0+<<MaterializeAsync>b__0>d
+00007ff9c37497f8 2        ZipDrive.Infrastructure.Caching.ChunkedStream+<EnsureChunkReadyAsync>d__21
+00007ff9c37491b8 2        ZipDrive.Infrastructure.Caching.ChunkedStream+<ReadAsync>d__16
+00007ff9c3729a48 2        ZipDrive.Infrastructure.Caching.FileContentCache+<ReadAsync>d__10
+00007ff9c372aa70 2        ZipDrive.Application.Services.ArchiveVirtualFileSystem+<ReadFileAsync>d__32
+00007ff9c372be00 2        ZipDrive.Infrastructure.FileSystem.WinFspFileSystemAdapter+<ReadFile>d__18
+00007ff9c3101a10 1        Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<WaitForShutdownAsync>d__5
+00007ff9c3103488 1        Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<RunAsync>d__4
+00007ff9c3104418 1        Program+<<Main>$>d__0
+00007ff9c30ffed8 1        ZipDrive.Infrastructure.Caching.CacheMaintenanceService+<ExecuteAsync>d__5
+00007ff9c31b4730 1        ZipDrive.Infrastructure.FileSystem.WinFspHostedService+<ExecuteAsync>d__13
+00007ff9c372dca0 1        ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21
+00007ff9c3746b60 1        System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d

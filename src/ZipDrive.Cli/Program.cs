@@ -166,6 +166,12 @@ builder.ConfigureServices((context, services) =>
 });
 
 var host = builder.Build();
+
+// DIAGNOSTIC (diag/winfsp-photos-hang): wire the static chunk-wait logger so
+// ChunkedStream can emit "Chunk-wait BLOCK/DONE" lines. Remove with the diag kit.
+CacheTelemetry.SetDiagnosticLogger(
+    host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ZipDrive.ChunkWait"));
+
 await host.RunAsync();
 
 /// <summary>

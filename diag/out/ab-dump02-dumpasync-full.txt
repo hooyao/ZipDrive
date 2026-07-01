@@ -1,0 +1,26 @@
+Loading core dump: diag/dumps/zipdrive-20260630-231124-02-231131.dmp ...
+STACK 1
+0000023231472920 00007ff6e9dcb580 ( ) System.Threading.Tasks.Task+DelayPromiseWithCancellation
+  00000232314729d0 00007ff6e9dcbc88 (0) Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<WaitForShutdownAsync>d__5
+    0000023231472a48 00007ff6e9dcdfa0 (1) Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<RunAsync>d__4
+      0000023231472ad8 00007ff6e9dce630 (0) Program+<<Main>$>d__0
+        0000023231472c18 00007ff6e9dccaa0 () System.Threading.Tasks.Task+SetOnInvokeMres
+
+STACK 2
+<< Awaiting: 00000232314749b8 00007ff6e9dc0ce0 System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1+ConfiguredValueTaskAwaiter >>
+  0000023231474950 00007ff6e9dc98b8 (0) ZipDrive.Infrastructure.Caching.CacheMaintenanceService+<ExecuteAsync>d__5
+    0000023231472650 00007ff6e9da3c48 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+      0000023231472698 00007ff6e9dc18c0 (0) Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+
+STACK 3
+<< Awaiting: 000002323148a450 00007ff6e9e96448DokanNet.DokanInstanceNotifyCompletion >>
+  000002323148a480 00007ff6e9e96c98 (0) DokanNet.DokanInstance+<WaitForFileSystemClosedAsync>d__35
+    000002323148a568 00007ff6e9e97e38 (0) DokanNet.DokanInstance+<<-ctor>g__KeepReferenceAlive|32_0>d
+
+STACK 4
+<< Awaiting: 000002323148a828 00007ff6e9e96448DokanNet.DokanInstanceNotifyCompletion >>
+  000002323148a858 00007ff6e9e96c98 (0) DokanNet.DokanInstance+<WaitForFileSystemClosedAsync>d__35
+    0000023231483478 00007ff6e9dda250 (2) ZipDrive.Infrastructure.FileSystem.DokanHostedService+<ExecuteAsync>d__14
+      00000232314727a8 00007ff6e9da3c48 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+        00000232314727f0 00007ff6e9dc18c0 (0) Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+

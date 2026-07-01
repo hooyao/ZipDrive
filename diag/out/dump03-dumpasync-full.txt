@@ -1,0 +1,53 @@
+Loading core dump: diag/dumps/zipdrive-20260630-221236-03-221250.dmp ...
+STACK 1
+0000022287c66a10 00007ff9c31006f0 ( ) System.Threading.Tasks.Task+DelayPromiseWithCancellation
+  0000022287c66ac0 00007ff9c3101a10 (0) Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<WaitForShutdownAsync>d__5
+    0000022287c66b38 00007ff9c3103488 (1) Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions+<RunAsync>d__4
+      0000022287c66bc8 00007ff9c3104418 (0) Program+<<Main>$>d__0
+        0000022287c66d18 00007ff9c3102a78 () System.Threading.Tasks.Task+SetOnInvokeMres
+
+STACK 2
+<< Awaiting: 0000022287c68ac8 00007ff9c30f5d00 System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1+ConfiguredValueTaskAwaiter >>
+  0000022287c68a60 00007ff9c30ffed8 (0) ZipDrive.Infrastructure.Caching.CacheMaintenanceService+<ExecuteAsync>d__5
+    0000022287c66740 00007ff9c30e97e8 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+      0000022287c66788 00007ff9c30f79f8 (0) Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+
+STACK 3
+0000022287c80dd0 00007ff9c31006f0 ( ) System.Threading.Tasks.Task+DelayPromiseWithCancellation
+  0000022287c79488 00007ff9c31b4730 (2) ZipDrive.Infrastructure.FileSystem.WinFspHostedService+<ExecuteAsync>d__13
+    0000022287c66898 00007ff9c30e97e8 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+      0000022287c668e0 00007ff9c30f79f8 (0) Microsoft.Extensions.Hosting.Internal.Host+<TryExecuteBackgroundServiceAsync>d__15
+
+STACK 4
+000002228c681e80 00007ff9c3747008 (-1) ZipDrive.Infrastructure.Caching.ChunkedFileEntry+<ExtractAsync>d__39
+  000002228c681f78 00007ff9c3747470 (0) ZipDrive.Infrastructure.Caching.ChunkedDiskStorageStrategy+<>c__DisplayClass4_0+<<MaterializeAsync>b__0>d
+    000002228ebaa8a0 00007ff9c30e97e8 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+
+STACK 5
+000002228eba3438 00007ff9c30fe590 ( ) System.Threading.Tasks.Task<System.Boolean>
+  000002228c7d4db0 00007ff9c3744960 ( ) System.Threading.Tasks.Task+CancellationPromise<System.Threading.Tasks.VoidTaskResult>
+    000002228c7d4e18 00007ff9c37497f8 (0) ZipDrive.Infrastructure.Caching.ChunkedStream+<EnsureChunkReadyAsync>d__21
+      000002228c7d4e98 00007ff9c37491b8 (0) ZipDrive.Infrastructure.Caching.ChunkedStream+<ReadAsync>d__16
+        000002228c7d4f48 00007ff9c3729a48 (1) ZipDrive.Infrastructure.Caching.FileContentCache+<ReadAsync>d__10
+          000002228c7d5048 00007ff9c372aa70 (1) ZipDrive.Application.Services.ArchiveVirtualFileSystem+<ReadFileAsync>d__32
+            000002228c7db250 00007ff9c372be00 (0) ZipDrive.Infrastructure.FileSystem.WinFspFileSystemAdapter+<ReadFile>d__18
+              000002228c7db338 00007ff9c370be20 ( ) System.Threading.Tasks.ContinuationTaskFromResultTask<WinFsp.Native.ReadResult>
+
+STACK 6
+000002228ebaa7a0 00007ff9c30fe590 ( ) System.Threading.Tasks.Task<System.Boolean>
+  000002228c78b778 00007ff9c3744960 ( ) System.Threading.Tasks.Task+CancellationPromise<System.Threading.Tasks.VoidTaskResult>
+    000002228c78b7e0 00007ff9c37497f8 (0) ZipDrive.Infrastructure.Caching.ChunkedStream+<EnsureChunkReadyAsync>d__21
+      000002228c78b860 00007ff9c37491b8 (0) ZipDrive.Infrastructure.Caching.ChunkedStream+<ReadAsync>d__16
+        000002228c78b910 00007ff9c3729a48 (1) ZipDrive.Infrastructure.Caching.FileContentCache+<ReadAsync>d__10
+          000002228c78ba10 00007ff9c372aa70 (1) ZipDrive.Application.Services.ArchiveVirtualFileSystem+<ReadFileAsync>d__32
+            000002228c78bb00 00007ff9c372be00 (0) ZipDrive.Infrastructure.FileSystem.WinFspFileSystemAdapter+<ReadFile>d__18
+              000002228c78bc08 00007ff9c370be20 ( ) System.Threading.Tasks.ContinuationTaskFromResultTask<WinFsp.Native.ReadResult>
+
+STACK 7
+<< Awaiting: 000002228f7155b0 00007ff9c30f5d00 System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1+ConfiguredValueTaskAwaiter >>
+  000002228f715538 00007ff9c372dca0 (0) ZipDrive.Infrastructure.Archives.Zip.SubStream+<ReadAsync>d__21
+    000002228f7155c8 00007ff9c3746b60 (0) System.IO.Compression.DeflateStream+<<ReadAsyncMemory>g__Core|55_0>d
+      000002228eba7208 00007ff9c3747008 (0) ZipDrive.Infrastructure.Caching.ChunkedFileEntry+<ExtractAsync>d__39
+        000002228eba7300 00007ff9c3747470 (0) ZipDrive.Infrastructure.Caching.ChunkedDiskStorageStrategy+<>c__DisplayClass4_0+<<MaterializeAsync>b__0>d
+          000002228eba3538 00007ff9c30e97e8 ( ) System.Threading.Tasks.UnwrapPromise<System.Threading.Tasks.VoidTaskResult>
+
