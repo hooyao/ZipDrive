@@ -132,7 +132,7 @@ public class ChunkedDiskStorageStrategyTests : IDisposable
 
         _strategy.Dispose(stored);
 
-        // Strategy cleanup owns backing file deletion
+        // The entry owns backing-file deletion; strategy.Dispose delegates to entry.Dispose.
         File.Exists(filePath).Should().BeFalse();
     }
 

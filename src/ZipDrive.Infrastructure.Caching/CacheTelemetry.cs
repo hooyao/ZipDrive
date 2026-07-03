@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ZipDrive.Infrastructure.Caching;
 
@@ -16,14 +14,6 @@ internal static class CacheTelemetry
 
     internal static readonly Meter Meter = new(MeterName);
     internal static readonly ActivitySource Source = new(ActivitySourceName);
-
-    // ── DIAGNOSTIC (diag/winfsp-photos-hang) ─────────────────────────────────────
-    // Static logger so leaf types without DI (ChunkedStream) can emit the chunk-wait
-    // BLOCK line that pins down the Photos hang. Defaults to a no-op; the CLI sets it
-    // once at startup via SetDiagnosticLogger. Remove with the rest of the diag kit.
-    internal static ILogger DiagLogger { get; private set; } = NullLogger.Instance;
-
-    internal static void SetDiagnosticLogger(ILogger logger) => DiagLogger = logger;
 
     // === Counters ===
 

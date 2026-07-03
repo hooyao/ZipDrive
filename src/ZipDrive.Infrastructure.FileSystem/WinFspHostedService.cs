@@ -21,6 +21,7 @@ public sealed class WinFspHostedService : BackgroundService
     private readonly IArchiveManager _archiveManager;
     private readonly IArchiveDiscovery _discovery;
     private readonly WinFspFileSystemAdapter _adapter;
+    private readonly IFileContentCache _fileCache;
     private readonly MountSettings _mountSettings;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly IFormatRegistry _formatRegistry;
@@ -36,6 +37,7 @@ public sealed class WinFspHostedService : BackgroundService
         IArchiveManager archiveManager,
         IArchiveDiscovery discovery,
         WinFspFileSystemAdapter adapter,
+        IFileContentCache fileCache,
         IOptions<MountSettings> mountSettings,
         IFormatRegistry formatRegistry,
         IHostApplicationLifetime lifetime,
@@ -45,6 +47,7 @@ public sealed class WinFspHostedService : BackgroundService
         _archiveManager = archiveManager;
         _discovery = discovery;
         _adapter = adapter;
+        _fileCache = fileCache;
         _mountSettings = mountSettings.Value;
         _formatRegistry = formatRegistry;
         _lifetime = lifetime;
@@ -209,9 +212,12 @@ public sealed class WinFspHostedService : BackgroundService
     {
         _logger.LogInformation("Unmounting drive...");
 
-        // Stop watcher first to prevent reloads during shutdown
-        await StopWatcherAsync();
-
+        // ── ORDER IS CRITICAL (WinFsp canonical shutdown) ────────────────────────────
+        // Dispose the WinFsp host FIRST. _host.Dispose() calls FspFileSystemStopDispatcher:
+        // it stops dispatching new ReadFile callbacks and blocks until every in-flight
+        // callback drains. It MUST run before we tear down the watcher/cache — until it
+        // returns, WinFsp's worker threads may still be reading from our cache/streams, and
+        // freeing that state first would let an in-flight read touch disposed objects.
         try
         {
             _host?.Dispose();
@@ -221,6 +227,9 @@ public sealed class WinFspHostedService : BackgroundService
         {
             _logger.LogWarning(ex, "Error during WinFsp unmount");
         }
+
+        // From here on, WinFsp guarantees no more callbacks — safe to tear everything down.
+        await StopWatcherAsync();
 
         try
         {
@@ -234,9 +243,27 @@ public sealed class WinFspHostedService : BackgroundService
             _logger.LogWarning(ex, "Error unmounting VFS");
         }
 
-        _logger.LogInformation("Drive unmounted cleanly");
+        // No read is in flight now, so clearing the cache / deleting temp files cannot race a
+        // live read. This is the step whose absence leaked %TEMP%\ZipDrive-{pid}\*.chunked on
+        // shutdown — Clear() disposes every ChunkedFileEntry (which closes its writer handle and
+        // deletes its backing file), and DeleteCacheDirectory() removes the per-process temp dir.
+        // (Must be after _host.Dispose, never before.)
+        try
+        {
+            _fileCache.Clear();
+            _fileCache.DeleteCacheDirectory();
+            _logger.LogInformation("Disk cache temp files cleaned up");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error cleaning up disk cache temp files");
+        }
 
+        // base.StopAsync LAST: cancels the BackgroundService stopping token and awaits
+        // ExecuteAsync's unwind, after the dispatcher is already stopped and drained.
         await base.StopAsync(cancellationToken);
+
+        _logger.LogInformation("Drive unmounted cleanly");
     }
 
     // === FileSystemWatcher ===

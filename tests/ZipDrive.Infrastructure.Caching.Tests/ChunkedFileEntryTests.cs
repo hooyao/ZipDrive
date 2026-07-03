@@ -262,14 +262,29 @@ public class ChunkedFileEntryTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_DoesNotDeleteBackingFile()
+    public void Dispose_DeletesBackingFile()
     {
         string path = CreateTempFile(100);
         var entry = new ChunkedFileEntry(path, 100, 10);
         File.Exists(path).Should().BeTrue();
 
         entry.Dispose();
-        File.Exists(path).Should().BeTrue("file deletion is owned by ChunkedDiskStorageStrategy pending cleanup");
+        File.Exists(path).Should().BeFalse(
+            "the entry owns its backing file's lifetime (RAII) and deletes it on Dispose");
+    }
+
+    [Fact]
+    public void Dispose_WhenBackingFileAlreadyGone_DoesNotThrow()
+    {
+        string path = CreateTempFile(100);
+        var entry = new ChunkedFileEntry(path, 100, 10);
+
+        // Simulate the file already being removed (e.g. cache directory deleted
+        // during shutdown) — Dispose must swallow this and not throw.
+        File.Delete(path);
+
+        Action act = () => entry.Dispose();
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -283,6 +298,99 @@ public class ChunkedFileEntryTests : IDisposable
         entry.Dispose();
 
         waitTask.IsCanceled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Dispose_WhileWriterHandleOpen_ClosesHandleAndDeletesFile()
+    {
+        // Regression guard for the WinFsp Ctrl+C temp-file leak: while a background
+        // extraction is actively writing (its writer FileStream is open on the backing
+        // file), Dispose() must close that handle DIRECTLY and delete the file — without
+        // waiting for the extraction task to observe cancellation and unwind.
+        long fileSize = 64 * 1024; // 64 chunks of 1KB
+        const int chunkSize = 1024;
+        string path = Path.Combine(_tempDir, $"{Guid.NewGuid()}.chunked");
+        // Pre-create the backing file the way the strategy does (extraction opens it for write).
+        using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            fs.SetLength(fileSize);
+
+        var entry = new ChunkedFileEntry(path, fileSize, chunkSize);
+
+        // Slow source (5ms/read) so extraction is guaranteed still mid-flight at Dispose:
+        // fully draining would take 64 * 5ms ≈ 320ms.
+        var source = new SlowReadStream(CreateSequentialData((int)fileSize), delayMsPerRead: 5);
+        var extraction = entry.ExtractAsync(source, onDisposed: null, logger: null, entry.ExtractionCts.Token);
+
+        // Wait until the writer handle is open and at least the first chunk has been written.
+        await entry.WaitForChunkAsync(0, CancellationToken.None);
+        entry.ChunksCompleted.Should().BeLessThan(entry.ChunkCount, "extraction should still be running");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        entry.Dispose();
+        sw.Stop();
+
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "Dispose closes the writer handle directly, it must not wait for extraction to unwind");
+        File.Exists(path).Should().BeFalse(
+            "the backing file must be deleted even though the writer handle was open mid-extraction");
+
+        // Let the extraction task settle (it observes the closed handle / cancellation).
+        try { await extraction; } catch { /* aborted by dispose — expected */ }
+    }
+
+    private static byte[] CreateSequentialData(int size)
+    {
+        byte[] data = new byte[size];
+        for (int i = 0; i < size; i++)
+            data[i] = (byte)(i % 256);
+        return data;
+    }
+
+    /// <summary>Stream that delays each read to keep extraction mid-flight during the test.</summary>
+    private sealed class SlowReadStream : Stream
+    {
+        private readonly MemoryStream _inner;
+        private readonly int _delayMsPerRead;
+
+        public SlowReadStream(byte[] data, int delayMsPerRead)
+        {
+            _inner = new MemoryStream(data);
+            _delayMsPerRead = delayMsPerRead;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            await Task.Delay(_delayMsPerRead, ct);
+            return await _inner.ReadAsync(buffer, ct);
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+        {
+            await Task.Delay(_delayMsPerRead, ct);
+            return await _inner.ReadAsync(buffer.AsMemory(offset, count), ct);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            Thread.Sleep(_delayMsPerRead);
+            return _inner.Read(buffer, offset, count);
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
