@@ -157,28 +157,11 @@ internal sealed class ChunkedStream : Stream
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
-        // ── DIAGNOSTIC (diag/winfsp-photos-hang) ─────────────────────────────────
-        // Log every read that actually BLOCKS on an un-extracted chunk: the read
-        // offset, which chunk it needs, and how far sequential extraction has gotten.
-        // Compare Dokan vs WinFsp runs — if WinFsp blocks on a high chunk far ahead
-        // of ExtractionProgress while Dokan never blocks, that pins the adapter-level
-        // difference in read offset/ordering. Remove with the rest of the diag kit.
-        Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(
-            CacheTelemetry.DiagLogger,
-            "Chunk-wait BLOCK: offset={Offset} needsChunk={Chunk}/{ChunkCount} extractedChunks={Done} progress={Progress:P0} file={File}",
-            _position, chunkIndex, _entry.ChunkCount, _entry.ChunksCompleted,
-            _entry.ExtractionProgress, System.IO.Path.GetFileName(_entry.BackingFilePath));
-
         await _entry.WaitForChunkAsync(chunkIndex, cancellationToken).ConfigureAwait(false);
 
         double waitMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
         CacheTelemetry.ChunkWaits.Add(1);
         CacheTelemetry.ChunkWaitDuration.Record(waitMs);
-
-        Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(
-            CacheTelemetry.DiagLogger,
-            "Chunk-wait DONE: offset={Offset} chunk={Chunk} waited={WaitMs:F0}ms",
-            _position, chunkIndex, waitMs);
     }
 
     public override void Flush()

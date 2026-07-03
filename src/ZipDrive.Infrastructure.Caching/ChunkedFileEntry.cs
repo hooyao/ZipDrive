@@ -24,6 +24,15 @@ internal sealed class ChunkedFileEntry : IDisposable
     public CancellationTokenSource ExtractionCts { get; }
     public Task ExtractionTask { get; internal set; } = Task.CompletedTask;
 
+    // The writer FileStream, owned by the entry (not a local in ExtractAsync) so that
+    // Dispose() can close the handle DIRECTLY — without waiting for the extraction task
+    // to observe cancellation and unwind. DeflateStream.ReadAsync barely honors the
+    // cancellation token, so waiting for the task could stall multiple seconds per file.
+    // Closing the handle here releases the file so File.Delete can succeed immediately.
+    // Published by ExtractAsync via Volatile; read by Dispose. FileStream.Dispose is
+    // idempotent, so ExtractAsync's finally and Dispose() may both dispose it safely.
+    private FileStream? _writerFs;
+
     // === Telemetry ===
     private long _bytesExtracted;
     private int _chunksCompleted;
@@ -146,7 +155,7 @@ internal sealed class ChunkedFileEntry : IDisposable
 
         try
         {
-            await using FileStream fs = new FileStream(
+            FileStream fs = new FileStream(
                 BackingFilePath,
                 FileMode.Open,
                 FileAccess.Write,
@@ -154,49 +163,76 @@ internal sealed class ChunkedFileEntry : IDisposable
                 bufferSize: 81920,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-            for (int i = 0; i < ChunkCount; i++)
+            // Publish the handle so Dispose() can close it directly. If Dispose already
+            // ran (entry disposed before extraction started writing), close immediately.
+            Volatile.Write(ref _writerFs, fs);
+            if (_disposed)
             {
+                fs.Dispose();
                 cancellationToken.ThrowIfCancellationRequested();
-
-                long chunkStartTimestamp = Stopwatch.GetTimestamp();
-                int chunkLength = GetChunkLength(i);
-                int totalRead = 0;
-
-                while (totalRead < chunkLength)
-                {
-                    int read = await decompressedStream.ReadAsync(
-                        buffer.AsMemory(totalRead, chunkLength - totalRead),
-                        cancellationToken).ConfigureAwait(false);
-
-                    if (read == 0)
-                        break;
-
-                    totalRead += read;
-                }
-
-                // Premature EOF: stream ended before expected chunk length.
-                // Treat as data corruption — writing a short chunk would leave
-                // zero-filled gaps in the sparse file that silently corrupt reads.
-                if (totalRead < chunkLength)
-                    throw new InvalidDataException(
-                        $"Decompressed stream ended prematurely at chunk {i}: " +
-                        $"expected {chunkLength} bytes, got {totalRead}. " +
-                        $"Archive may be truncated or corrupt.");
-
-                fs.Position = GetChunkOffset(i);
-                await fs.WriteAsync(buffer.AsMemory(0, totalRead), cancellationToken)
-                    .ConfigureAwait(false);
-                await fs.FlushAsync(cancellationToken).ConfigureAwait(false);
-
-                MarkChunkReady(i, totalRead);
-
-                double chunkMs = Stopwatch.GetElapsedTime(chunkStartTimestamp).TotalMilliseconds;
-                CacheTelemetry.ChunkExtractionDuration.Record(chunkMs);
-
-                logger?.LogDebug(
-                    "ChunkedFileEntry: Chunk {ChunkIndex}/{ChunkCount} extracted ({Progress:P0} complete)",
-                    i + 1, ChunkCount, ExtractionProgress);
             }
+
+            try
+            {
+                for (int i = 0; i < ChunkCount; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    long chunkStartTimestamp = Stopwatch.GetTimestamp();
+                    int chunkLength = GetChunkLength(i);
+                    int totalRead = 0;
+
+                    while (totalRead < chunkLength)
+                    {
+                        int read = await decompressedStream.ReadAsync(
+                            buffer.AsMemory(totalRead, chunkLength - totalRead),
+                            cancellationToken).ConfigureAwait(false);
+
+                        if (read == 0)
+                            break;
+
+                        totalRead += read;
+                    }
+
+                    // Premature EOF: stream ended before expected chunk length.
+                    // Treat as data corruption — writing a short chunk would leave
+                    // zero-filled gaps in the sparse file that silently corrupt reads.
+                    if (totalRead < chunkLength)
+                        throw new InvalidDataException(
+                            $"Decompressed stream ended prematurely at chunk {i}: " +
+                            $"expected {chunkLength} bytes, got {totalRead}. " +
+                            $"Archive may be truncated or corrupt.");
+
+                    fs.Position = GetChunkOffset(i);
+                    await fs.WriteAsync(buffer.AsMemory(0, totalRead), cancellationToken)
+                        .ConfigureAwait(false);
+                    await fs.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+                    MarkChunkReady(i, totalRead);
+
+                    double chunkMs = Stopwatch.GetElapsedTime(chunkStartTimestamp).TotalMilliseconds;
+                    CacheTelemetry.ChunkExtractionDuration.Record(chunkMs);
+
+                    logger?.LogDebug(
+                        "ChunkedFileEntry: Chunk {ChunkIndex}/{ChunkCount} extracted ({Progress:P0} complete)",
+                        i + 1, ChunkCount, ExtractionProgress);
+                }
+            }
+            finally
+            {
+                // Normal completion path closes the handle here. If Dispose() already
+                // closed it, this is a harmless no-op (FileStream.Dispose is idempotent).
+                Volatile.Write(ref _writerFs, null);
+                await fs.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Dispose() closed the writer handle mid-flight — expected on shutdown.
+            CancelPendingChunks();
+            logger?.LogWarning(
+                "ChunkedFileEntry: Extraction aborted by dispose ({ChunksCompleted}/{ChunkCount} chunks extracted)",
+                ChunksCompleted, ChunkCount);
         }
         catch (OperationCanceledException)
         {
@@ -232,19 +268,62 @@ internal sealed class ChunkedFileEntry : IDisposable
             return;
         _disposed = true;
 
+        // 1. Signal the extraction task to stop (best-effort; DeflateStream barely
+        //    honors the token, so we do NOT wait for the task to unwind).
         ExtractionCts.Cancel();
 
-        // Best-effort wait for extraction task to observe cancellation
+        // 2. Close the writer handle DIRECTLY. This is what actually releases the file
+        //    so it can be deleted — without waiting for the (possibly stuck) extraction
+        //    task. If extraction is mid-WriteAsync, it will observe ObjectDisposedException
+        //    and terminate; that path is handled in ExtractAsync. FileStream.Dispose is
+        //    idempotent, so racing with ExtractAsync's own finally is safe.
         try
         {
-            ExtractionTask.Wait(TimeSpan.FromSeconds(5));
+            Interlocked.Exchange(ref _writerFs, null)?.Dispose();
         }
         catch
         {
-            // Swallow — task may have already faulted or been cancelled
+            // Writer may already be closing on the extraction thread — ignore.
         }
 
-        ExtractionCts.Dispose();
+        // 3. Wake any readers/waiters blocked on un-extracted chunks.
         CancelPendingChunks();
+        ExtractionCts.Dispose();
+
+        // 4. Physically delete the backing file. The writer handle is closed (step 2);
+        //    reader handles (ChunkedStream) are normally already returned. Retry briefly
+        //    to tolerate a reader handle that is still closing (sharing violation).
+        DeleteBackingFileWithRetry();
+    }
+
+    /// <summary>
+    /// Deletes the backing file, retrying briefly on transient sharing violations
+    /// (a reader handle may still be closing). Best-effort: gives up quietly if the
+    /// file cannot be deleted or the cache directory is already gone.
+    /// </summary>
+    private void DeleteBackingFileWithRetry()
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                if (!File.Exists(BackingFilePath))
+                    return;
+
+                File.Delete(BackingFilePath);
+                return;
+            }
+            catch (Exception ex) when (attempt < 4 && ex is IOException or UnauthorizedAccessException)
+            {
+                // Transient — a handle is likely still closing. Back off and retry.
+                Thread.Sleep(25);
+            }
+            catch
+            {
+                // Give up quietly: locked past our retries, or the cache directory
+                // was already removed during shutdown.
+                return;
+            }
+        }
     }
 }

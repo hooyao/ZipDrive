@@ -213,6 +213,40 @@ public class ChunkedExtractionIntegrationTests : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // 5.3b Dispose-during-extraction is fast AND deletes the backing file
+    // (regression guard for the WinFsp Ctrl+C temp-file leak: Dispose must
+    //  close the writer handle directly and delete without waiting for the
+    //  extraction task — which barely honors cancellation — to unwind.)
+    // ═══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task Dispose_DuringActiveExtraction_ReturnsFastAndDeletesFile()
+    {
+        var strategy = new ChunkedDiskStorageStrategy(
+            NullLogger<ChunkedDiskStorageStrategy>.Instance,
+            chunkSizeBytes: 1024,
+            _tempDir);
+
+        // 200 chunks with a 50ms/chunk stall → extraction would take ~10s if awaited.
+        byte[] data = CreateTestData(1024 * 200);
+        var factory = CreateSlowFactory(data, delayPerChunkMs: 50);
+
+        StoredEntry stored = await strategy.MaterializeAsync(factory, CancellationToken.None);
+        string filePath = ((ChunkedFileEntry)stored.Data).BackingFilePath;
+        File.Exists(filePath).Should().BeTrue("first chunk materialized the file");
+
+        // Dispose while extraction is still actively running.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        strategy.Dispose(stored);
+        sw.Stop();
+
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "Dispose must close the writer handle directly, not wait ~10s for extraction");
+        File.Exists(filePath).Should().BeFalse(
+            "the backing file must be deleted even though extraction was mid-flight");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // 5.4 RefCount Protection During Extraction
     // ═══════════════════════════════════════════════════════════════════
 
