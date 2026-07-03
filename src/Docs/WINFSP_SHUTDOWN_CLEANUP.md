@@ -42,8 +42,8 @@ that difference is not what caused or fixed this leak.)
    dispatching new `ReadFile` callbacks and blocks until every in-flight callback drains. This
    MUST run first: until it returns, WinFsp worker threads may still be reading from the cache and
    its streams, so freeing that state earlier could let an in-flight read touch disposed objects.
-2. `StopWatcher()` — stop the `FileSystemWatcher` + consolidator (fully synchronous disposal, no
-   async continuations).
+2. `await StopWatcherAsync()` — stop the `FileSystemWatcher` and dispose the consolidator
+   (`await _consolidator.DisposeAsync()`).
 3. `await _vfs.UnmountAsync(...)`.
 4. **`_fileCache.Clear()` + `_fileCache.DeleteCacheDirectory()`** — the step whose absence caused
    the leak. `Clear()` disposes every cached `ChunkedFileEntry`; `DeleteCacheDirectory()` removes
@@ -74,12 +74,12 @@ the task; it takes ownership directly:
 the entry (RAII), so every disposal site behaves identically and there is no duplicate delete path
 to keep in sync.
 
-### 4. `ArchiveChangeConsolidator` — synchronous `Dispose()`
+### 4. `ArchiveChangeConsolidator` — disposed on the shutdown path
 
-`StopWatcher` runs on the shutdown path and disposes the consolidator. A synchronous `Dispose()`
-was added that uses only blocking primitives — `Timer.Dispose(WaitHandle)` (blocks until any
-in-flight timer callback finishes) and a bounded `Task.Wait` on the in-flight flush — so shutdown
-does not depend on a `ValueTask` continuation being scheduled while the host is tearing down.
+`StopWatcherAsync` disposes the consolidator via `await _consolidator.DisposeAsync()`, which stops
+its debounce timer and awaits any in-flight flush so a queued reload can't run against
+half-torn-down state. This is not part of the leak fix itself — it is the existing watcher teardown,
+now reached after `_host.Dispose()` in the shutdown order above.
 
 ## Dokan vs WinFsp callback threading (context, not the cause)
 
