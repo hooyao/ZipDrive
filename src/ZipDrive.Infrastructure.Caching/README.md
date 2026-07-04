@@ -91,7 +91,9 @@ Both Tiers               →  Same IEvictionPolicy interface (unified architectu
 
 ## Documentation
 
-📖 **Full Design Doc**: See [CACHING_DESIGN.md](./CACHING_DESIGN.md) (1100+ lines)
+📖 **Full Design Doc**: See [CACHING_DESIGN.md](../Docs/CACHING_DESIGN.md) (2519 lines)
+
+📖 **Memory-Tier Evolution Analysis**: See [MEMORY_CACHE_ARCHITECTURE_DESIGN.md](../Docs/MEMORY_CACHE_ARCHITECTURE_DESIGN.md) (544 lines)
 
 Covers:
 - Problem statement and requirements
